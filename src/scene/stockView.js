@@ -27,9 +27,9 @@ export class StockView {
     // Machined faces read as freshly cut metal; the hue only shifts enough
     // to tell one tool's work from another's.
     this.toolColors = [
-      new THREE.Color('#b8c4d4'), new THREE.Color('#a9c6c0'), new THREE.Color('#c8bda4'),
-      new THREE.Color('#b6aecb'), new THREE.Color('#a6bcd6'), new THREE.Color('#d2b3ad'),
-      new THREE.Color('#aecaa6'), new THREE.Color('#cfc6a6'),
+      new THREE.Color('#c9d2de'), new THREE.Color('#bcd3cd'), new THREE.Color('#d6c9b4'),
+      new THREE.Color('#c8c1d8'), new THREE.Color('#bfcee2'), new THREE.Color('#dcc0bb'),
+      new THREE.Color('#c3d8bc'), new THREE.Color('#d9d2b7'),
     ];
     this.uniforms = null;
     this.renderStep = 1;
@@ -172,8 +172,8 @@ export class StockView {
   buildMaterial(stock) {
     const material = new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      roughness: 0.42,
-      metalness: 0.62,
+      roughness: 0.44,
+      metalness: 0.45,
       side: THREE.FrontSide,
     });
 
@@ -182,7 +182,7 @@ export class StockView {
       uTexel: { value: new THREE.Vector2(1 / stock.nx, 1 / stock.ny) },
       uStep: { value: new THREE.Vector2(stock.dx, stock.dy) },
       uBase: { value: stock.base },
-      uStockColor: { value: new THREE.Color('#6b7688') },
+      uStockColor: { value: new THREE.Color('#8e97a6') },
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
       uSectionZ: { value: 1e9 },

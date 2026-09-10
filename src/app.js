@@ -9,6 +9,8 @@ import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE } from './scene/machineView.js';
 import { ModelsView } from './scene/modelsView.js';
+import { PickController } from './scene/pickController.js';
+import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
 import { Stock } from './sim/stock.js';
@@ -23,7 +25,6 @@ import { el, clear, button, download } from './ui/dom.js';
 import { SetupPanel } from './ui/setupPanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
 import { ProgramPanel } from './ui/programPanel.js';
-import { ModelsPanel } from './ui/modelsPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
 import { fmt, fmtDuration, clamp } from './core/util.js';
 
@@ -44,10 +45,12 @@ export class App {
       machine: { ...DEFAULT_MACHINE },
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
       machineZero: [0, 0, 250],
+      /** Which work offset the Setup panel and the placement tools act on. */
+      wcsEdit: 'G54',
       display: {
         grid: true, axes: true, stock: true, tool: true, holder: true,
-        toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1,
-        sectionPct: 100, stockColor: '#6b7688', toolColors: true, showLimits: false,
+        toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: true,
+        sectionPct: 100, stockColor: '#8e97a6', toolColors: true, showLimits: false,
       },
       program: null,
       source: '',
@@ -83,7 +86,7 @@ export class App {
       this.scheduleSlotRefresh();
     });
 
-    this.fitToScene();
+    requestAnimationFrame(() => this.fitToScene());
     this.notify('Pick an example in the Program tab, or open your own G-code.', 'info');
   }
 
@@ -92,24 +95,29 @@ export class App {
   buildLayout() {
     clear(this.root);
 
-    this.tabsBar = el('div.tabs');
+    this.sectionBar = el('div.segmented');
+    this.actionsBar = el('div.actions');
     this.panelHost = el('div.panel-host');
-    this.sidebar = el('aside.sidebar', {}, [this.tabsBar, this.panelHost]);
+    this.sidebar = el('aside.sidebar', {}, [this.panelHost]);
 
     this.viewportHost = el('div.viewport');
     this.hud = el('div.hud');
     this.badge = el('div.crash-badge');
+    this.pickBar = el('div.pick-bar');
     this.viewOverlay = el('div.view-overlay', {}, [this.hud, this.badge]);
     this.viewportHost.appendChild(this.viewOverlay);
+    this.viewportHost.appendChild(this.pickBar);
 
     this.transport = el('div.transport');
     this.toast = el('div.toast-host');
 
-    this.root.appendChild(el('header.topbar', {}, [
-      el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim'), el('span.brand-sub', {}, '3-axis CNC mill verification')]),
+    this.root.appendChild(el('header.ribbon', {}, [
+      el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
+      this.sectionBar,
       el('div.spacer'),
       this.viewButtons(),
     ]));
+    this.root.appendChild(this.actionsBar);
     this.root.appendChild(el('div.workspace', {}, [
       this.sidebar,
       el('main.main', {}, [this.viewportHost, this.transport]),
@@ -118,14 +126,27 @@ export class App {
   }
 
   viewButtons() {
-    const mk = (label, name, title) => button(label, () => this.viewer.setView(name), { title });
-    return el('div.view-buttons', {}, [
-      mk('ISO', 'iso', 'Isometric view'),
-      mk('Top', 'top', 'Look down Z'),
-      mk('Front', 'front', 'Look along +Y'),
-      mk('Right', 'right', 'Look along −X'),
-      button('Fit', () => this.fitToScene(), { title: 'Frame everything in the scene' }),
-    ]);
+    const seg = el('div.segmented');
+    for (const [label, name, title] of [
+      ['Iso', 'iso', 'Isometric view'],
+      ['Top', 'top', 'Look down Z'],
+      ['Front', 'front', 'Look along +Y'],
+      ['Right', 'right', 'Look along -X'],
+    ]) {
+      seg.appendChild(el('button', { type: 'button', title, onclick: () => this.viewer.setView(name) }, label));
+    }
+    return el('div.actions-group', {}, [seg, button('Fit', () => this.fitToScene(), { title: 'Frame the job (F)' })]);
+  }
+
+  /** Rebuild the contextual action row for the active section. */
+  buildActions() {
+    clear(this.actionsBar);
+    const panel = this.panels[this.activeTab];
+    const nodes = panel && panel.actions ? panel.actions() : [];
+    for (const n of nodes) if (n) this.actionsBar.appendChild(n);
+    if (!this.actionsBar.children.length) {
+      this.actionsBar.appendChild(el('span.hint', {}, 'No actions for this section.'));
+    }
   }
 
   // ---- scene -------------------------------------------------------------
@@ -145,8 +166,57 @@ export class App {
     this.machineView.workGroup.add(this.toolpathView.group);
     this.machineView.workGroup.add(this.models.group);
 
+    this.originView = new OriginView();
+    this.machineView.workGroup.add(this.originView.group);
+
     this.toolView = new ToolView();
     this.viewer.add(this.toolView.group);
+
+    this.pick = new PickController(this.viewer, {
+      stock: () => this.stock,
+      models: () => this.models,
+      machine: () => this.state.machine,
+      origins: () => Object.entries(this.state.wcs).map(([name, point]) => ({ name, point })),
+    });
+    this.pick.onUpdate = (s) => this.renderPickBar(s);
+    this.refreshOrigins();
+  }
+
+  refreshOrigins() {
+    this.originView.set(this.state.wcs, this.state.wcsEdit);
+    this.originView.setVisible(this.state.display.origins);
+    this.viewer.invalidate();
+  }
+
+  /** The instruction bar shown while a pick is in progress. */
+  renderPickBar(s) {
+    if (!s.active) {
+      this.pickBar.classList.remove('on');
+      clear(this.pickBar);
+      this.buildActions();
+      return;
+    }
+    const hint = s.request.hints[Math.min(s.step, s.request.hints.length - 1)];
+    clear(this.pickBar);
+    this.pickBar.classList.add('on');
+    this.pickBar.appendChild(el('span.pick-title', {}, s.request.title));
+    this.pickBar.appendChild(el('span.pick-hint', {}, hint));
+    if (s.hover) {
+      this.pickBar.appendChild(el('span.pick-kind', { dataset: { kind: s.hover.kind } },
+        `${s.hover.kind === 'surface' ? 'surface' : s.hover.kind} · ${s.hover.label || ''}`.trim()));
+      this.pickBar.appendChild(el('span.pick-coord', {},
+        `X ${fmt(s.hover.point[0], 2)}  Y ${fmt(s.hover.point[1], 2)}  Z ${fmt(s.hover.point[2], 2)}`));
+    }
+    if (s.step === 1 && s.hover) {
+      const a = s.points[0];
+      const d = [s.hover.point[0] - a[0], s.hover.point[1] - a[1], s.hover.point[2] - a[2]];
+      this.pickBar.appendChild(el('span.pick-coord', {},
+        `Δ ${fmt(d[0], 2)}, ${fmt(d[1], 2)}, ${fmt(d[2], 2)}`));
+      this.pickBar.appendChild(el('span.pick-lock', {},
+        s.axisLock === null ? 'X / Y / Z to lock an axis' : `locked to ${'XYZ'[s.axisLock]}`));
+      if (s.axisLock !== null) this.pickBar.lastChild.classList.add('on');
+    }
+    this.pickBar.appendChild(button('Cancel', () => this.pick.cancel(), { title: 'Escape' }));
   }
 
   // ---- panels ------------------------------------------------------------
@@ -156,33 +226,33 @@ export class App {
       setup: new SetupPanel(this),
       tools: new ToolsPanel(this),
       program: new ProgramPanel(this),
-      models: new ModelsPanel(this),
       results: new ResultsPanel(this),
     };
     this.tabOrder = [
       ['setup', 'Setup'],
       ['tools', 'Tools'],
       ['program', 'Program'],
-      ['models', 'Models'],
       ['results', 'Results'],
     ];
-    clear(this.tabsBar);
+    clear(this.sectionBar);
     for (const [id, label] of this.tabOrder) {
-      this.tabsBar.appendChild(el('button.tab', {
+      this.sectionBar.appendChild(el('button', {
         type: 'button',
         dataset: { tab: id },
         onclick: () => this.setTab(id),
       }, label));
     }
-    this.setTab('program');
+    this.setTab('setup');
   }
 
   setTab(id) {
+    if (this.pick && this.pick.active) this.pick.cancel();
     this.activeTab = id;
-    for (const node of this.tabsBar.children) node.classList.toggle('active', node.dataset.tab === id);
+    for (const node of this.sectionBar.children) node.classList.toggle('active', node.dataset.tab === id);
     clear(this.panelHost);
     this.panelHost.appendChild(this.panels[id].root);
     if (this.panels[id].refresh) this.panels[id].refresh();
+    this.buildActions();
   }
 
   // ---- transport ---------------------------------------------------------
@@ -222,6 +292,7 @@ export class App {
     window.addEventListener('keydown', (e) => {
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'Escape' && this.pick.active) { this.pick.cancel(); return; }
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
       else if (e.key === 'ArrowRight') this.stepMove();
@@ -242,6 +313,7 @@ export class App {
     this.stockView.setStock(this.stock);
     this.applyDisplay();
     this.simulator.load({ stock: this.stock });
+    this.refreshOrigins();
     this.refreshResults();
     this.viewer.invalidate();
   }
@@ -265,6 +337,7 @@ export class App {
 
   setWcs(wcs) {
     this.state.wcs = wcs;
+    this.refreshOrigins();
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
@@ -292,6 +365,7 @@ export class App {
     this.toolpathView.setShowRapids(d.rapids);
     this.toolpathView.setMode(d.backplot);
     this.machineView.setLimitsVisible(d.showLimits);
+    if (this.originView) this.originView.setVisible(d.origins);
 
     if (this.stock) {
       const pct = clamp(d.sectionPct, 0, 100) / 100;
@@ -516,12 +590,13 @@ export class App {
     }
 
     if (sim.activeSlot) this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
+    if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
     const tip = this.machineView.update(this.state.program ? sim.pos : this.parkPosition());
     this.toolView.setPosition(tip[0], tip[1], tip[2]);
     this.toolpathView.setProgress(sim.progress);
-    if (this.state.display.toolpath) {
+    if (this.state.display.toolpath && this.state.program) {
       const r = sim.activeSlot ? sim.activeSlot.built.cutRadius : 1;
-      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.max(r * 0.5, 0.7));
+      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.min(Math.max(r * 0.35, 0.6), 3));
     } else {
       this.toolpathView.hideMarker();
     }
@@ -658,6 +733,92 @@ export class App {
     const dz = this.state.machine.tableZ - box.min.z;
     model.object.position.z += dz;
     this.models.setTransform(model, {});
+  }
+
+  // ---- placement ---------------------------------------------------------
+  //
+  // Every placement tool is the same conversation: pick a point on the
+  // thing, pick where that point should end up, apply the delta. It reads
+  // the way a machinist sets a job — "this corner goes there" — instead of
+  // asking anybody to compute an offset in their head.
+
+  /** Translate the stock so point A lands on point B. */
+  moveStockByPoints() {
+    this.pick.begin({
+      steps: 2,
+      title: 'Move stock',
+      hints: ['Click a point on the stock', 'Click where that point should go'],
+      onDone: ([a, b]) => {
+        const origin = this.state.stock.origin.map((v, i) => v + (b[i] - a[i]));
+        this.setStock({ origin });
+        this.panels.setup.refresh();
+        this.notify(`Stock moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm. The cut was reset.`, 'ok');
+      },
+    });
+    this.buildActions();
+  }
+
+  /** Translate the selected model so point A lands on point B. */
+  moveModelByPoints() {
+    const model = this.models.selected;
+    if (!model) {
+      this.notify('Select a model in the list first.', 'error');
+      return;
+    }
+    this.pick.begin({
+      steps: 2,
+      title: `Move ${model.name}`,
+      hints: [`Click a point on ${model.name}`, 'Click where that point should go'],
+      onDone: ([a, b]) => {
+        const p = model.object.position;
+        this.models.setTransform(model, { position: [p.x + (b[0] - a[0]), p.y + (b[1] - a[1]), p.z + (b[2] - a[2])] });
+        this.refreshFixtures();
+        this.panels.setup.refresh();
+        this.notify(`${model.name} moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm.`, 'ok');
+      },
+    });
+    this.buildActions();
+  }
+
+  /** Translate the work offset being edited so point A lands on point B. */
+  moveOriginByPoints() {
+    const key = this.state.wcsEdit;
+    this.pick.begin({
+      steps: 2,
+      title: `Move ${key}`,
+      hints: ['Click a point to measure from', 'Click where that point should go'],
+      onDone: ([a, b]) => {
+        const cur = this.state.wcs[key];
+        this.applyWcs(key, [cur[0] + (b[0] - a[0]), cur[1] + (b[1] - a[1]), cur[2] + (b[2] - a[2])]);
+      },
+    });
+    this.buildActions();
+  }
+
+  /** Drop the work zero straight onto a picked point. */
+  setOriginByPoint() {
+    const key = this.state.wcsEdit;
+    this.pick.begin({
+      steps: 1,
+      title: `Set ${key} zero`,
+      hints: [`Click the point that should read X0 Y0 Z0 in ${key}`],
+      onDone: ([p]) => this.applyWcs(key, p),
+    });
+    this.buildActions();
+  }
+
+  applyWcs(key, point) {
+    const wcs = { ...this.state.wcs, [key]: [point[0], point[1], point[2]] };
+    this.setWcs(wcs);
+    this.panels.setup.refresh();
+    this.notify(`${key} zero set to X ${fmt(point[0], 3)}  Y ${fmt(point[1], 3)}  Z ${fmt(point[2], 3)}.`, 'ok');
+  }
+
+  setWcsEdit(key) {
+    this.state.wcsEdit = key;
+    this.refreshOrigins();
+    this.panels.setup.refresh();
+    this.buildActions();
   }
 
   // ---- exports -----------------------------------------------------------

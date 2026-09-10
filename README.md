@@ -70,17 +70,51 @@ part as STL or OBJ when the run finishes.
 
 ---
 
-## The five panels
+## Getting around
 
-| Panel | What lives there |
+Four sections in the ribbon, each with its own row of actions underneath.
+
+| Section | What lives there |
 | --- | --- |
-| **Setup** | Stock size, position and simulation resolution; machine view mode, table height, travel limits; work offsets; display toggles and the section-view slider. |
+| **Setup** | The whole job: stock size and position, where work zero is, the fixtures and models clamped around it, the machine, and what the viewport draws. |
 | **Tools** | Assemblies, cutters and holders, each with a parametric editor and a live 3D preview. Export the library as JSON, or a single assembly as STL. |
 | **Program** | The G-code editor with line numbers, error markers and a highlight that follows the simulation. Program extents, cycle-time estimate and every interpreter note. |
-| **Models** | Import STL geometry, add built-in vice jaws / parallels / clamps, place them, and choose whether each one is collision-checked. |
 | **Results** | Volume removed, the collision list (click any entry to jump there), and the export buttons. |
 
 Keyboard: `Space` play/pause, `R` reset, `→` step one move, `F` fit view.
+During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
+
+## Placing things by clicking
+
+Typing coordinates to position a vice is a bad way to set up a job. Every
+placement tool here is the same conversation instead — click the point, click
+where it should go:
+
+- **Move stock** and **Move model** translate the thing so the first point
+  lands on the second.
+- **Set zero** drops the active work origin straight onto a clicked point;
+  **Move G54** shifts it by the distance between two points.
+
+Points snap. Everything near the cursor is projected to the screen and the
+closest candidate within a few pixels wins, ranked so a corner beats an edge
+and an edge beats a face:
+
+| Colour | Snaps to |
+| --- | --- |
+| Amber | Block corners and mesh vertices |
+| Green | Edge midpoints |
+| Blue | Face centres and triangle centroids |
+| Purple | Existing work origins |
+| Grey | Anywhere on a surface, unsnapped |
+
+The stock snaps to its 26 box features and to the machined surface itself —
+the floor of a pocket is clickable, because the ray is walked through the
+heightmap rather than against the flat mesh the GPU displaces.
+
+Press `X`, `Y` or `Z` mid-move to lock to one axis, which is how you say "up
+40" without hunting for a point that happens to be straight above. Clicking
+empty space during a move lands on the plane through the start point rather
+than throwing the destination across the room.
 
 ---
 
@@ -199,7 +233,7 @@ src/
     lexer.js          tokeniser
     interpreter.js    modal state machine -> flat move list
   sim/
-    stock.js          heightmap, carving, tile pyramid
+    stock.js          heightmap, carving, tile pyramid, surface picking
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
   scene/
@@ -209,6 +243,8 @@ src/
     toolpathView.js   backplot
     machineView.js    parametric VMC and its kinematics
     modelsView.js     imported models and the transform gizmo
+    pickController.js raycasting and snapping for click-to-place
+    originView.js     work-origin markers
   io/
     stl.js            STL read/write, OBJ write
     mesh.js           heightmap and lathe triangulation

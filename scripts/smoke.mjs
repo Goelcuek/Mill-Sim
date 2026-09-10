@@ -38,7 +38,10 @@ try {
   await page.waitForFunction(() => !!window.millsim, null, { timeout: 20000 });
 
   // Example 0 is the demo bracket: four tools, a pocket, a chamfer and holes.
-  await page.selectOption('.toolbar select', '0');
+  // The example picker lives in the Program section's ribbon row.
+  await page.click('.ribbon .segmented button:has-text("Program")');
+  await page.waitForSelector('.actions select');
+  await page.selectOption('.actions select', '0');
   await page.waitForFunction(() => window.millsim.state.program?.stats.moveCount > 100, null, { timeout: 20000 });
   await page.evaluate(() => window.millsim.runToEnd());
   await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 180000 });
@@ -55,7 +58,7 @@ try {
   if (result.collisions !== 0) throw new Error(`clean program reported ${result.collisions} collisions`);
 
   // The crash example must report every mistake it contains.
-  await page.selectOption('.toolbar select', '3');
+  await page.selectOption('.actions select', '3');
   await page.waitForTimeout(1500);
   await page.evaluate(() => window.millsim.runToEnd());
   await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 120000 });

@@ -66,7 +66,7 @@ export function field(label, value, opts = {}) {
     onchange: (e) => opts.onChange && opts.onChange(opts.type === 'text' ? e.target.value : parseFloat(e.target.value), e),
   });
   const wrap = el('label.field', { title: opts.title || '' }, [
-    el('span.field-label', {}, [label, opts.unit ? el('span.unit', {}, ` ${opts.unit}`) : null]),
+    label ? el('span.field-label', {}, [label, opts.unit ? el('span.unit', {}, ` ${opts.unit}`) : null]) : null,
     input,
   ]);
   wrap.input = input;

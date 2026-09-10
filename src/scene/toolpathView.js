@@ -55,10 +55,10 @@ export class ToolpathView {
     this.group.name = 'toolpath';
     this.lines = null;
     this.uniforms = {
-      uRapidColor: { value: new THREE.Color('#e8913c') },
-      uFeedColor: { value: new THREE.Color('#4fd1c5') },
-      uArcColor: { value: new THREE.Color('#7aa2f7') },
-      uDoneColor: { value: new THREE.Color('#3a4356') },
+      uRapidColor: { value: new THREE.Color('#e8890b') },
+      uFeedColor: { value: new THREE.Color('#0a84ff') },
+      uArcColor: { value: new THREE.Color('#5e5ce6') },
+      uDoneColor: { value: new THREE.Color('#b3b8c2') },
       uProgress: { value: 0 },
       uMode: { value: 0 },
       uShowRapids: { value: 1 },
@@ -78,7 +78,7 @@ export class ToolpathView {
 
   buildMarker() {
     const g = new THREE.SphereGeometry(1, 16, 12);
-    const m = new THREE.MeshBasicMaterial({ color: 0xffd166, depthTest: false, transparent: true, opacity: 0.9 });
+    const m = new THREE.MeshBasicMaterial({ color: 0xff9f0a, depthTest: false, transparent: true, opacity: 0.95 });
     this.marker = new THREE.Mesh(g, m);
     this.marker.renderOrder = 950;
     this.marker.visible = false;

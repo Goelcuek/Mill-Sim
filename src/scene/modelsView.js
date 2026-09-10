@@ -12,10 +12,10 @@ import { parseSTL, bounds } from '../io/stl.js';
 import { uid } from '../core/util.js';
 
 export const MODEL_ROLES = {
-  fixture: { label: 'Fixture (collision)', color: 0xc2703f, collide: true },
-  clamp: { label: 'Clamp (collision)', color: 0xb8544a, collide: true },
-  reference: { label: 'Reference part', color: 0x4f9d8a, collide: false },
-  decor: { label: 'Decoration only', color: 0x6d7382, collide: false },
+  fixture: { label: 'Fixture (collision)', color: 0xd98b4a, collide: true },
+  clamp: { label: 'Clamp (collision)', color: 0xd06a62, collide: true },
+  reference: { label: 'Reference part', color: 0x5fb3a1, collide: false },
+  decor: { label: 'Decoration only', color: 0xa8aeba, collide: false },
 };
 
 export class ModelsView {
@@ -68,8 +68,8 @@ export class ModelsView {
 
     const material = new THREE.MeshStandardMaterial({
       color: MODEL_ROLES[role].color,
-      metalness: 0.3,
-      roughness: 0.62,
+      metalness: 0.2,
+      roughness: 0.65,
       transparent: false,
       opacity: 1,
     });

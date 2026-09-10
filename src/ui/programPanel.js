@@ -21,31 +21,7 @@ export class ProgramPanel {
     const app = this.app;
 
     this.root.appendChild(el('div.toolbar', {}, [
-      button('Open…', async () => {
-        const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.mpf,.eia');
-        if (!file) return;
-        const text = await file.text();
-        this.setText(text);
-        app.loadProgram(text, file.name);
-      }),
-      button('Save', () => download(app.state.programName || 'program.nc', this.editor ? this.editor.value : '', 'text/plain')),
-      select('', [{ value: '', label: 'Examples…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '', async (v, e) => {
-        if (v === '') return;
-        const ex = EXAMPLES[Number(v)];
-        e.target.value = '';
-        if (!ex) return;
-        try {
-          app.notify(`Loading ${ex.name}…`, 'info');
-          const code = await loadExample(ex);
-          this.setText(code);
-          if (ex.setup) app.applyExampleSetup(ex.setup);
-          app.loadProgram(code, `${ex.name}.nc`);
-          app.notify(ex.description, 'ok');
-        } catch (err) {
-          app.notify(err.message, 'error');
-        }
-      }),
-      button('Re-parse', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName)),
+      el('span.hint', {}, 'Open, save and load examples from the ribbon above.'),
     ]));
 
     this.root.appendChild(this.editorHost);
@@ -77,6 +53,49 @@ export class ProgramPanel {
 
   refresh() {
     this.refreshSummary();
+  }
+
+  /** Buttons for the contextual ribbon row. */
+  actions() {
+    const app = this.app;
+    const picker = select('', [{ value: '', label: 'Examples…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '', async (v, e) => {
+      if (v === '') return;
+      const ex = EXAMPLES[Number(v)];
+      e.target.value = '';
+      if (!ex) return;
+      try {
+        app.notify(`Loading ${ex.name}…`, 'info');
+        const code = await loadExample(ex);
+        this.setText(code);
+        if (ex.setup) app.applyExampleSetup(ex.setup);
+        app.loadProgram(code, `${ex.name}.nc`);
+        app.notify(ex.description, 'ok');
+      } catch (err) {
+        app.notify(err.message, 'error');
+      }
+    });
+    picker.style.flex = '0 0 220px';
+
+    return [
+      el('span.actions-label', {}, 'Program'),
+      el('div.actions-group', {}, [
+        button('Open…', async () => {
+          const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.mpf,.eia');
+          if (!file) return;
+          const text = await file.text();
+          this.setText(text);
+          app.loadProgram(text, file.name);
+        }),
+        button('Save', () => download(app.state.programName || 'program.nc', this.editor ? this.editor.value : '', 'text/plain')),
+        button('Re-parse', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName)),
+        picker,
+      ]),
+      el('div.actions-sep'),
+      el('div.actions-group', {}, [
+        button('Fit view to path', () => app.fitToProgram()),
+        button('Fit stock to path', () => { app.fitStockToProgram(); app.panels.setup.refresh(); }),
+      ]),
+    ];
   }
 
   refreshSummary() {

@@ -29,9 +29,9 @@ export const DEFAULT_MACHINE = {
   visible: true,
 };
 
-const STEEL = { color: 0x6f7787, metalness: 0.55, roughness: 0.55 };
-const CAST = { color: 0x50596b, metalness: 0.25, roughness: 0.8 };
-const TABLE = { color: 0x8b93a3, metalness: 0.75, roughness: 0.35 };
+const STEEL = { color: 0xb9bfca, metalness: 0.55, roughness: 0.5 };
+const CAST = { color: 0xd6dae1, metalness: 0.15, roughness: 0.85 };
+const TABLE = { color: 0xc9ced8, metalness: 0.7, roughness: 0.3 };
 
 function box(w, d, h, material, x = 0, y = 0, z = 0) {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, d, h), material);
@@ -59,8 +59,8 @@ export class MachineView {
       steel: new THREE.MeshStandardMaterial(STEEL),
       cast: new THREE.MeshStandardMaterial(CAST),
       table: new THREE.MeshStandardMaterial(TABLE),
-      slot: new THREE.LineBasicMaterial({ color: 0x2a2f3a }),
-      limit: new THREE.LineBasicMaterial({ color: 0x4a5a7a, transparent: true, opacity: 0.5 }),
+      slot: new THREE.LineBasicMaterial({ color: 0x8d94a2 }),
+      limit: new THREE.LineBasicMaterial({ color: 0x0a84ff, transparent: true, opacity: 0.5 }),
     };
     this.config = { ...DEFAULT_MACHINE };
     this.parts = [];
@@ -146,7 +146,7 @@ export class MachineView {
     const l = this.config.limits;
     if (!l || !l.enabled) return;
     const b = new THREE.Box3(new THREE.Vector3(...l.min), new THREE.Vector3(...l.max));
-    this.limitBox = new THREE.Box3Helper(b, 0x4a5a7a);
+    this.limitBox = new THREE.Box3Helper(b, 0x0a84ff);
     this.limitBox.material.transparent = true;
     this.limitBox.material.opacity = 0.35;
     this.limitBox.visible = false;

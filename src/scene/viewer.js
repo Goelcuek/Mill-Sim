@@ -38,8 +38,8 @@ export function makeStudioEnvironment(renderer) {
   for (let y = 0; y < H; y++) {
     const v = y / (H - 1);              // 0 at the top of the sphere
     const sky = 1 - v;
-    const band = Math.exp(-((v - 0.22) ** 2) / 0.006) * 1.6;
-    const base = 0.10 + sky * sky * 0.55 + band;
+    const band = Math.exp(-((v - 0.22) ** 2) / 0.006) * 1.5;
+    const base = 0.34 + sky * sky * 0.72 + band;
     const warm = 1 + band * 0.06;
     for (let x = 0; x < W; x++) {
       // A little azimuthal variation stops flat faces looking uniform.
@@ -72,7 +72,9 @@ export class Viewer {
   constructor(container) {
     this.container = container;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // alpha:true lets the CSS backdrop behind the canvas show through, so
+    // the studio gradient is one line of CSS instead of a skybox mesh.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(container.clientWidth || 800, container.clientHeight || 600);
     this.renderer.domElement.style.display = 'block';
@@ -82,8 +84,8 @@ export class Viewer {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x151821);
-    this.scene.fog = new THREE.Fog(0x151821, 1800, 4200);
+    this.scene.background = null;
+    this.scene.fog = new THREE.Fog(0xe9ebf0, 2200, 5200);
 
     this.camera = new THREE.PerspectiveCamera(42, 1, 1, 8000);
     this.camera.position.set(240, -300, 220);
@@ -117,18 +119,18 @@ export class Viewer {
   buildLights() {
     // The environment map carries most of the ambient now, so the lights
     // are here for shape and highlights rather than raw brightness.
-    const hemi = new THREE.HemisphereLight(0xcfd9ea, 0x2a2f3a, 0.55);
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xc6cbd6, 0.9);
     this.scene.add(hemi);
 
-    const key = new THREE.DirectionalLight(0xffffff, 2.1);
+    const key = new THREE.DirectionalLight(0xffffff, 1.6);
     key.position.set(300, -420, 620);
     this.scene.add(key);
 
-    const fill = new THREE.DirectionalLight(0x9fb6d8, 0.85);
+    const fill = new THREE.DirectionalLight(0xdfe8f5, 0.7);
     fill.position.set(-420, 260, 240);
     this.scene.add(fill);
 
-    const rim = new THREE.DirectionalLight(0xffd9a0, 0.5);
+    const rim = new THREE.DirectionalLight(0xfff0d8, 0.45);
     rim.position.set(120, 520, -180);
     this.scene.add(rim);
 
@@ -145,11 +147,11 @@ export class Viewer {
   }
 
   makeGrid() {
-    const grid = new THREE.GridHelper(1000, 50, 0x39445a, 0x232833);
+    const grid = new THREE.GridHelper(1000, 50, 0xa8b0be, 0xd2d7e0);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -0.02;
     grid.material.transparent = true;
-    grid.material.opacity = 0.55;
+    grid.material.opacity = 0.6;
     this.grid = grid;
     return grid;
   }
@@ -167,9 +169,9 @@ export class Viewer {
       line.renderOrder = 900;
       return line;
     };
-    group.add(mk([1, 0, 0], 0xf2545b));
-    group.add(mk([0, 1, 0], 0x7ad17a));
-    group.add(mk([0, 0, 1], 0x5aa9f5));
+    group.add(mk([1, 0, 0], 0xff453a));
+    group.add(mk([0, 1, 0], 0x32d74b));
+    group.add(mk([0, 0, 1], 0x0a84ff));
     this.axes = group;
     return group;
   }
@@ -247,8 +249,15 @@ export class Viewer {
   setAxesVisible(v) { if (this.axes) this.axes.visible = v; this.invalidate(); }
 
   screenshot(type = 'image/png') {
+    // The canvas is transparent so the CSS backdrop shows through; paint
+    // that backdrop in before exporting or the PNG comes out with a hole.
+    const prev = this.scene.background;
+    this.scene.background = new THREE.Color(0xe9ebf0);
     this.renderer.render(this.scene, this.camera);
-    return this.renderer.domElement.toDataURL(type);
+    const url = this.renderer.domElement.toDataURL(type);
+    this.scene.background = prev;
+    this.renderer.render(this.scene, this.camera);
+    return url;
   }
 
   dispose() {

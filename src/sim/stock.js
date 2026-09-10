@@ -255,6 +255,98 @@ export class Stock {
     return worst;
   }
 
+  /**
+   * Cast a ray at the machined surface.
+   *
+   * The rendered stock is displaced on the GPU, so the CPU-side geometry a
+   * normal raycaster would hit is flat and useless for picking. This walks
+   * the ray through the heightmap instead, which gives the surface the user
+   * can actually see — including the floor of a pocket.
+   *
+   * @param {[number,number,number]} origin ray origin, world mm
+   * @param {[number,number,number]} dir    normalised direction
+   * @returns {null | {point:[number,number,number], distance:number, face:string}}
+   */
+  raycast(origin, dir) {
+    const min = [this.origin[0], this.origin[1], this.base];
+    const max = [this.origin[0] + this.size[0], this.origin[1] + this.size[1], this.top];
+
+    // Clip to the stock's bounding box first.
+    let t0 = 0;
+    let t1 = Infinity;
+    let entryAxis = -1;
+    for (let a = 0; a < 3; a++) {
+      if (Math.abs(dir[a]) < 1e-12) {
+        if (origin[a] < min[a] || origin[a] > max[a]) return null;
+        continue;
+      }
+      const inv = 1 / dir[a];
+      let near = (min[a] - origin[a]) * inv;
+      let far = (max[a] - origin[a]) * inv;
+      if (near > far) { const t = near; near = far; far = t; }
+      if (near > t0) { t0 = near; entryAxis = a; }
+      if (far < t1) t1 = far;
+      if (t0 > t1) return null;
+    }
+    if (t1 < 0) return null;
+    t0 = Math.max(t0, 0);
+
+    const at = (t) => [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
+    const below = (p) => {
+      const h = this.heightAt(p[0], p[1]);
+      return Number.isFinite(h) && p[2] <= h;
+    };
+
+    // Entering already inside the material: the entry face is the hit.
+    const entry = at(t0);
+    if (below(entry)) {
+      const face = entryAxis < 0 ? 'surface' : ['x', 'y', 'z'][entryAxis];
+      return { point: entry, distance: t0, face };
+    }
+
+    // March in steps smaller than a column, then bisect the crossing.
+    const step = Math.max(this.cell * 0.6, 1e-3);
+    let prev = t0;
+    for (let t = t0 + step; t <= t1 + step; t += step) {
+      const tc = Math.min(t, t1);
+      if (below(at(tc))) {
+        let lo = prev;
+        let hi = tc;
+        for (let k = 0; k < 24; k++) {
+          const mid = (lo + hi) * 0.5;
+          if (below(at(mid))) hi = mid; else lo = mid;
+        }
+        return { point: at(hi), distance: hi, face: 'surface' };
+      }
+      if (tc >= t1) break;
+      prev = tc;
+    }
+    return null;
+  }
+
+  /**
+   * Snap candidates on the nominal stock block: corners, edge midpoints and
+   * face centres. These are what people actually reach for when setting a
+   * work offset, so they are offered independently of the machined surface.
+   */
+  snapPoints() {
+    const x = [this.origin[0], this.origin[0] + this.size[0] / 2, this.origin[0] + this.size[0]];
+    const y = [this.origin[1], this.origin[1] + this.size[1] / 2, this.origin[1] + this.size[1]];
+    const z = [this.base, (this.base + this.top) / 2, this.top];
+    const out = [];
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        for (let k = 0; k < 3; k++) {
+          const edges = (i === 1 ? 1 : 0) + (j === 1 ? 1 : 0) + (k === 1 ? 1 : 0);
+          if (edges === 3) continue;                       // the block centre
+          const kind = edges === 0 ? 'corner' : edges === 1 ? 'edge' : 'face';
+          out.push({ point: [x[i], y[j], z[k]], kind });
+        }
+      }
+    }
+    return out;
+  }
+
   /** Height of the material at a world XY point, or the base when outside. */
   heightAt(x, y) {
     const i = Math.floor((x - this.origin[0]) / this.dx);

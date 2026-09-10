@@ -29,6 +29,32 @@ export class ToolsPanel {
 
   refresh() { this.render(); }
 
+  /** Buttons for the contextual ribbon row. */
+  actions() {
+    const app = this.app;
+    const lib = app.library;
+    const sub = (id, label) => {
+      const b = el('button.btn', { type: 'button', onclick: () => { this.mode = id; this.render(); app.buildActions(); } }, label);
+      if (this.mode === id) b.classList.add('active');
+      return b;
+    };
+    return [
+      el('span.actions-label', {}, 'Library'),
+      el('div.actions-group', {}, [sub('assemblies', 'Assemblies'), sub('tools', 'Cutters'), sub('holders', 'Holders')]),
+      el('div.actions-sep'),
+      el('div.actions-group', {}, [
+        button('New assembly', () => { const a = lib.addAssembly(); this.selected.assembly = a.id; this.mode = 'assemblies'; this.render(); }),
+        button('New cutter', () => { const t = lib.addTool(); this.selected.tool = t.id; this.mode = 'tools'; this.render(); }),
+        button('New holder', () => { const h = lib.addHolder(); this.selected.holder = h.id; this.mode = 'holders'; this.render(); }),
+      ]),
+      el('div.actions-sep'),
+      el('div.actions-group', {}, [
+        button('Export STL', () => app.exportAssemblyStl(this.currentBuilt()), { title: 'Write the selected assembly as a solid model' }),
+        button('Export library', () => download('mill-sim-library.json', JSON.stringify(lib.toJSON(), null, 2), 'application/json')),
+      ]),
+    ];
+  }
+
   render() {
     // Committing a field can blur it, which fires change -> library update ->
     // render again. Let the outer call finish and re-run once at the end.
