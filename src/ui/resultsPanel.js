@@ -13,32 +13,6 @@ export class ResultsPanel {
 
   refresh() { this.render(); }
 
-  /** Buttons for the contextual ribbon row. */
-  actions() {
-    const app = this.app;
-    return [
-      el('span.actions-label', {}, 'Run'),
-      el('div.actions-group', {}, [
-        button('Run to end', () => app.runToEnd(), { variant: 'primary' }),
-        button('Reset', () => app.reset()),
-      ]),
-      el('div.actions-sep'),
-      el('span.actions-label', {}, 'Export'),
-      el('div.actions-group', {}, [
-        button('Part as STL', () => app.exportStockStl()),
-        button('Part as OBJ', () => app.exportStockObj()),
-        button('Collision report', () => download('mill-sim-report.md', app.buildReport(), 'text/markdown')),
-        button('Screenshot', () => {
-          const url = app.viewer.screenshot();
-          const a = el('a', { href: url, download: 'mill-sim.png' });
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        }),
-      ]),
-    ];
-  }
-
   render() {
     const scrollTop = this.root.scrollTop;
     clear(this.root);

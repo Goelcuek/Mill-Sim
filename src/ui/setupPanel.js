@@ -7,9 +7,9 @@
 import { el, field, select, checkbox, button, row, section, clear, pickFile } from './dom.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
 import { fmt } from '../core/util.js';
+import { RESOLUTIONS } from '../app.js';
 
 const AXES = ['X', 'Y', 'Z'];
-const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
 const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']];
 
 export class SetupPanel {
@@ -39,49 +39,6 @@ export class SetupPanel {
     this.root.scrollTop = scrollTop;
     this.rendering = false;
     if (this.queued) { this.queued = false; this.render(); }
-  }
-
-  /** Buttons for the contextual ribbon row. */
-  actions() {
-    const app = this.app;
-    const picking = app.pick && app.pick.active;
-    const sel = app.models.selected;
-    const armed = (label, fn, title, on) => {
-      const b = button(label, fn, { title });
-      if (on) b.classList.add('armed');
-      return b;
-    };
-    const active = picking ? app.pick.request.title : '';
-
-    return [
-      el('span.actions-label', {}, 'Place'),
-      el('div.actions-group', {}, [
-        armed('Move stock…', () => app.moveStockByPoints(), 'Click a point on the stock, then click where it should go', active === 'Move stock'),
-        armed(`Set ${app.state.wcsEdit} zero…`, () => app.setOriginByPoint(), 'Click the point that should read X0 Y0 Z0', active.startsWith('Set ')),
-        armed(`Move ${app.state.wcsEdit}…`, () => app.moveOriginByPoints(), 'Shift the work offset from one point to another', active === `Move ${app.state.wcsEdit}`),
-        armed(sel ? `Move ${sel.name}…` : 'Move model…', () => app.moveModelByPoints(),
-          sel ? 'Click a point on the model, then click where it should go' : 'Select a model first', sel && active === `Move ${sel.name}`),
-      ]),
-      el('div.actions-sep'),
-      el('span.actions-label', {}, 'Stock'),
-      el('div.actions-group', {}, [
-        button('Fit to program', () => { app.fitStockToProgram(); this.refresh(); }, { title: 'Size the block around the toolpath' }),
-        button('Centre on zero', () => {
-          const size = app.state.stock.size;
-          app.setStock({ origin: [-size[0] / 2, -size[1] / 2, -size[2]] });
-          this.refresh();
-        }, { title: 'Work zero at the centre of the top face' }),
-        button('Reset cut', () => app.resetStock(), { title: 'Put the material back' }),
-      ]),
-      el('div.actions-sep'),
-      el('span.actions-label', {}, 'Fixtures'),
-      el('div.actions-group', {}, [
-        button('Import STL…', async () => this.importFiles(await pickFile('.stl', true))),
-        button('Vice', () => { app.addPrimitiveFixture('vice'); app.refreshFixtures(); }),
-        button('Parallels', () => { app.addPrimitiveFixture('parallels'); app.refreshFixtures(); }),
-        button('Clamp', () => { app.addPrimitiveFixture('clamp'); app.refreshFixtures(); }),
-      ]),
-    ];
   }
 
   // ---- stock -------------------------------------------------------------

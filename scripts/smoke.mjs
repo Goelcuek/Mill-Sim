@@ -38,11 +38,11 @@ try {
   await page.waitForFunction(() => !!window.millsim, null, { timeout: 20000 });
 
   // Example 0 is the demo bracket: four tools, a pocket, a chamfer and holes.
-  // The example picker lives in the Program section's ribbon row.
-  await page.click('.ribbon .segmented button:has-text("Program")');
-  await page.waitForSelector('.actions select');
-  await page.selectOption('.actions select', '0');
-  await page.waitForFunction(() => window.millsim.state.program?.stats.moveCount > 100, null, { timeout: 20000 });
+  // The example picker lives on the ribbon's Program tab.
+  await page.click('.ribbon-tab:has-text("Program")');
+  await page.waitForSelector('.ribbon-field select');
+  await page.selectOption('.ribbon-field select', '0');
+  await page.waitForFunction(() => /Demo bracket/.test(window.millsim.state.programName), null, { timeout: 30000 });
   await page.evaluate(() => window.millsim.runToEnd());
   await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 180000 });
 
@@ -57,11 +57,15 @@ try {
   if (!(result.removed > 20000)) throw new Error(`expected material to be removed, got ${result.removed} mm3`);
   if (result.collisions !== 0) throw new Error(`clean program reported ${result.collisions} collisions`);
 
-  // The crash example must report every mistake it contains.
-  await page.selectOption('.actions select', '3');
-  await page.waitForTimeout(1500);
+  // The crash example must report every mistake it contains. Loading an
+  // example fetches the file and rebuilds the stock, so wait for the program
+  // to actually change rather than for a fixed delay — otherwise this runs
+  // the previous program and reads its findings.
+  await page.selectOption('.ribbon-field select', '3');
+  await page.waitForFunction(() => /Crash/.test(window.millsim.state.programName), null, { timeout: 30000 });
+  await page.waitForFunction(() => window.millsim.simulator.finished === false, null, { timeout: 30000 });
   await page.evaluate(() => window.millsim.runToEnd());
-  await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 120000 });
+  await page.waitForFunction(() => window.millsim.state.seekTarget === null && window.millsim.simulator.finished, null, { timeout: 120000 });
   const kinds = await page.evaluate(() => [...new Set(window.millsim.simulator.collisions.map((c) => c.type))].sort());
   console.log('crash example detected:', kinds.join(', '));
   for (const expected of ['deep', 'rapid', 'spindle']) {

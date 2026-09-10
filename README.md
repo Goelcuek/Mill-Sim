@@ -72,24 +72,28 @@ part as STL or OBJ when the run finishes.
 
 ## Getting around
 
-A menu bar for commands — click a title, slide sideways to its neighbours,
-`Esc` to dismiss — and four sections for the panels, each with its own row
-of actions underneath.
+An Office-style ribbon: five tabs, each holding a band of grouped controls
+with the group's name printed underneath. Everything the app can do is
+visible and one click away rather than behind a menu. Double-click a tab, or
+use the chevron on the right, to collapse the band and give the viewport the
+space back.
 
-| Menu | |
+| Tab | |
 | --- | --- |
-| **File** | Open and save G-code, load an example, import a model, export the part, the tool, a report or a screenshot. |
-| **Setup** | Stock commands, the click-to-place tools, which work offset is active, and the built-in fixtures. |
-| **Tools** | Create library entries, import and export the library. |
-| **Simulate** | Play, step, run to end, reset, playback speed. |
-| **View** | Standard views, what is drawn, and part-only or full-machine. |
+| **Setup** | Stock, the click-to-place tools, which work offset is active, fixtures, and the machine. |
+| **Tools** | Create and edit cutters, holders and assemblies; import and export the library. |
+| **Program** | Open, save, re-parse, load an example, and frame the toolpath. |
+| **Results** | Playback, exports, and the running count of findings. |
+| **View** | Camera presets, what is drawn, the section plane and the backplot mode. |
 
-| Section | What lives there |
-| --- | --- |
-| **Setup** | The whole job: stock size and position, where work zero is, the fixtures and models clamped around it, the machine, and what the viewport draws. |
-| **Tools** | Assemblies, cutters and holders, each with a parametric editor and a live 3D preview. Export the library as JSON, or a single assembly as STL. |
-| **Program** | The G-code editor with line numbers, error markers and a highlight that follows the simulation. Program extents, cycle-time estimate and every interpreter note. |
-| **Results** | Volume removed, the collision list (click any entry to jump there), and the export buttons. |
+Beside the title sit the four verbs you reach for constantly — play, step,
+back to start, fit — and below the ribbon a side panel shows the detail for
+the active tab: lists, fields, the G-code editor, the collision report.
+
+Editing a library item opens a **window**, not a panel section. Creating an
+end mill is a task with a beginning and an end: pick the shape, fill in the
+dimensions, watch the preview redraw as you type, then Create or Cancel.
+Nothing touches the library until you commit, so Escape is always safe.
 
 Keyboard: `Space` play/pause, `R` reset, `→` step one move, `F` fit view.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
@@ -310,7 +314,12 @@ src/
   io/
     stl.js            STL read/write, OBJ write
     mesh.js           heightmap and lathe triangulation
-  ui/                 menu bar, panels, editor, preview, DOM helpers
+  ui/
+    ribbon.js         the tabbed command surface
+    dialog.js         modal windows
+    toolDialogs.js    cutter, holder, assembly, stock and machine editors
+    icons.js          the stroked icon set
+    ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
 examples/             the four example programs
 scripts/              static server, smoke test, single-file build

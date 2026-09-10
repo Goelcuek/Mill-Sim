@@ -91,8 +91,10 @@ export class Viewer {
     this.camera.position.set(240, -300, 220);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
+    // No damping: the viewport should track the pointer exactly and stop
+    // dead when it does. Inertia looks smooth in a demo and gets in the way
+    // when you are lining up on a corner.
+    this.controls.enableDamping = false;
     this.controls.maxDistance = 4000;
     this.controls.minDistance = 5;
 

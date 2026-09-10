@@ -27,9 +27,18 @@ import { SetupPanel } from './ui/setupPanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
 import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
-import { MenuBar } from './ui/menubar.js';
+import { ViewPanel } from './ui/viewPanel.js';
+import { Ribbon } from './ui/ribbon.js';
+import { confirmDialog } from './ui/dialog.js';
+import {
+  openToolDialog, openHolderDialog, openAssemblyDialog,
+  openStockDialog, openMachineDialog,
+} from './ui/toolDialogs.js';
 import { EXAMPLES } from './examples.js';
 import { fmt, fmtDuration, clamp } from './core/util.js';
+
+/** Cell sizes offered for the simulation grid, coarse to fine. */
+export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
 
 const SPEEDS = [
   { value: '0.25', label: '¼×' },
@@ -100,9 +109,8 @@ export class App {
   buildLayout() {
     clear(this.root);
 
-    this.menubar = new MenuBar();
-    this.sectionBar = el('div.segmented');
-    this.actionsBar = el('div.actions');
+    this.ribbon = new Ribbon();
+    this.ribbon.onSelect((id) => this.setTab(id));
     this.panelHost = el('div.panel-host');
     this.sidebar = el('aside.sidebar', {}, [this.panelHost]);
 
@@ -117,15 +125,13 @@ export class App {
     this.transport = el('div.transport');
     this.toast = el('div.toast-host');
 
-    this.root.appendChild(el('header.ribbon', {}, [
+    this.root.appendChild(el('header.titlebar', {}, [
       el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
-      this.menubar.root,
+      this.quickAccess(),
       el('div.spacer'),
-      this.sectionBar,
-      el('div.spacer'),
-      this.viewButtons(),
+      this.statusStrip = el('div.title-status'),
     ]));
-    this.root.appendChild(this.actionsBar);
+    this.root.appendChild(this.ribbon.root);
     this.root.appendChild(el('div.workspace', {}, [
       this.sidebar,
       el('main.main', {}, [this.viewportHost, this.transport]),
@@ -133,149 +139,316 @@ export class App {
     this.root.appendChild(this.toast);
   }
 
-  viewButtons() {
-    const seg = el('div.segmented');
-    for (const [label, name, title] of [
-      ['Iso', 'iso', 'Isometric view'],
-      ['Top', 'top', 'Look down Z'],
-      ['Front', 'front', 'Look along +Y'],
-      ['Right', 'right', 'Look along -X'],
-    ]) {
-      seg.appendChild(el('button', { type: 'button', title, onclick: () => this.viewer.setView(name) }, label));
-    }
-    return el('div.actions-group', {}, [seg, button('Fit', () => this.fitToScene(), { title: 'Frame the job (F)' })]);
-  }
-
-  /**
-   * The menu bar. Items are built fresh each time a menu opens, so
-   * checkmarks and disabled reasons always reflect the current state.
-   */
-  buildMenus() {
-    const d = () => this.state.display;
-    const toggle = (label, key, shortcut) => ({
-      label, shortcut, checked: d()[key], onSelect: () => { this.setDisplay({ [key]: !d()[key] }); this.panels.setup.refresh(); },
-    });
-    const hasModel = () => !!this.models.selected;
-
-    this.menubar.setMenus([
-      {
-        label: 'File',
-        items: () => [
-          { label: 'Open G-code…', shortcut: '⌘O', onSelect: () => this.panels.program.openFile() },
-          { label: 'Save G-code', onSelect: () => this.panels.program.saveFile() },
-          { separator: true },
-          { heading: 'Examples' },
-          ...EXAMPLES.map((ex, i) => ({ label: ex.name, onSelect: () => this.panels.program.loadExampleAt(i) })),
-          { separator: true },
-          { label: 'Import model…', onSelect: () => this.panels.setup.importDialog() },
-          { separator: true },
-          { heading: 'Export' },
-          { label: 'Machined part as STL', onSelect: () => this.exportStockStl() },
-          { label: 'Machined part as OBJ', onSelect: () => this.exportStockObj() },
-          { label: 'Tool assembly as STL', onSelect: () => this.exportAssemblyStl(this.panels.tools.currentBuilt()) },
-          { label: 'Collision report', onSelect: () => download('mill-sim-report.md', this.buildReport(), 'text/markdown') },
-          { label: 'Screenshot', onSelect: () => this.saveScreenshot() },
-        ],
-      },
-      {
-        label: 'Setup',
-        items: () => [
-          { heading: 'Stock' },
-          { label: 'Fit stock to program', onSelect: () => { this.fitStockToProgram(); this.panels.setup.refresh(); }, disabled: !this.state.program, hint: 'Load a program first' },
-          { label: 'Centre stock on zero', onSelect: () => { const sz = this.state.stock.size; this.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.panels.setup.refresh(); } },
-          { label: 'Reset the cut', shortcut: 'R', onSelect: () => this.resetStock() },
-          { separator: true },
-          { heading: 'Place by clicking' },
-          { label: 'Move stock…', onSelect: () => this.moveStockByPoints() },
-          { label: `Set ${this.state.wcsEdit} zero…`, onSelect: () => this.setOriginByPoint() },
-          { label: `Move ${this.state.wcsEdit}…`, onSelect: () => this.moveOriginByPoints() },
-          { label: 'Move selected model…', onSelect: () => this.moveModelByPoints(), disabled: !hasModel(), hint: 'Select a model first' },
-          { separator: true },
-          { heading: 'Work offset' },
-          ...Object.keys(this.state.wcs).map((key) => ({
-            label: key, dot: this.state.wcsEdit === key, onSelect: () => this.setWcsEdit(key),
-          })),
-          { separator: true },
-          { heading: 'Add fixture' },
-          { label: 'Vice jaws', onSelect: () => { this.addPrimitiveFixture('vice'); this.refreshFixtures(); } },
-          { label: 'Parallels', onSelect: () => { this.addPrimitiveFixture('parallels'); this.refreshFixtures(); } },
-          { label: 'Toe clamp', onSelect: () => { this.addPrimitiveFixture('clamp'); this.refreshFixtures(); } },
-        ],
-      },
-      {
-        label: 'Tools',
-        items: () => [
-          { label: 'New assembly', onSelect: () => this.panels.tools.create('assemblies') },
-          { label: 'New cutter', onSelect: () => this.panels.tools.create('tools') },
-          { label: 'New holder', onSelect: () => this.panels.tools.create('holders') },
-          { separator: true },
-          { label: 'Export library…', onSelect: () => download('mill-sim-library.json', JSON.stringify(this.library.toJSON(), null, 2), 'application/json') },
-          { label: 'Import library…', onSelect: () => this.panels.tools.importLibrary() },
-          { label: 'Restore built-in tools', onSelect: () => { this.library.loadDefaults(); this.refreshSlots(); } },
-        ],
-      },
-      {
-        label: 'Simulate',
-        items: () => [
-          { label: this.state.playing ? 'Pause' : 'Play', shortcut: 'Space', onSelect: () => this.togglePlay() },
-          { label: 'Step one move', shortcut: '→', onSelect: () => this.stepMove() },
-          { label: 'Run to end', onSelect: () => this.runToEnd() },
-          { label: 'Back to start', shortcut: 'R', onSelect: () => this.reset() },
-          { separator: true },
-          { heading: 'Speed' },
-          ...SPEEDS.map((sp) => ({
-            label: sp.label, dot: this.state.speed === sp.value,
-            onSelect: () => { this.state.speed = sp.value; this.speedSelect.value = sp.value; },
-          })),
-        ],
-      },
-      {
-        label: 'View',
-        items: () => [
-          { label: 'Isometric', onSelect: () => this.viewer.setView('iso') },
-          { label: 'Top', onSelect: () => this.viewer.setView('top') },
-          { label: 'Front', onSelect: () => this.viewer.setView('front') },
-          { label: 'Right', onSelect: () => this.viewer.setView('right') },
-          { label: 'Fit to job', shortcut: 'F', onSelect: () => this.fitToScene() },
-          { label: 'Fit to toolpath', onSelect: () => this.fitToProgram() },
-          { separator: true },
-          { heading: 'Show' },
-          toggle('Stock', 'stock'),
-          toggle('Tool', 'tool'),
-          toggle('Holder', 'holder'),
-          toggle('Toolpath', 'toolpath'),
-          toggle('Rapid moves', 'rapids'),
-          toggle('Work origins', 'origins'),
-          toggle('Grid', 'grid'),
-          toggle('Axes', 'axes'),
-          { separator: true },
-          { label: 'Colour cuts by tool', checked: this.state.display.toolColors, onSelect: () => this.setDisplay({ toolColors: !this.state.display.toolColors }) },
-          { separator: true },
-          { heading: 'Machine' },
-          { label: 'Part only', dot: this.state.machine.mode === 'part', onSelect: () => { this.setMachine({ mode: 'part' }); this.panels.setup.refresh(); } },
-          { label: 'Full machine', dot: this.state.machine.mode === 'machine', onSelect: () => { this.setMachine({ mode: 'machine' }); this.panels.setup.refresh(); } },
-        ],
-      },
+  /** The always-visible strip beside the title: the few verbs used constantly. */
+  quickAccess() {
+    const mk = (label, title, fn) => button(label, fn, { title });
+    this.quickPlay = mk('▶', 'Play / pause (Space)', () => this.togglePlay());
+    this.quickPlay.classList.add('icon');
+    return el('div.quick-access', {}, [
+      this.quickPlay,
+      Object.assign(mk('⏭', 'Step one move (→)', () => this.stepMove()), { className: 'btn icon' }),
+      Object.assign(mk('⏮', 'Back to the start (R)', () => this.reset()), { className: 'btn icon' }),
+      el('div.actions-sep'),
+      Object.assign(mk('⤢', 'Fit the job (F)', () => this.fitToScene()), { className: 'btn icon' }),
     ]);
   }
 
-  saveScreenshot() {
-    const url = this.viewer.screenshot();
-    const a = el('a', { href: url, download: 'mill-sim.png' });
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
+  /**
+   * The ribbon. Groups are rebuilt each time a tab is drawn, so pressed
+   * states and disabled reasons always reflect what is actually loaded.
+   */
+  buildRibbon() {
+    const d = () => this.state.display;
+    const show = (label, key, ic) => ({
+      kind: 'toggle', icon: ic, label, checked: d()[key],
+      onChange: (v) => { this.setDisplay({ [key]: v }); this.buildRibbon(); },
+    });
+    const picking = () => (this.pick && this.pick.active ? this.pick.request.title : '');
+    const selected = () => this.models.selected;
+    const toolsPanel = () => this.panels.tools;
 
-  /** Rebuild the contextual action row for the active section. */
-  buildActions() {
-    clear(this.actionsBar);
-    const panel = this.panels[this.activeTab];
-    const nodes = panel && panel.actions ? panel.actions() : [];
-    for (const n of nodes) if (n) this.actionsBar.appendChild(n);
-    if (!this.actionsBar.children.length) {
-      this.actionsBar.appendChild(el('span.hint', {}, 'No actions for this section.'));
-    }
+    this.ribbon.setTabs([
+      {
+        id: 'setup',
+        label: 'Setup',
+        groups: () => [
+          {
+            label: 'Stock',
+            items: [
+              { kind: 'big', icon: 'cube', label: 'Stock…', hint: 'Size, position and simulation resolution', onClick: () => openStockDialog(this, RESOLUTIONS) },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'fit', label: 'Fit to program', disabled: !this.state.program, hint: this.state.program ? 'Size the block around the toolpath' : 'Load a program first', onClick: () => { this.fitStockToProgram(); this.panels.setup.refresh(); } },
+                  { icon: 'target', label: 'Centre on zero', onClick: () => { const sz = this.state.stock.size; this.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.panels.setup.refresh(); } },
+                  { icon: 'reset', label: 'Reset the cut', onClick: () => this.resetStock() },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Place by clicking',
+            items: [
+              { kind: 'big', icon: 'move', label: 'Move stock', active: picking() === 'Move stock', onClick: () => this.moveStockByPoints() },
+              { kind: 'big', icon: 'target', label: `Set ${this.state.wcsEdit}`, hint: 'Click the point that should read X0 Y0 Z0', active: picking().startsWith('Set '), onClick: () => this.setOriginByPoint() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'move', label: `Move ${this.state.wcsEdit}`, active: picking() === `Move ${this.state.wcsEdit}`, onClick: () => this.moveOriginByPoints() },
+                  { icon: 'move', label: 'Move model', disabled: !selected(), hint: selected() ? 'Two-point move of the selected model' : 'Select a model first', onClick: () => this.moveModelByPoints() },
+                  { icon: 'point', label: 'Zero to corner', hint: 'Minimum X/Y corner of the top face', onClick: () => { const st = this.stock; this.applyWcs(this.state.wcsEdit, [st.origin[0], st.origin[1], st.top]); } },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Work offset',
+            items: [
+              {
+                kind: 'select', label: 'Active', width: 84, value: this.state.wcsEdit,
+                options: Object.keys(this.state.wcs).map((k) => ({ value: k, label: k })),
+                onChange: (v) => this.setWcsEdit(v),
+              },
+              { kind: 'toggle', icon: 'eye', label: 'Markers', checked: d().origins, onChange: (v) => { this.setDisplay({ origins: v }); this.buildRibbon(); } },
+            ],
+          },
+          {
+            label: 'Fixtures',
+            items: [
+              { kind: 'big', icon: 'import', label: 'Import…', hint: 'Bring in an STL fixture, clamp or reference part', onClick: () => this.panels.setup.importDialog() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'vice', label: 'Vice jaws', onClick: () => { this.addPrimitiveFixture('vice'); this.refreshFixtures(); } },
+                  { icon: 'ruler', label: 'Parallels', onClick: () => { this.addPrimitiveFixture('parallels'); this.refreshFixtures(); } },
+                  { icon: 'clamp', label: 'Toe clamp', onClick: () => { this.addPrimitiveFixture('clamp'); this.refreshFixtures(); } },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Machine',
+            items: [
+              { kind: 'big', icon: 'machine', label: 'Machine…', onClick: () => openMachineDialog(this) },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'view', label: this.state.machine.mode === 'machine' ? 'Show part only' : 'Show full machine', onClick: () => { this.setMachine({ mode: this.state.machine.mode === 'machine' ? 'part' : 'machine' }); this.buildRibbon(); } },
+                  { icon: 'gauge', label: 'Travel envelope', active: d().showLimits, onClick: () => { this.setDisplay({ showLimits: !d().showLimits }); this.buildRibbon(); } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'tools',
+        label: 'Tools',
+        groups: () => [
+          {
+            label: 'Create',
+            items: [
+              { kind: 'big', icon: 'cutter', label: 'New cutter', hint: 'End mill, ball nose, drill, chamfer…', onClick: () => openToolDialog(this, null) },
+              { kind: 'big', icon: 'holder', label: 'New holder', onClick: () => openHolderDialog(this, null) },
+              { kind: 'big', icon: 'assembly', label: 'New assembly', hint: 'Pair a cutter with a holder and a stickout', onClick: () => openAssemblyDialog(this, null) },
+            ],
+          },
+          {
+            label: 'Selected',
+            items: [
+              { kind: 'big', icon: 'edit', label: 'Edit…', disabled: !toolsPanel().hasSelection(), hint: 'Open the editor for the selected item', onClick: () => toolsPanel().editSelected() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'copy', label: 'Duplicate', disabled: !toolsPanel().hasSelection(), onClick: () => toolsPanel().duplicateSelected() },
+                  { icon: 'trash', label: 'Delete', disabled: !toolsPanel().hasSelection(), onClick: () => toolsPanel().deleteSelected() },
+                  { icon: 'export', label: 'Export STL', disabled: !toolsPanel().currentBuilt(), onClick: () => this.exportAssemblyStl(toolsPanel().currentBuilt()) },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Library',
+            items: [
+              { kind: 'big', icon: 'library', label: 'Library', hint: `${this.library.assemblies.length} assemblies, ${this.library.tools.length} cutters, ${this.library.holders.length} holders`, onClick: () => toolsPanel().showAll() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'export', label: 'Export JSON', onClick: () => download('mill-sim-library.json', JSON.stringify(this.library.toJSON(), null, 2), 'application/json') },
+                  { icon: 'import', label: 'Import JSON', onClick: () => toolsPanel().importLibrary() },
+                  { icon: 'reset', label: 'Restore built-in', onClick: () => confirmDialog({
+                    title: 'Restore the built-in tools?',
+                    message: 'Your cutters, holders and assemblies will be replaced by the ones Mill-Sim ships with. This cannot be undone.',
+                    confirm: 'Restore', danger: true,
+                    onConfirm: () => { this.library.loadDefaults(); this.refreshSlots(); this.notify('Library reset to the built-in tools.', 'ok'); },
+                  }) },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'program',
+        label: 'Program',
+        groups: () => [
+          {
+            label: 'File',
+            items: [
+              { kind: 'big', icon: 'open', label: 'Open…', onClick: () => this.panels.program.openFile() },
+              { kind: 'big', icon: 'save', label: 'Save', onClick: () => this.panels.program.saveFile() },
+              {
+                kind: 'select', label: 'Examples', width: 210, value: '',
+                options: [{ value: '', label: 'Load an example…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))],
+                onChange: (v, e) => { if (v === '') return; e.target.value = ''; this.panels.program.loadExampleAt(Number(v)); },
+              },
+            ],
+          },
+          {
+            label: 'Interpret',
+            items: [
+              { kind: 'big', icon: 'reset', label: 'Re-parse', onClick: () => this.loadProgram(this.panels.program.editor ? this.panels.program.editor.value : '', this.state.programName) },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'fit', label: 'Fit view to path', onClick: () => this.fitToProgram() },
+                  { icon: 'cube', label: 'Fit stock to path', disabled: !this.state.program, onClick: () => { this.fitStockToProgram(); this.panels.setup.refresh(); } },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Program',
+            items: [
+              { kind: 'text', label: 'Moves', value: this.state.program ? String(this.state.program.stats.moveCount) : '–' },
+              { kind: 'text', label: 'Cycle time', value: this.state.program ? fmtDuration(this.state.program.stats.cycleTime) : '–' },
+              { kind: 'text', label: 'Notes', value: this.state.program ? String(this.state.program.warnings.length) : '–' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'results',
+        label: 'Results',
+        groups: () => [
+          {
+            label: 'Run',
+            items: [
+              { kind: 'big', icon: this.state.playing ? 'pause' : 'play', label: this.state.playing ? 'Pause' : 'Play', onClick: () => this.togglePlay() },
+              { kind: 'big', icon: 'end', label: 'Run to end', onClick: () => this.runToEnd() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'step', label: 'Step one move', onClick: () => this.stepMove() },
+                  { icon: 'rewind', label: 'Back to start', onClick: () => this.reset() },
+                ],
+              },
+              {
+                kind: 'select', label: 'Speed', width: 86, value: this.state.speed,
+                options: SPEEDS.map((sp) => ({ value: sp.value, label: sp.label })),
+                onChange: (v) => { this.state.speed = v; this.speedSelect.value = v; },
+              },
+            ],
+          },
+          {
+            label: 'Export',
+            items: [
+              { kind: 'big', icon: 'export', label: 'Part as STL', onClick: () => this.exportStockStl() },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'export', label: 'Part as OBJ', onClick: () => this.exportStockObj() },
+                  { icon: 'report', label: 'Collision report', onClick: () => download('mill-sim-report.md', this.buildReport(), 'text/markdown') },
+                  { icon: 'camera', label: 'Screenshot', onClick: () => this.saveScreenshot() },
+                ],
+              },
+            ],
+          },
+          {
+            label: 'Findings',
+            items: [
+              { kind: 'text', label: 'Collisions', value: String(this.simulator.collisions.filter((c) => c.severity === 'error').length) },
+              { kind: 'text', label: 'Removed', value: `${fmt(this.simulator.removedVolume / 1000, 2)} cm³` },
+              {
+                kind: 'number', label: 'Gouge tol.', unit: 'mm', width: 76,
+                value: this.state.gougeTolerance, step: 0.005, min: 0,
+                hint: 'How far a cut may pass the reference surface before it counts as a gouge',
+                onChange: (v) => { this.setGougeTolerance(v); this.buildRibbon(); },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'view',
+        label: 'View',
+        groups: () => [
+          {
+            label: 'Camera',
+            items: [
+              { kind: 'big', icon: 'view', label: 'Isometric', onClick: () => this.viewer.setView('iso') },
+              {
+                kind: 'stack',
+                items: [
+                  { icon: 'point', label: 'Top', onClick: () => this.viewer.setView('top') },
+                  { icon: 'point', label: 'Front', onClick: () => this.viewer.setView('front') },
+                  { icon: 'point', label: 'Right', onClick: () => this.viewer.setView('right') },
+                ],
+              },
+              { kind: 'big', icon: 'fit', label: 'Fit', onClick: () => this.fitToScene() },
+            ],
+          },
+          {
+            label: 'Show',
+            items: [
+              {
+                kind: 'stack',
+                items: [show('Stock', 'stock', 'cube'), show('Tool', 'tool', 'cutter'), show('Holder', 'holder', 'holder')],
+              },
+              {
+                kind: 'stack',
+                items: [show('Toolpath', 'toolpath', 'point'), show('Rapid moves', 'rapids', 'move'), show('Work origins', 'origins', 'target')],
+              },
+              {
+                kind: 'stack',
+                items: [show('Grid', 'grid', 'grid'), show('Axes', 'axes', 'axes'), {
+                  kind: 'toggle', icon: 'cutter', label: 'Colour by tool', checked: d().toolColors,
+                  onChange: (v) => { this.setDisplay({ toolColors: v }); this.buildRibbon(); },
+                }],
+              },
+            ],
+          },
+          {
+            label: 'Inspect',
+            items: [
+              {
+                kind: 'number', label: 'Section', unit: '%', width: 76,
+                value: Math.round(d().sectionPct), step: 5, min: 0, max: 100,
+                hint: 'Clip the stock above this height to see into a pocket',
+                onChange: (v) => this.setDisplay({ sectionPct: clamp(v, 0, 100) }),
+              },
+              {
+                kind: 'number', label: 'Tool opacity', unit: '%', width: 86,
+                value: Math.round(d().toolOpacity * 100), step: 10, min: 10, max: 100,
+                onChange: (v) => this.setDisplay({ toolOpacity: clamp(v, 10, 100) / 100 }),
+              },
+              {
+                kind: 'select', label: 'Backplot', width: 130, value: d().backplot,
+                options: [
+                  { value: 'all', label: 'Whole program' },
+                  { value: 'remaining', label: 'Still to cut' },
+                  { value: 'done', label: 'Already cut' },
+                ],
+                onChange: (v) => this.setDisplay({ backplot: v }),
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+    this.ribbon.active = this.activeTab || this.ribbon.active;
+    this.ribbon.renderTabs();
+    this.ribbon.renderBand();
   }
 
   // ---- scene -------------------------------------------------------------
@@ -322,7 +495,7 @@ export class App {
     if (!s.active) {
       this.pickBar.classList.remove('on');
       clear(this.pickBar);
-      this.buildActions();
+      this.buildRibbon();
       return;
     }
     const hint = s.request.hints[Math.min(s.step, s.request.hints.length - 1)];
@@ -348,6 +521,14 @@ export class App {
     this.pickBar.appendChild(button('Cancel', () => this.pick.cancel(), { title: 'Escape' }));
   }
 
+  saveScreenshot() {
+    const url = this.viewer.screenshot();
+    const a = el('a', { href: url, download: 'mill-sim.png' });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   // ---- panels ------------------------------------------------------------
 
   buildPanels() {
@@ -356,34 +537,33 @@ export class App {
       tools: new ToolsPanel(this),
       program: new ProgramPanel(this),
       results: new ResultsPanel(this),
+      view: new ViewPanel(this),
     };
     this.tabOrder = [
       ['setup', 'Setup'],
       ['tools', 'Tools'],
       ['program', 'Program'],
       ['results', 'Results'],
+      ['view', 'View'],
     ];
-    clear(this.sectionBar);
-    for (const [id, label] of this.tabOrder) {
-      this.sectionBar.appendChild(el('button', {
-        type: 'button',
-        dataset: { tab: id },
-        onclick: () => this.setTab(id),
-      }, label));
-    }
-    this.buildMenus();
+    this.buildRibbon();
     this.setTab('setup');
   }
 
   setTab(id) {
     if (this.pick && this.pick.active) this.pick.cancel();
     this.activeTab = id;
-    for (const node of this.sectionBar.children) node.classList.toggle('active', node.dataset.tab === id);
+    if (this.ribbon.active !== id) {
+      this.ribbon.active = id;
+      this.ribbon.renderTabs();
+    }
     clear(this.panelHost);
-    this.panelHost.appendChild(this.panels[id].root);
-    if (this.panels[id].refresh) this.panels[id].refresh();
-    this.buildActions();
-    this.buildMenus();
+    const panel = this.panels[id];
+    if (panel) {
+      this.panelHost.appendChild(panel.root);
+      if (panel.refresh) panel.refresh();
+    }
+    this.buildRibbon();
   }
 
   // ---- transport ---------------------------------------------------------
@@ -661,11 +841,15 @@ export class App {
     if (this.simulator.finished) this.simulator.reset();
     this.state.playing = true;
     this.playBtn.textContent = '⏸';
+    if (this.quickPlay) this.quickPlay.textContent = '⏸';
+    if (this.activeTab === 'results') this.buildRibbon();
   }
 
   pause() {
     this.state.playing = false;
     if (this.playBtn) this.playBtn.textContent = '▶';
+    if (this.quickPlay) this.quickPlay.textContent = '▶';
+    if (this.ribbon && this.activeTab === 'results') this.buildRibbon();
   }
 
   reset() {
@@ -924,7 +1108,7 @@ export class App {
         this.notify(`Stock moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm. The cut was reset.`, 'ok');
       },
     });
-    this.buildActions();
+    this.buildRibbon();
   }
 
   /** Translate the selected model so point A lands on point B. */
@@ -946,7 +1130,7 @@ export class App {
         this.notify(`${model.name} moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm.`, 'ok');
       },
     });
-    this.buildActions();
+    this.buildRibbon();
   }
 
   /** Translate the work offset being edited so point A lands on point B. */
@@ -961,7 +1145,7 @@ export class App {
         this.applyWcs(key, [cur[0] + (b[0] - a[0]), cur[1] + (b[1] - a[1]), cur[2] + (b[2] - a[2])]);
       },
     });
-    this.buildActions();
+    this.buildRibbon();
   }
 
   /** Drop the work zero straight onto a picked point. */
@@ -973,7 +1157,7 @@ export class App {
       hints: [`Click the point that should read X0 Y0 Z0 in ${key}`],
       onDone: ([p]) => this.applyWcs(key, p),
     });
-    this.buildActions();
+    this.buildRibbon();
   }
 
   applyWcs(key, point) {
@@ -987,7 +1171,7 @@ export class App {
     this.state.wcsEdit = key;
     this.refreshOrigins();
     this.panels.setup.refresh();
-    this.buildActions();
+    this.buildRibbon();
   }
 
   // ---- exports -----------------------------------------------------------

@@ -86,32 +86,6 @@ export class ProgramPanel {
     }
   }
 
-  /** Buttons for the contextual ribbon row. */
-  actions() {
-    const app = this.app;
-    const picker = select('', [{ value: '', label: 'Examples…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '', (v, e) => {
-      if (v === '') return;
-      e.target.value = '';
-      this.loadExampleAt(Number(v));
-    });
-    picker.style.flex = '0 0 220px';
-
-    return [
-      el('span.actions-label', {}, 'Program'),
-      el('div.actions-group', {}, [
-        button('Open…', () => this.openFile()),
-        button('Save', () => this.saveFile()),
-        button('Re-parse', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName)),
-        picker,
-      ]),
-      el('div.actions-sep'),
-      el('div.actions-group', {}, [
-        button('Fit view to path', () => app.fitToProgram()),
-        button('Fit stock to path', () => { app.fitStockToProgram(); app.panels.setup.refresh(); }),
-      ]),
-    ];
-  }
-
   refreshSummary() {
     const app = this.app;
     const program = app.state.program;
