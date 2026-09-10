@@ -8,10 +8,18 @@
     "start": "node scripts/serve.mjs",
     "serve": "node scripts/serve.mjs",
     "test": "node --test \"test/*.test.js\"",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "build": "node scripts/build-standalone.mjs"
   },
   "engines": {
     "node": ">=20"
   },
-  "keywords": ["cnc", "milling", "gcode", "simulation", "cam", "three.js"]
+  "keywords": [
+    "cnc",
+    "milling",
+    "gcode",
+    "simulation",
+    "cam",
+    "three.js"
+  ]
 }

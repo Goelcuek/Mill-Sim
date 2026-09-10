@@ -7,10 +7,29 @@ stock, and get told about every crash before the real machine finds it.
 No build step, no bundler, no backend. It is plain ES modules plus a
 vendored copy of three.js.
 
+## Running it
+
+**No toolchain?** Download [`dist/mill-sim.html`](dist/mill-sim.html) and open
+it. That one file is the whole simulator — three.js, every source file, the
+stylesheet and all four example programs inlined — so it runs straight off
+your filesystem with no install, no server and no Node.
+
+**From source**, which you want if you're going to change anything:
+
 ```bash
 npm start          # serves on http://localhost:8080
-npm test           # 56 unit tests, no browser needed
+npm test           # 59 unit tests, no browser needed
+npm run build      # regenerate dist/mill-sim.html (needs: npm i -D esbuild)
 ```
+
+There is nothing to `npm install` — the project has no dependencies and
+three.js is vendored in `vendor/`. You just need Node 20+.
+
+Serving over HTTP is required when running from source: the app is plain ES
+modules, and browsers block module imports over `file://`. Any static server
+works — `python3 -m http.server 8080` is fine if you'd rather not use Node.
+The single-file build sidesteps this entirely by bundling to one classic
+script.
 
 Open the page, pick an example from the **Program** tab, and press play.
 
@@ -196,7 +215,9 @@ src/
   ui/                 panels, editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
 examples/             the four example programs
+scripts/              static server, smoke test, single-file build
 test/                 unit tests (node --test)
+dist/mill-sim.html    self-contained build, committed so it can just be opened
 vendor/three/         three.js r180, MIT
 ```
 
@@ -218,7 +239,7 @@ frame instead of a geometry rebuild.
 ## Testing
 
 ```bash
-npm test           # 56 unit tests: geometry, G-code, simulation, file I/O
+npm test           # 59 unit tests: geometry, G-code, simulation, file I/O
 npm run smoke      # optional: boots the app in headless Chromium
 ```
 
