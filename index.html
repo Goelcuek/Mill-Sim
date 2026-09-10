@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mill-Sim — CNC mill simulator</title>
+<meta name="description" content="Browser CNC milling simulator: parametric tool library, G-code interpretation, collision checking and material removal.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%23171b24'/><path d='M8 7h4v11a4 4 0 0 0 8 0V7h4v11a8 8 0 0 1-16 0z' fill='%234fd1c5'/></svg>">
+<link rel="stylesheet" href="styles/app.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js",
+    "three/addons/": "./vendor/three/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app" class="app"></div>
+<noscript>Mill-Sim needs JavaScript and a WebGL2-capable browser.</noscript>
+<div id="boot" class="boot">
+  <div class="boot-inner">
+    <div class="boot-mark">⌗</div>
+    <div class="boot-title">Mill-Sim</div>
+    <div class="boot-sub">starting up…</div>
+  </div>
+</div>
+<script type="module">
+  import { App } from './src/app.js';
+
+  const boot = document.getElementById('boot');
+  const fail = (message, detail) => {
+    boot.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'boot-inner boot-error';
+    box.innerHTML = `<div class="boot-title">Could not start</div><p>${message}</p>`;
+    if (detail) {
+      const pre = document.createElement('pre');
+      pre.textContent = detail;
+      box.appendChild(pre);
+    }
+    boot.appendChild(box);
+  };
+
+  try {
+    const probe = document.createElement('canvas');
+    if (!probe.getContext('webgl2')) {
+      fail('This browser does not expose WebGL2, which the material-removal renderer needs.');
+    } else {
+      window.millsim = new App(document.getElementById('app'));
+      boot.remove();
+    }
+  } catch (err) {
+    console.error(err);
+    fail('Mill-Sim hit an error while starting.', err && err.stack ? err.stack : String(err));
+  }
+</script>
+</body>
+</html>

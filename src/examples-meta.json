@@ -1,0 +1,86 @@
+[
+  {
+    "name": "Demo bracket (face, pocket, chamfer, drill)",
+    "description": "Four tools, a rectangular pocket with radiused corners, a chamfer pass and a pecked hole pattern.",
+    "setup": {
+      "stock": {
+        "size": [
+          120,
+          80,
+          25
+        ],
+        "origin": [
+          -60,
+          -40,
+          -25
+        ],
+        "resolution": 0.25
+      }
+    },
+    "file": "examples/demo-bracket-face-pocket-chamfer-drill-.nc",
+    "lines": 194
+  },
+  {
+    "name": "Helical bore and profile",
+    "description": "Helical ramp into a 40 mm bore, full-circle arcs opened out in radial steps, and a climb-milled outside contour.",
+    "setup": {
+      "stock": {
+        "size": [
+          80,
+          80,
+          30
+        ],
+        "origin": [
+          -40,
+          -40,
+          -30
+        ],
+        "resolution": 0.22
+      }
+    },
+    "file": "examples/helical-bore-and-profile.nc",
+    "lines": 83
+  },
+  {
+    "name": "3D dome (rough then ball-nose finish)",
+    "description": "A 32 mm dome roughed in levels and finished with a 6 mm ball nose at 0.8 mm stepover, so the scallops are visible.",
+    "setup": {
+      "stock": {
+        "size": [
+          90,
+          90,
+          22
+        ],
+        "origin": [
+          -45,
+          -45,
+          -22
+        ],
+        "resolution": 0.2
+      }
+    },
+    "file": "examples/3d-dome-rough-then-ball-nose-finish-.nc",
+    "lines": 6046
+  },
+  {
+    "name": "Crash test (deliberately bad)",
+    "description": "Rapids into solid material, a slot deeper than the flute length, a wrong H offset and a cut with the spindle stopped.",
+    "setup": {
+      "stock": {
+        "size": [
+          100,
+          60,
+          30
+        ],
+        "origin": [
+          -50,
+          -30,
+          -30
+        ],
+        "resolution": 0.3
+      }
+    },
+    "file": "examples/crash-test-deliberately-bad-.nc",
+    "lines": 28
+  }
+]

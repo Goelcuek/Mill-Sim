@@ -1,0 +1,17 @@
+{
+  "name": "mill-sim",
+  "version": "1.0.0",
+  "description": "Browser CNC mill simulator: parametric tool library, G-code interpretation, collision checking and material removal.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "serve": "node scripts/serve.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["cnc", "milling", "gcode", "simulation", "cam", "three.js"]
+}
