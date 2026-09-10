@@ -29,6 +29,30 @@ export class ToolsPanel {
 
   refresh() { this.render(); }
 
+  /** Create a new library entry of the given kind and select it. */
+  create(kind) {
+    const lib = this.app.library;
+    this.mode = kind;
+    if (kind === 'assemblies') this.selected.assembly = lib.addAssembly().id;
+    else if (kind === 'tools') this.selected.tool = lib.addTool().id;
+    else this.selected.holder = lib.addHolder().id;
+    this.app.setTab('tools');
+    this.render();
+  }
+
+  async importLibrary() {
+    const app = this.app;
+    const [file] = await pickFile('.json,application/json');
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (app.library.fromJSON(data, { merge: true })) app.notify(`Merged ${file.name} into the library.`, 'ok');
+      else app.notify('That file contains no tools, holders or assemblies.', 'error');
+    } catch (err) {
+      app.notify(`Could not read ${file.name}: ${err.message}`, 'error');
+    }
+  }
+
   /** Buttons for the contextual ribbon row. */
   actions() {
     const app = this.app;
@@ -43,9 +67,9 @@ export class ToolsPanel {
       el('div.actions-group', {}, [sub('assemblies', 'Assemblies'), sub('tools', 'Cutters'), sub('holders', 'Holders')]),
       el('div.actions-sep'),
       el('div.actions-group', {}, [
-        button('New assembly', () => { const a = lib.addAssembly(); this.selected.assembly = a.id; this.mode = 'assemblies'; this.render(); }),
-        button('New cutter', () => { const t = lib.addTool(); this.selected.tool = t.id; this.mode = 'tools'; this.render(); }),
-        button('New holder', () => { const h = lib.addHolder(); this.selected.holder = h.id; this.mode = 'holders'; this.render(); }),
+        button('New assembly', () => this.create('assemblies')),
+        button('New cutter', () => this.create('tools')),
+        button('New holder', () => this.create('holders')),
       ]),
       el('div.actions-sep'),
       el('div.actions-group', {}, [
@@ -403,17 +427,7 @@ export class ToolsPanel {
         button('Export JSON', () => {
           download('mill-sim-library.json', JSON.stringify(lib.toJSON(), null, 2), 'application/json');
         }),
-        button('Import JSON', async () => {
-          const [file] = await pickFile('.json,application/json');
-          if (!file) return;
-          try {
-            const data = JSON.parse(await file.text());
-            if (lib.fromJSON(data, { merge: true })) app.notify(`Merged ${file.name} into the library.`, 'ok');
-            else app.notify('That file contains no tools, holders or assemblies.', 'error');
-          } catch (err) {
-            app.notify(`Could not read ${file.name}: ${err.message}`, 'error');
-          }
-        }),
+        button('Import JSON', () => this.importLibrary()),
       ]),
       row([
         button('Export tool as STL', () => app.exportAssemblyStl(this.currentBuilt()), { title: 'Write the selected assembly as a solid model.' }),

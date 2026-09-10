@@ -43,6 +43,8 @@ export class ResultsPanel {
     const scrollTop = this.root.scrollTop;
     clear(this.root);
     this.root.appendChild(this.statsSection());
+    const compare = this.compareSection();
+    if (compare) this.root.appendChild(compare);
     this.root.appendChild(this.collisionSection());
     this.root.appendChild(this.exportSection());
     this.root.scrollTop = scrollTop;
@@ -78,6 +80,42 @@ export class ResultsPanel {
         button('Run to end', () => app.runToEnd(), { variant: 'primary' }),
         button('Reset', () => app.reset()),
       ]),
+    ]);
+  }
+
+  /** Stock versus the reference part, when one is loaded. */
+  compareSection() {
+    const app = this.app;
+    const cmp = app.compareToReference();
+    if (!cmp) return null;
+
+    const tol = app.state.gougeTolerance;
+    const pct = (n) => (cmp.comparedCells ? ((n / cmp.comparedCells) * 100).toFixed(2) : '0.00');
+    const clean = cmp.gougeCells === 0;
+
+    return section('Against the reference part', [
+      el(`div.verdict.${clean ? 'ok' : 'bad'}`, {}, clean
+        ? `No cut passes the reference surface by more than ${fmt(tol, 3)} mm.`
+        : `Gouged in ${cmp.gougeCells.toLocaleString()} places — up to ${fmt(cmp.maxGouge, 3)} mm past the surface.`),
+      el('div.stat-grid', {}, [
+        ['Max gouge', `${fmt(cmp.maxGouge, 3)} mm`],
+        ['Gouged area', `${pct(cmp.gougeCells)} %`],
+        ['Stock left', `${fmt(cmp.maxExcess, 2)} mm`],
+      ].map(([k, v]) => el('div.stat', {}, [
+        el('div.stat-label', {}, k),
+        el('div.stat-value', {}, v),
+      ]))),
+      el('label.field', {}, [
+        el('span.field-label', {}, ['Gouge tolerance ', el('span.value', {}, `${fmt(tol, 3)} mm`)]),
+        el('input', {
+          type: 'range', min: 0, max: 0.2, step: 0.005, value: tol,
+          onchange: (e) => {
+            app.setGougeTolerance(parseFloat(e.target.value));
+            this.refresh();
+          },
+        }),
+      ]),
+      el('div.hint', {}, 'Cutting deeper than the reference surface by more than this counts as a gouge and is listed with the collisions. "Stock left" is the thickest material still standing above the part.'),
     ]);
   }
 

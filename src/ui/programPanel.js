@@ -55,38 +55,52 @@ export class ProgramPanel {
     this.refreshSummary();
   }
 
+  async openFile() {
+    const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.mpf,.eia');
+    if (!file) return;
+    const text = await file.text();
+    this.setText(text);
+    this.app.loadProgram(text, file.name);
+    this.app.setTab('program');
+  }
+
+  saveFile() {
+    download(this.app.state.programName || 'program.nc', this.editor ? this.editor.value : '', 'text/plain');
+  }
+
+  /** Load one of the shipped examples, along with the stock it was written for. */
+  async loadExampleAt(index) {
+    const app = this.app;
+    const ex = EXAMPLES[index];
+    if (!ex) return;
+    try {
+      app.notify(`Loading ${ex.name}…`, 'info');
+      const code = await loadExample(ex);
+      this.setText(code);
+      if (ex.setup) app.applyExampleSetup(ex.setup);
+      app.loadProgram(code, `${ex.name}.nc`);
+      app.setTab('program');
+      app.notify(ex.description, 'ok');
+    } catch (err) {
+      app.notify(err.message, 'error');
+    }
+  }
+
   /** Buttons for the contextual ribbon row. */
   actions() {
     const app = this.app;
-    const picker = select('', [{ value: '', label: 'Examples…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '', async (v, e) => {
+    const picker = select('', [{ value: '', label: 'Examples…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '', (v, e) => {
       if (v === '') return;
-      const ex = EXAMPLES[Number(v)];
       e.target.value = '';
-      if (!ex) return;
-      try {
-        app.notify(`Loading ${ex.name}…`, 'info');
-        const code = await loadExample(ex);
-        this.setText(code);
-        if (ex.setup) app.applyExampleSetup(ex.setup);
-        app.loadProgram(code, `${ex.name}.nc`);
-        app.notify(ex.description, 'ok');
-      } catch (err) {
-        app.notify(err.message, 'error');
-      }
+      this.loadExampleAt(Number(v));
     });
     picker.style.flex = '0 0 220px';
 
     return [
       el('span.actions-label', {}, 'Program'),
       el('div.actions-group', {}, [
-        button('Open…', async () => {
-          const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.mpf,.eia');
-          if (!file) return;
-          const text = await file.text();
-          this.setText(text);
-          app.loadProgram(text, file.name);
-        }),
-        button('Save', () => download(app.state.programName || 'program.nc', this.editor ? this.editor.value : '', 'text/plain')),
+        button('Open…', () => this.openFile()),
+        button('Save', () => this.saveFile()),
         button('Re-parse', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName)),
         picker,
       ]),

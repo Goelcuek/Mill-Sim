@@ -189,9 +189,77 @@ test('scrubbing backwards replays deterministically', () => {
   const half = sim.removedVolume;
   assert.ok(half < full, 'seeking back should undo material');
 
-  // Seeking forward again must land on exactly the same result.
+  // Seeking forward again must land on the same result.
+  //
+  // Not bit-exact: the carver sweeps whole chunks, and a scrub splits the
+  // move at a different point. Columns whose centre is *exactly* tangent to
+  // the cutting radius sit on a knife edge — the interval where the tool
+  // covers them collapses to a single instant, so which chunk claims them
+  // depends on where the split fell. That set has measure zero and only
+  // appears at all because this path is axis-aligned on the grid, so the
+  // agreement is asserted in relative terms.
   while (!sim.finished) sim.run(Infinity, 50);
-  assert.ok(Math.abs(sim.removedVolume - full) < 1e-6, `${sim.removedVolume} vs ${full}`);
+  const drift = Math.abs(sim.removedVolume - full) / full;
+  assert.ok(drift < 1e-3, `replay drifted ${(drift * 100).toFixed(4)}%: ${sim.removedVolume} vs ${full}`);
+});
+
+test('the swept carver agrees with stamping the tool along the move', () => {
+  // The sweep is the accuracy-critical path, so it is checked against the
+  // brute-force method it replaced rather than against itself.
+  const opts = { origin: [-30, -20, -12], size: [60, 40, 12], resolution: 0.15 };
+  for (const def of [
+    makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    makeTool({ type: 'ball', diameter: 6, fluteLength: 20 }),
+    makeTool({ type: 'bull', diameter: 8, cornerRadius: 1, fluteLength: 20 }),
+    makeTool({ type: 'chamfer', diameter: 12, tipDiameter: 1, tipAngle: 90, fluteLength: 10 }),
+  ]) {
+    const tool = buildTool(def);
+    const A = [-15, -8, 0];
+    const B = [15, 9, -4];                       // ramping and diagonal at once
+
+    const stamped = new Stock(opts);
+    const steps = 3000;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      stamped.carve(tool.cutEnvelope, A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t);
+    }
+
+    const swept = new Stock(opts);
+    swept.carveSweep(tool.cutEnvelope, A, B);
+
+    let maxErr = 0;
+    for (let k = 0; k < stamped.height.length; k++) {
+      const e = Math.abs(stamped.height[k] - swept.height[k]);
+      if (e > maxErr) maxErr = e;
+    }
+    assert.ok(maxErr < 0.005, `${def.type}: swept surface differs by ${maxErr.toFixed(6)} mm`);
+  }
+});
+
+test('sweeping a move in pieces gives the same surface as sweeping it whole', () => {
+  const opts = { origin: [-30, -20, -12], size: [60, 40, 12], resolution: 0.15 };
+  const tool = buildTool(makeTool({ type: 'ball', diameter: 6, fluteLength: 20 }));
+  const A = [-12.3, -7.1, -1.4];
+  const B = [11.7, 8.3, -5.2];
+
+  const whole = new Stock(opts);
+  whole.carveSweep(tool.cutEnvelope, A, B);
+
+  const pieces = new Stock(opts);
+  const n = 7;
+  for (let i = 0; i < n; i++) {
+    const t0 = i / n;
+    const t1 = (i + 1) / n;
+    const at = (t) => [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t];
+    pieces.carveSweep(tool.cutEnvelope, at(t0), at(t1));
+  }
+
+  let maxErr = 0;
+  for (let k = 0; k < whole.height.length; k++) {
+    const e = Math.abs(whole.height[k] - pieces.height[k]);
+    if (e > maxErr) maxErr = e;
+  }
+  assert.ok(maxErr < 0.005, `chunking changed the surface by ${maxErr.toFixed(6)} mm`);
 });
 
 test('the tool table maps T numbers to assemblies', () => {

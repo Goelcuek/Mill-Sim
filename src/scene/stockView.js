@@ -10,6 +10,13 @@
 // bottom face. A per-vertex `aMode` attribute says how each vertex should
 // behave — 0 fixed, 1 follow the heightmap, 2 follow it and derive the
 // normal from its slope.
+//
+// Display resolution is deliberately decoupled from simulation resolution.
+// A 0.025 mm grid is twelve million columns; no screen shows that and no
+// GPU wants a 98 MB texture upload per frame. The view keeps a reduced grid
+// sized to a vertex budget, each display texel taking the *lowest* column in
+// its block so a cut is never hidden, and only the rectangle the cutter
+// actually touched is uploaded each frame.
 
 import * as THREE from 'three';
 
@@ -27,27 +34,40 @@ export class StockView {
     // Machined faces read as freshly cut metal; the hue only shifts enough
     // to tell one tool's work from another's.
     this.toolColors = [
-      new THREE.Color('#c9d2de'), new THREE.Color('#bcd3cd'), new THREE.Color('#d6c9b4'),
-      new THREE.Color('#c8c1d8'), new THREE.Color('#bfcee2'), new THREE.Color('#dcc0bb'),
-      new THREE.Color('#c3d8bc'), new THREE.Color('#d9d2b7'),
+      new THREE.Color('#b6c1d0'), new THREE.Color('#a8c5be'), new THREE.Color('#c8b99f'),
+      new THREE.Color('#b8b0cc'), new THREE.Color('#adc0d8'), new THREE.Color('#d0aea8'),
+      new THREE.Color('#b2cdaa'), new THREE.Color('#cdc4a4'),
     ];
     this.uniforms = null;
     this.renderStep = 1;
+    this.renderer = null;
+    this.uploadedOnce = false;
+    this.copyBox = new THREE.Box2(new THREE.Vector2(), new THREE.Vector2());
+    this.copyPos = new THREE.Vector2();
   }
 
   /** Attach to a Stock, rebuilding all GPU resources. */
   setStock(stock, opts = {}) {
     this.dispose();
     this.stock = stock;
+    this.renderer = opts.renderer || this.renderer;
     if (!stock) return;
 
-    // Keep the display mesh within a sane vertex budget even when the
-    // simulation grid is very fine.
+    // One reduction factor drives both the mesh and the texture: sampling
+    // the heightmap finer than the mesh that displaces it buys nothing.
     const budget = opts.vertexBudget || 1_400_000;
     this.renderStep = Math.max(1, Math.ceil(Math.sqrt((stock.nx * stock.ny) / budget)));
 
-    this.data = new Float32Array(stock.nx * stock.ny * 2);
-    this.texture = new THREE.DataTexture(this.data, stock.nx, stock.ny, THREE.RGFormat, THREE.FloatType);
+    const geometry = this.buildGeometry(stock, this.renderStep);
+    const gw = this.gridSize[0];
+    const gh = this.gridSize[1];
+
+    // Two texture objects over one array: the source describes the CPU-side
+    // pixels for partial uploads, the destination is what the material samples.
+    this.data = new Float32Array(gw * gh * 2);
+    this.srcTexture = new THREE.DataTexture(this.data, gw, gh, THREE.RGFormat, THREE.FloatType);
+    this.srcTexture.needsUpdate = true;
+    this.texture = new THREE.DataTexture(this.data, gw, gh, THREE.RGFormat, THREE.FloatType);
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
     this.texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -55,7 +75,6 @@ export class StockView {
     this.texture.generateMipmaps = false;
     this.texture.needsUpdate = true;
 
-    const geometry = this.buildGeometry(stock, this.renderStep);
     const material = this.buildMaterial(stock);
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.name = 'stock-mesh';
@@ -86,8 +105,11 @@ export class StockView {
     // true stock boundary so the block keeps its nominal dimensions.
     const localX = xs.map((i, k) => (k === 0 ? 0 : k === gw - 1 ? sx : (i + 0.5) * stock.dx));
     const localY = ys.map((j, k) => (k === 0 ? 0 : k === gh - 1 ? sy : (j + 0.5) * stock.dy));
-    const uvX = xs.map((i) => (i + 0.5) / nx);
-    const uvY = ys.map((j) => (j + 0.5) / ny);
+    // uv addresses the display grid, one texel per mesh column.
+    const uvX = xs.map((_, k) => (k + 0.5) / gw);
+    const uvY = ys.map((_, k) => (k + 0.5) / gh);
+    this.srcX = xs;
+    this.srcY = ys;
 
     const topCount = gw * gh;
     const skirtCount = (gw * 2 + gh * 2) * 2;
@@ -179,8 +201,8 @@ export class StockView {
 
     const uniforms = {
       uHeight: { value: this.texture },
-      uTexel: { value: new THREE.Vector2(1 / stock.nx, 1 / stock.ny) },
-      uStep: { value: new THREE.Vector2(stock.dx, stock.dy) },
+      uTexel: { value: new THREE.Vector2(1 / this.gridSize[0], 1 / this.gridSize[1]) },
+      uStep: { value: new THREE.Vector2(stock.dx * this.renderStep, stock.dy * this.renderStep) },
       uBase: { value: stock.base },
       uStockColor: { value: new THREE.Color('#8e97a6') },
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
@@ -258,23 +280,94 @@ export class StockView {
     return material;
   }
 
-  /** Copy the heightmap into the texture. */
+  /**
+   * Push whatever the cutter changed into the texture.
+   *
+   * Only the dirty rectangle is reduced and uploaded, so the per-frame cost
+   * tracks the size of the cut rather than the size of the stock.
+   */
   sync(force = false) {
     const stock = this.stock;
     if (!stock || !this.data) return false;
     if (!force && stock.version === this.lastVersion) return false;
     this.lastVersion = stock.version;
 
+    const rect = force
+      ? { i0: 0, j0: 0, i1: stock.nx - 1, j1: stock.ny - 1 }
+      : stock.clearDirty();
+    if (!rect) return false;
+    if (force) stock.clearDirty();
+
+    const step = this.renderStep;
+    const [gw, gh] = this.gridSize;
+    const xs = this.srcX;
+    const ys = this.srcY;
+
+    // Display cells whose source block overlaps the dirty rectangle.
+    const gi0 = Math.max(0, this.gridIndexFor(xs, rect.i0) - 1);
+    const gi1 = Math.min(gw - 1, this.gridIndexFor(xs, rect.i1) + 1);
+    const gj0 = Math.max(0, this.gridIndexFor(ys, rect.j0) - 1);
+    const gj1 = Math.min(gh - 1, this.gridIndexFor(ys, rect.j1) + 1);
+    if (gi0 > gi1 || gj0 > gj1) return false;
+
     const h = stock.height;
     const c = stock.cutBy;
     const d = this.data;
-    for (let k = 0, o = 0; k < h.length; k++, o += 2) {
-      d[o] = h[k];
-      d[o + 1] = c[k];
+    const nx = stock.nx;
+    const ny = stock.ny;
+
+    for (let gj = gj0; gj <= gj1; gj++) {
+      const jStart = ys[gj];
+      const jEnd = Math.min(gj + 1 < gh ? ys[gj + 1] : jStart + 1, ny);
+      for (let gi = gi0; gi <= gi1; gi++) {
+        const iStart = xs[gi];
+        const iEnd = Math.min(gi + 1 < gw ? xs[gi + 1] : iStart + 1, nx);
+
+        // Lowest column in the block: a cut is never averaged away.
+        let lo = Infinity;
+        let flag = 0;
+        for (let j = jStart; j < jEnd; j++) {
+          const row = j * nx;
+          for (let i = iStart; i < iEnd; i++) {
+            const v = h[row + i];
+            if (v < lo) lo = v;
+            const f = c[row + i];
+            if (f > flag) flag = f;
+          }
+        }
+        if (lo === Infinity) lo = h[Math.min(jStart, ny - 1) * nx + Math.min(iStart, nx - 1)];
+        const o = (gj * gw + gi) * 2;
+        d[o] = lo;
+        d[o + 1] = flag;
+      }
     }
-    this.texture.needsUpdate = true;
-    stock.clearDirty();
+
+    this.upload(gi0, gj0, gi1 - gi0 + 1, gj1 - gj0 + 1, force);
     return true;
+  }
+
+  /** Index of the display cell whose block contains source column `i`. */
+  gridIndexFor(list, i) {
+    const step = this.renderStep;
+    const g = Math.floor(i / step);
+    return Math.max(0, Math.min(list.length - 1, g));
+  }
+
+  /** Upload a sub-rectangle, falling back to a full refresh if unsupported. */
+  upload(x, y, w, h, force) {
+    if (force || !this.renderer || !this.uploadedOnce) {
+      this.texture.needsUpdate = true;
+      this.uploadedOnce = true;
+      return;
+    }
+    try {
+      this.copyBox.min.set(x, y, 0);
+      this.copyBox.max.set(x + w, y + h, 1);
+      this.copyPos.set(x, y);
+      this.renderer.copyTextureToTexture(this.srcTexture, this.texture, this.copyBox, this.copyPos);
+    } catch (err) {
+      this.texture.needsUpdate = true;
+    }
   }
 
   setStockColor(hex) {
@@ -317,6 +410,11 @@ export class StockView {
       this.texture.dispose();
       this.texture = null;
     }
+    if (this.srcTexture) {
+      this.srcTexture.dispose();
+      this.srcTexture = null;
+    }
+    this.uploadedOnce = false;
     this.data = null;
     this.lastVersion = -1;
     this.shader = null;

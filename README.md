@@ -18,7 +18,7 @@ your filesystem with no install, no server and no Node.
 
 ```bash
 npm start          # serves on http://localhost:8080
-npm test           # 59 unit tests, no browser needed
+npm test           # 67 unit tests, no browser needed
 npm run build      # regenerate dist/mill-sim.html (needs: npm i -D esbuild)
 ```
 
@@ -72,7 +72,17 @@ part as STL or OBJ when the run finishes.
 
 ## Getting around
 
-Four sections in the ribbon, each with its own row of actions underneath.
+A menu bar for commands — click a title, slide sideways to its neighbours,
+`Esc` to dismiss — and four sections for the panels, each with its own row
+of actions underneath.
+
+| Menu | |
+| --- | --- |
+| **File** | Open and save G-code, load an example, import a model, export the part, the tool, a report or a screenshot. |
+| **Setup** | Stock commands, the click-to-place tools, which work offset is active, and the built-in fixtures. |
+| **Tools** | Create library entries, import and export the library. |
+| **Simulate** | Play, step, run to end, reset, playback speed. |
+| **View** | Standard views, what is drawn, and part-only or full-machine. |
 
 | Section | What lives there |
 | --- | --- |
@@ -148,6 +158,56 @@ The simulator is time-sliced: `run(dt, budgetMs)` does as much work as fits
 in a frame and returns, so the UI stays responsive whether the program has
 80 moves or 80,000.
 
+### Why it can run at 0.025 mm
+
+Stamping the tool at every sub-step costs O(1/cell³) — four times the
+columns and twice the steps for every halving — which is why a fine grid
+dies. Instead each straight move is carved as a **swept volume**: for a
+column at distance r(t) from the moving axis, the surface the tool can
+reach is z(t) + LE(r(t)²), where r(t)² is a parabola in t. The interval
+where the tool covers the column at all comes out of a quadratic, and since
+LE is non-decreasing and convex in r for every cutter shape here, the sum is
+unimodal and a golden-section search finds the minimum exactly. Every column
+is visited once per move rather than once per sub-step, which is O(1/cell²).
+Flat-bottomed cutters skip the search entirely — a constant envelope is
+lowest at one end of the pass.
+
+Around that: whole 16×16 tiles are rejected against the max-height pyramid
+before any column is touched; a column already below the lowest the tool
+gets is skipped in a few nanoseconds; the holder probe rejects by tile and
+then samples on a fixed physical spacing, because a Ø63 holder covers six
+million columns at 0.025 mm and a crash worth reporting is never a quarter
+of a millimetre across.
+
+The display is decoupled too. A 0.025 mm grid is twelve million columns; the
+view keeps a reduced grid sized to a vertex budget, each display texel taking
+the lowest column in its block so a cut is never averaged away, and only the
+rectangle the cutter actually touched is uploaded each frame.
+
+Measured on the demo bracket (251 moves, four tools including a Ø50 face
+mill), whole program, in Node:
+
+| Cell size | Columns | Simulate |
+| --- | --- | --- |
+| 0.4 mm | 0.06 M | 76 ms |
+| 0.1 mm | 0.96 M | 211 ms |
+| 0.05 mm | 3.8 M | 758 ms |
+| 0.025 mm | 15.4 M | 3.1 s |
+
+Removed volume agrees to 0.01 cm³ across all four.
+
+### Gouging
+
+Import a model as a **reference part** and it becomes the shape the job is
+supposed to produce. It is rasterised onto the stock's own grid, so the
+check costs one array read inside the carving loop that is already running:
+cut below that surface by more than the tolerance and it is reported as a
+gouge, with its depth, alongside the collisions.
+
+The Results panel also reports the other half of the comparison — how much
+stock is still standing above the part, and what fraction of the reference
+surface was gouged. The tolerance is adjustable; the default is 0.02 mm.
+
 ### What the crash model catches
 
 | Reported as | Meaning |
@@ -158,6 +218,7 @@ in a frame and returns, so the UI stays responsive whether the program has
 | **Fixture collision** | Any part of the assembly reached into a fixture or clamp. |
 | **Table collision** | The assembly went below the table surface inside its footprint. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
+| **Gouge into the reference part** | The cutter went below the reference surface by more than the tolerance. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
 | **No tool assembly loaded** | The program selected a `T` number the library has no assembly for. |
 
@@ -233,7 +294,8 @@ src/
     lexer.js          tokeniser
     interpreter.js    modal state machine -> flat move list
   sim/
-    stock.js          heightmap, carving, tile pyramid, surface picking
+    stock.js          heightmap, swept carving, tile pyramid, surface picking
+    target.js         reference-part rasterisation and gouge comparison
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
   scene/
@@ -248,7 +310,7 @@ src/
   io/
     stl.js            STL read/write, OBJ write
     mesh.js           heightmap and lathe triangulation
-  ui/                 panels, editor, preview, DOM helpers
+  ui/                 menu bar, panels, editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
 examples/             the four example programs
 scripts/              static server, smoke test, single-file build
@@ -275,7 +337,7 @@ frame instead of a geometry rebuild.
 ## Testing
 
 ```bash
-npm test           # 59 unit tests: geometry, G-code, simulation, file I/O
+npm test           # 67 unit tests: geometry, G-code, simulation, gouging, I/O
 npm run smoke      # optional: boots the app in headless Chromium
 ```
 

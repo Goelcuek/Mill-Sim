@@ -17,6 +17,7 @@ export const COLLISION_TYPES = {
   spindle: { label: 'Cutting with spindle stopped', severity: 'warning' },
   notool: { label: 'No tool assembly loaded', severity: 'warning' },
   deep: { label: 'Depth of cut exceeds flute length', severity: 'error' },
+  gouge: { label: 'Gouge into the reference part', severity: 'error' },
 };
 
 const MAX_COLLISIONS = 400;
@@ -46,6 +47,19 @@ export class Simulator {
     this.fixtures = [];
     this.slots = new Map();     // tool number -> { built, spheres, index }
     this.fallbackSlot = null;
+    /** Reference-part surface on the stock grid; cutting below it gouges. */
+    this.target = null;
+    this.gougeTolerance = 0.02;
+    /**
+     * Columns a single swept chunk may touch, which sets the chunk length.
+     * A stationary Ø10 cutter alone covers 126k columns at 0.025 mm, so this
+     * has to be large enough that the chunk is the *band* budget and not
+     * merely the disc — otherwise the chunk collapses to nothing and the
+     * sweep degenerates back into stamping.
+     */
+    this.columnBudget = 2_000_000;
+    /** Collision probes are point tests, so they get their own spacing. */
+    this.probeSpacing = 2.5;
     this.reset();
   }
 
@@ -60,6 +74,8 @@ export class Simulator {
     if (opts.fallbackSlot !== undefined) this.fallbackSlot = opts.fallbackSlot;
     if (opts.machine !== undefined) this.machine = opts.machine;
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
+    if (opts.target !== undefined) this.target = opts.target;
+    if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
     this.reset();
   }
 
@@ -201,6 +217,11 @@ export class Simulator {
         advanceLen = Math.min(segLen - this.segPos, allowedByTime);
       }
 
+      const tPrev = this.segPos / segLen;
+      const fromX = ax + (bx - ax) * tPrev;
+      const fromY = ay + (by - ay) * tPrev;
+      const fromZ = az + (bz - az) * tPrev;
+
       this.segPos += advanceLen;
       const t = Math.min(1, this.segPos / segLen);
       const x = ax + (bx - ax) * t;
@@ -215,7 +236,7 @@ export class Simulator {
       advanced += dt;
 
       if (info.active) {
-        const cut = this.sample(mv, x, y, z);
+        const cut = this.sweep(mv, [fromX, fromY, fromZ], [x, y, z]);
         if (cut) didCut = true;
       }
 
@@ -253,9 +274,28 @@ export class Simulator {
   segmentInfo(mv, ax, ay, az, bx, by, bz) {
     const slot = this.activeSlot;
     const stock = this.stock;
-    const cellStep = stock ? Math.max(0.015, stock.cell * 0.4) : 0.5;
 
     if (!slot) return { active: false, stepSize: Infinity };
+
+    // How far to advance before carving. Sweeping means the cost of a chunk
+    // is the area of the band it covers, so the chunk is sized to a column
+    // budget rather than to the cell size — at a fine resolution that keeps
+    // each frame's work bounded without shrinking the step to nothing.
+    const cellArea = stock ? stock.dx * stock.dy : 1;
+    const r = Math.max(slot.built.cutRadius, 0.05);
+    // The cutter's own footprint is paid once per chunk whatever the chunk
+    // length, so only the *extra* band a longer chunk sweeps counts against
+    // the budget. When the footprint alone already blows the budget — a Ø50
+    // face mill covers 3.1M columns at 0.025 mm — the answer is the longest
+    // chunk allowed, to amortise that cost, not the shortest. Getting this
+    // backwards silently turns the sweep back into stamping.
+    let chunk = 25;
+    if (stock) {
+      const discColumns = (Math.PI * r * r) / cellArea;
+      chunk = discColumns >= this.columnBudget
+        ? 25
+        : Math.min(Math.max(((this.columnBudget - discColumns) * cellArea) / (2 * r), 0.25), 25);
+    }
 
     const rBody = Math.max(slot.built.bodyRadius, slot.built.cutRadius);
     const zLow = Math.min(az, bz);
@@ -272,11 +312,10 @@ export class Simulator {
     const limitsOn = this.machine && this.machine.limits && this.machine.limits.enabled;
 
     if (touchesStock) {
-      // Cutting or crashing: sample at heightmap resolution.
-      return { active: true, stepSize: cellStep };
+      return { active: true, stepSize: chunk };
     }
     if (hasObstacles) {
-      return { active: true, stepSize: Math.max(1.5, cellStep * 6) };
+      return { active: true, stepSize: 1.5 };
     }
     if (limitsOn) {
       return { active: true, stepSize: 25 };
@@ -284,15 +323,29 @@ export class Simulator {
     return { active: false, stepSize: Infinity };
   }
 
-  /** Carve and collision-check at one tool position. */
-  sample(mv, x, y, z) {
+  /** Carve the volume swept between two tool positions, then look for crashes. */
+  sweep(mv, from, to) {
     const slot = this.activeSlot;
     if (!slot) return false;
     const stock = this.stock;
+    const [x, y, z] = to;
     let removed = 0;
 
     if (stock) {
-      removed = stock.carve(slot.built.cutEnvelope, x, y, z, slot.index);
+      const result = stock.carveSweep(slot.built.cutEnvelope, from, to, slot.index, {
+        target: this.target,
+        tolerance: this.gougeTolerance,
+      });
+      removed = result.volume;
+      if (result.gouge) {
+        const g = result.gouge;
+        this.report('gouge', {
+          line: mv.line,
+          message: (d) => `Cut ${d.toFixed(3)} mm into the reference part — this is gouging, not stock removal.`,
+          position: [g.x, g.y, g.z],
+          depth: g.depth,
+        });
+      }
       if (removed > 0) {
         this.removedVolume += removed;
         this.moveStats[mv.i] += removed;
@@ -313,28 +366,32 @@ export class Simulator {
         }
       }
 
-      const shankHit = stock.probeBody(slot.built.shankEnvelope, x, y, z);
-      if (shankHit) {
-        this.report('deep', {
-          line: mv.line,
-          message: (d) => `Cutting ${d.toFixed(2)} mm deeper than the flutes reach — the shank is dragging in the cut.`,
-          position: [shankHit.x, shankHit.y, shankHit.z],
-          depth: shankHit.depth,
-        });
-      }
-      const holderHit = stock.probeBody(slot.built.holderEnvelope, x, y, z);
-      if (holderHit) {
-        const name = slot.built.holder ? slot.built.holder.def.name : 'Holder';
-        this.report('holder', {
-          line: mv.line,
-          message: (d) => `${name} buried ${d.toFixed(2)} mm into the stock.`,
-          position: [holderHit.x, holderHit.y, holderHit.z],
-          depth: holderHit.depth,
-        });
+      // Chunks can be tens of millimetres long, so the body is probed at a
+      // fixed spacing along the chunk rather than only where it ends.
+      for (const p of this.probePoints(from, to)) {
+        const shankHit = stock.probeBody(slot.built.shankEnvelope, p[0], p[1], p[2]);
+        if (shankHit) {
+          this.report('deep', {
+            line: mv.line,
+            message: (d) => `Cutting ${d.toFixed(2)} mm deeper than the flutes reach — the shank is dragging in the cut.`,
+            position: [shankHit.x, shankHit.y, shankHit.z],
+            depth: shankHit.depth,
+          });
+        }
+        const holderHit = stock.probeBody(slot.built.holderEnvelope, p[0], p[1], p[2]);
+        if (holderHit) {
+          const name = slot.built.holder ? slot.built.holder.def.name : 'Holder';
+          this.report('holder', {
+            line: mv.line,
+            message: (d) => `${name} buried ${d.toFixed(2)} mm into the stock.`,
+            position: [holderHit.x, holderHit.y, holderHit.z],
+            depth: holderHit.depth,
+          });
+        }
       }
     }
 
-    const tip = [x, y, z];
+    for (const tip of this.probePoints(from, to)) {
     if (this.fixtures && this.fixtures.length) {
       const f = checkFixtures(slot.spheres, tip, this.fixtures, 0);
       if (f) {
@@ -367,8 +424,28 @@ export class Simulator {
         });
       }
     }
+    }
 
     return removed > 0;
+  }
+
+  /**
+   * Points along a chunk at which to run the point-wise collision tests,
+   * always including the far end.
+   */
+  probePoints(from, to) {
+    const len = Math.hypot(to[0] - from[0], to[1] - from[1], to[2] - from[2]);
+    const n = Math.max(1, Math.ceil(len / this.probeSpacing));
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      out.push([
+        from[0] + (to[0] - from[0]) * t,
+        from[1] + (to[1] - from[1]) * t,
+        from[2] + (to[2] - from[2]) * t,
+      ]);
+    }
+    return out;
   }
 
   /**

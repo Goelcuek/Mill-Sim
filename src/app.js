@@ -19,6 +19,7 @@ import { silhouetteSpheres } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
 
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
+import { buildTargetMap, compareToTarget } from './sim/target.js';
 import { writeSTL, writeOBJ } from './io/stl.js';
 
 import { el, clear, button, download } from './ui/dom.js';
@@ -26,6 +27,8 @@ import { SetupPanel } from './ui/setupPanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
 import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
+import { MenuBar } from './ui/menubar.js';
+import { EXAMPLES } from './examples.js';
 import { fmt, fmtDuration, clamp } from './core/util.js';
 
 const SPEEDS = [
@@ -61,6 +64,8 @@ export class App {
       persistLibrary: true,
       exportDecimate: 1,
       seekTarget: null,
+      /** How far the cutter may pass the reference surface before it gouges. */
+      gougeTolerance: 0.02,
     };
 
     this.library = new ToolLibrary();
@@ -95,6 +100,7 @@ export class App {
   buildLayout() {
     clear(this.root);
 
+    this.menubar = new MenuBar();
     this.sectionBar = el('div.segmented');
     this.actionsBar = el('div.actions');
     this.panelHost = el('div.panel-host');
@@ -113,6 +119,8 @@ export class App {
 
     this.root.appendChild(el('header.ribbon', {}, [
       el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
+      this.menubar.root,
+      el('div.spacer'),
       this.sectionBar,
       el('div.spacer'),
       this.viewButtons(),
@@ -136,6 +144,127 @@ export class App {
       seg.appendChild(el('button', { type: 'button', title, onclick: () => this.viewer.setView(name) }, label));
     }
     return el('div.actions-group', {}, [seg, button('Fit', () => this.fitToScene(), { title: 'Frame the job (F)' })]);
+  }
+
+  /**
+   * The menu bar. Items are built fresh each time a menu opens, so
+   * checkmarks and disabled reasons always reflect the current state.
+   */
+  buildMenus() {
+    const d = () => this.state.display;
+    const toggle = (label, key, shortcut) => ({
+      label, shortcut, checked: d()[key], onSelect: () => { this.setDisplay({ [key]: !d()[key] }); this.panels.setup.refresh(); },
+    });
+    const hasModel = () => !!this.models.selected;
+
+    this.menubar.setMenus([
+      {
+        label: 'File',
+        items: () => [
+          { label: 'Open G-code…', shortcut: '⌘O', onSelect: () => this.panels.program.openFile() },
+          { label: 'Save G-code', onSelect: () => this.panels.program.saveFile() },
+          { separator: true },
+          { heading: 'Examples' },
+          ...EXAMPLES.map((ex, i) => ({ label: ex.name, onSelect: () => this.panels.program.loadExampleAt(i) })),
+          { separator: true },
+          { label: 'Import model…', onSelect: () => this.panels.setup.importDialog() },
+          { separator: true },
+          { heading: 'Export' },
+          { label: 'Machined part as STL', onSelect: () => this.exportStockStl() },
+          { label: 'Machined part as OBJ', onSelect: () => this.exportStockObj() },
+          { label: 'Tool assembly as STL', onSelect: () => this.exportAssemblyStl(this.panels.tools.currentBuilt()) },
+          { label: 'Collision report', onSelect: () => download('mill-sim-report.md', this.buildReport(), 'text/markdown') },
+          { label: 'Screenshot', onSelect: () => this.saveScreenshot() },
+        ],
+      },
+      {
+        label: 'Setup',
+        items: () => [
+          { heading: 'Stock' },
+          { label: 'Fit stock to program', onSelect: () => { this.fitStockToProgram(); this.panels.setup.refresh(); }, disabled: !this.state.program, hint: 'Load a program first' },
+          { label: 'Centre stock on zero', onSelect: () => { const sz = this.state.stock.size; this.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.panels.setup.refresh(); } },
+          { label: 'Reset the cut', shortcut: 'R', onSelect: () => this.resetStock() },
+          { separator: true },
+          { heading: 'Place by clicking' },
+          { label: 'Move stock…', onSelect: () => this.moveStockByPoints() },
+          { label: `Set ${this.state.wcsEdit} zero…`, onSelect: () => this.setOriginByPoint() },
+          { label: `Move ${this.state.wcsEdit}…`, onSelect: () => this.moveOriginByPoints() },
+          { label: 'Move selected model…', onSelect: () => this.moveModelByPoints(), disabled: !hasModel(), hint: 'Select a model first' },
+          { separator: true },
+          { heading: 'Work offset' },
+          ...Object.keys(this.state.wcs).map((key) => ({
+            label: key, dot: this.state.wcsEdit === key, onSelect: () => this.setWcsEdit(key),
+          })),
+          { separator: true },
+          { heading: 'Add fixture' },
+          { label: 'Vice jaws', onSelect: () => { this.addPrimitiveFixture('vice'); this.refreshFixtures(); } },
+          { label: 'Parallels', onSelect: () => { this.addPrimitiveFixture('parallels'); this.refreshFixtures(); } },
+          { label: 'Toe clamp', onSelect: () => { this.addPrimitiveFixture('clamp'); this.refreshFixtures(); } },
+        ],
+      },
+      {
+        label: 'Tools',
+        items: () => [
+          { label: 'New assembly', onSelect: () => this.panels.tools.create('assemblies') },
+          { label: 'New cutter', onSelect: () => this.panels.tools.create('tools') },
+          { label: 'New holder', onSelect: () => this.panels.tools.create('holders') },
+          { separator: true },
+          { label: 'Export library…', onSelect: () => download('mill-sim-library.json', JSON.stringify(this.library.toJSON(), null, 2), 'application/json') },
+          { label: 'Import library…', onSelect: () => this.panels.tools.importLibrary() },
+          { label: 'Restore built-in tools', onSelect: () => { this.library.loadDefaults(); this.refreshSlots(); } },
+        ],
+      },
+      {
+        label: 'Simulate',
+        items: () => [
+          { label: this.state.playing ? 'Pause' : 'Play', shortcut: 'Space', onSelect: () => this.togglePlay() },
+          { label: 'Step one move', shortcut: '→', onSelect: () => this.stepMove() },
+          { label: 'Run to end', onSelect: () => this.runToEnd() },
+          { label: 'Back to start', shortcut: 'R', onSelect: () => this.reset() },
+          { separator: true },
+          { heading: 'Speed' },
+          ...SPEEDS.map((sp) => ({
+            label: sp.label, dot: this.state.speed === sp.value,
+            onSelect: () => { this.state.speed = sp.value; this.speedSelect.value = sp.value; },
+          })),
+        ],
+      },
+      {
+        label: 'View',
+        items: () => [
+          { label: 'Isometric', onSelect: () => this.viewer.setView('iso') },
+          { label: 'Top', onSelect: () => this.viewer.setView('top') },
+          { label: 'Front', onSelect: () => this.viewer.setView('front') },
+          { label: 'Right', onSelect: () => this.viewer.setView('right') },
+          { label: 'Fit to job', shortcut: 'F', onSelect: () => this.fitToScene() },
+          { label: 'Fit to toolpath', onSelect: () => this.fitToProgram() },
+          { separator: true },
+          { heading: 'Show' },
+          toggle('Stock', 'stock'),
+          toggle('Tool', 'tool'),
+          toggle('Holder', 'holder'),
+          toggle('Toolpath', 'toolpath'),
+          toggle('Rapid moves', 'rapids'),
+          toggle('Work origins', 'origins'),
+          toggle('Grid', 'grid'),
+          toggle('Axes', 'axes'),
+          { separator: true },
+          { label: 'Colour cuts by tool', checked: this.state.display.toolColors, onSelect: () => this.setDisplay({ toolColors: !this.state.display.toolColors }) },
+          { separator: true },
+          { heading: 'Machine' },
+          { label: 'Part only', dot: this.state.machine.mode === 'part', onSelect: () => { this.setMachine({ mode: 'part' }); this.panels.setup.refresh(); } },
+          { label: 'Full machine', dot: this.state.machine.mode === 'machine', onSelect: () => { this.setMachine({ mode: 'machine' }); this.panels.setup.refresh(); } },
+        ],
+      },
+    ]);
+  }
+
+  saveScreenshot() {
+    const url = this.viewer.screenshot();
+    const a = el('a', { href: url, download: 'mill-sim.png' });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   /** Rebuild the contextual action row for the active section. */
@@ -242,6 +371,7 @@ export class App {
         onclick: () => this.setTab(id),
       }, label));
     }
+    this.buildMenus();
     this.setTab('setup');
   }
 
@@ -253,6 +383,7 @@ export class App {
     this.panelHost.appendChild(this.panels[id].root);
     if (this.panels[id].refresh) this.panels[id].refresh();
     this.buildActions();
+    this.buildMenus();
   }
 
   // ---- transport ---------------------------------------------------------
@@ -310,9 +441,10 @@ export class App {
   rebuildStock() {
     const s = this.state.stock;
     this.stock = new Stock({ origin: s.origin, size: s.size, resolution: s.resolution });
-    this.stockView.setStock(this.stock);
+    this.stockView.setStock(this.stock, { renderer: this.viewer.renderer });
     this.applyDisplay();
     this.simulator.load({ stock: this.stock });
+    this.refreshTarget();
     this.refreshOrigins();
     this.refreshResults();
     this.viewer.invalidate();
@@ -427,7 +559,44 @@ export class App {
 
   refreshFixtures() {
     this.simulator.fixtures = this.models.collisionBoxes();
+    this.scheduleTargetRefresh();
     this.viewer.invalidate();
+  }
+
+  scheduleTargetRefresh() {
+    clearTimeout(this._targetTimer);
+    this._targetTimer = setTimeout(() => this.refreshTarget(), 200);
+  }
+
+  /**
+   * Project the reference parts onto the stock grid so the carver can tell
+   * stock removal from gouging.
+   */
+  refreshTarget() {
+    const parts = this.models.models
+      .filter((m) => m.visible && m.role === 'reference')
+      .map((m) => ({ positions: this.models.worldPositions(m) }));
+
+    const started = performance.now();
+    this.target = parts.length && this.stock ? buildTargetMap(this.stock, parts) : null;
+    this.simulator.target = this.target;
+    this.simulator.gougeTolerance = this.state.gougeTolerance;
+    if (parts.length && this.target) {
+      this.notify(`Reference surface mapped in ${(performance.now() - started).toFixed(0)} ms — cuts past it will be reported as gouges.`, 'ok');
+    }
+    this.refreshResults();
+  }
+
+  setGougeTolerance(mm) {
+    this.state.gougeTolerance = Math.max(0, mm || 0);
+    this.simulator.gougeTolerance = this.state.gougeTolerance;
+    this.refreshResults();
+  }
+
+  /** Where the finished stock stands against the reference part. */
+  compareToReference() {
+    if (!this.target || !this.stock) return null;
+    return compareToTarget(this.stock, this.target, this.state.gougeTolerance);
   }
 
   showAssembly(slot) {

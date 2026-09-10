@@ -9,6 +9,7 @@ import { MODEL_ROLES } from '../scene/modelsView.js';
 import { fmt } from '../core/util.js';
 
 const AXES = ['X', 'Y', 'Z'];
+const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
 const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']];
 
 export class SetupPanel {
@@ -97,16 +98,22 @@ export class SetupPanel {
     };
     updateInfo();
 
+    // Discrete steps rather than a linear sweep: the useful range spans two
+    // orders of magnitude and the fine end is where the interesting choices
+    // are. Committing only on release keeps a 12M-column rebuild off every
+    // drag frame.
+    const nearest = RESOLUTIONS.reduce((best, v) => (Math.abs(v - s.resolution) < Math.abs(best - s.resolution) ? v : best), RESOLUTIONS[0]);
+    const resLabel = el('span.value', {}, `${nearest} mm`);
     const res = el('input', {
-      type: 'range', min: 0.05, max: 2, step: 0.05, value: s.resolution,
-      oninput: (e) => {
-        const v = parseFloat(e.target.value);
-        resLabel.textContent = `${v.toFixed(2)} mm`;
-        app.setStock({ resolution: v });
+      type: 'range', min: 0, max: RESOLUTIONS.length - 1, step: 1,
+      value: RESOLUTIONS.indexOf(nearest),
+      oninput: (e) => { resLabel.textContent = `${RESOLUTIONS[Number(e.target.value)]} mm`; },
+      onchange: (e) => {
+        app.setStock({ resolution: RESOLUTIONS[Number(e.target.value)] });
         updateInfo();
+        this.refresh();
       },
     });
-    const resLabel = el('span.value', {}, `${Number(s.resolution).toFixed(2)} mm`);
 
     return section('Stock', [
       row(AXES.map((a, i) => field(`Size ${a}`, s.size[i], {
@@ -133,7 +140,7 @@ export class SetupPanel {
         res,
       ]),
       info,
-      el('div.hint', {}, 'Finer cells give sharper corners and scallops but cost memory and speed. 0.2–0.4 mm suits most parts.'),
+      el('div.hint', {}, 'Finer cells give sharper corners and scallops but cost memory. 0.2–0.4 mm suits most parts; 0.025 mm is for inspecting a finish.'),
       row([
         el('label.field', {}, [
           el('span.field-label', {}, 'Material colour'),
@@ -221,6 +228,12 @@ export class SetupPanel {
     }
     app.refreshFixtures();
     app.fitToScene();
+  }
+
+  /** Open the file picker and import whatever comes back. */
+  async importDialog() {
+    this.app.setTab('setup');
+    await this.importFiles(await pickFile('.stl', true));
   }
 
   modelsSection() {

@@ -52,6 +52,23 @@ export class Envelope {
   get isEmpty() {
     return !(this.rMax > 0) || !Number.isFinite(this.zMin);
   }
+
+  /**
+   * Largest squared radius over which the envelope is flat.
+   *
+   * A flat-bottomed cutter — an end mill, a face mill — has a constant
+   * envelope right out to its edge, which lets the swept-volume carver skip
+   * its search entirely and just look at the ends of the pass. Computed
+   * once here so the hot loop can branch on a number.
+   */
+  get flatR2() {
+    if (this._flatR2 !== undefined) return this._flatR2;
+    const z0 = this.lut[0];
+    let i = 0;
+    while (i < this.n && Math.abs(this.lut[i + 1] - z0) < 1e-7) i++;
+    this._flatR2 = (i / this.n) * this.rMax2;
+    return this._flatR2;
+  }
 }
 
 /** An envelope that never touches anything. */
