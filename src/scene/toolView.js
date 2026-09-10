@@ -9,15 +9,111 @@ import * as THREE from 'three';
 import { deg2rad } from '../core/util.js';
 
 const LATHE_SEGMENTS = 64;
+/** Profile corners sharper than this get a hard edge instead of a blend. */
+const CREASE_DEGREES = 30;
 
+/**
+ * Revolve a silhouette around the Z axis.
+ *
+ * three's LatheGeometry averages the normal at every profile point with
+ * its neighbour, so the 90-degree shoulder between two holder stages
+ * shades as a 45-degree bevel and the whole assembly looks melted. This
+ * builder splits the ring at sharp corners — two rings at the same height,
+ * each carrying its own normal — while still sharing a ring wherever the
+ * profile is genuinely curved, so a ball nose stays smooth and a flange
+ * stays crisp.
+ */
 function latheFrom(points, segments = LATHE_SEGMENTS) {
-  const pts = points
-    .filter((p) => Number.isFinite(p.r) && Number.isFinite(p.z))
-    .map((p) => new THREE.Vector2(Math.max(p.r, 0.0001), p.z));
+  const pts = [];
+  for (const p of points) {
+    if (!Number.isFinite(p.r) || !Number.isFinite(p.z)) continue;
+    const last = pts[pts.length - 1];
+    if (last && Math.abs(last.r - p.r) < 1e-9 && Math.abs(last.z - p.z) < 1e-9) continue;
+    pts.push({ r: Math.max(p.r, 0), z: p.z });
+  }
   if (pts.length < 2) return new THREE.BufferGeometry();
-  const g = new THREE.LatheGeometry(pts, segments);
-  g.rotateX(Math.PI / 2);   // lathe builds around +Y; the app is Z up
-  g.computeVertexNormals();
+
+  // Outward normal of each profile segment, in the (radius, height) plane.
+  const segN = [];
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const dr = pts[i + 1].r - pts[i].r;
+    const dz = pts[i + 1].z - pts[i].z;
+    const len = Math.hypot(dr, dz) || 1;
+    segN.push([dz / len, -dr / len]);
+  }
+
+  // One ring per profile point, or two where the profile creases.
+  const creaseDot = Math.cos((CREASE_DEGREES * Math.PI) / 180);
+  const rings = [];
+  for (let i = 0; i < pts.length; i++) {
+    const prev = i > 0 ? segN[i - 1] : null;
+    const next = i < segN.length ? segN[i] : null;
+    if (!prev) rings.push({ i, p: pts[i], n: next });
+    else if (!next) rings.push({ i, p: pts[i], n: prev });
+    else if (prev[0] * next[0] + prev[1] * next[1] >= creaseDot) {
+      const nr = prev[0] + next[0];
+      const nz = prev[1] + next[1];
+      const len = Math.hypot(nr, nz) || 1;
+      rings.push({ i, p: pts[i], n: [nr / len, nz / len] });
+    } else {
+      rings.push({ i, p: pts[i], n: prev });
+      rings.push({ i, p: pts[i], n: next });
+    }
+  }
+
+  const ringVerts = segments + 1;
+  const total = rings.length * ringVerts;
+  const position = new Float32Array(total * 3);
+  const normal = new Float32Array(total * 3);
+  const uv = new Float32Array(total * 2);
+  const index = [];
+
+  const cos = new Float32Array(ringVerts);
+  const sin = new Float32Array(ringVerts);
+  for (let j = 0; j <= segments; j++) {
+    const a = (j / segments) * Math.PI * 2;
+    cos[j] = Math.cos(a);
+    sin[j] = Math.sin(a);
+  }
+
+  const zMin = pts[0].z;
+  const zSpan = pts[pts.length - 1].z - zMin || 1;
+
+  for (let k = 0; k < rings.length; k++) {
+    const { p, n } = rings[k];
+    for (let j = 0; j <= segments; j++) {
+      const o = (k * ringVerts + j) * 3;
+      position[o] = p.r * cos[j];
+      position[o + 1] = p.r * sin[j];
+      position[o + 2] = p.z;
+      normal[o] = n[0] * cos[j];
+      normal[o + 1] = n[0] * sin[j];
+      normal[o + 2] = n[1];
+      uv[(k * ringVerts + j) * 2] = j / segments;
+      uv[(k * ringVerts + j) * 2 + 1] = (p.z - zMin) / zSpan;
+    }
+  }
+
+  for (let k = 0; k + 1 < rings.length; k++) {
+    // A crease emits two coincident rings; there is no band between them.
+    if (rings[k].i === rings[k + 1].i) continue;
+    if (rings[k].p.r <= 0 && rings[k + 1].p.r <= 0) continue;
+    for (let j = 0; j < segments; j++) {
+      const a = k * ringVerts + j;
+      const b = a + 1;
+      const c = (k + 1) * ringVerts + j + 1;
+      const d = c - 1;
+      if (rings[k].p.r > 0) index.push(a, b, c);
+      if (rings[k + 1].p.r > 0) index.push(a, c, d);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(position, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(normal, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(index);
+  g.computeBoundingSphere();
   return g;
 }
 

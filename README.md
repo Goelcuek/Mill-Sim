@@ -23,9 +23,11 @@ Open the page, pick an example from the **Program** tab, and press play.
 **Parametric tool library.** Eight cutter families — flat, ball, bull nose,
 chamfer/V, tapered, drill, face mill and undercut — each generated from its
 real dimensions rather than picked from a fixed list. Holders are stacks of
-cones with a standard spindle taper on top (BT/CAT/HSK/ISO), so a stubby
-shrink-fit holder and a slim extension behave differently in a deep pocket,
-as they should. A tool plus a holder plus a stickout is an *assembly*, and
+cones running from the nose up to the gauge line, so a stubby shrink-fit
+holder and a slim extension behave differently in a deep pocket, as they
+should. The taper above the gauge line is deliberately not modelled: it
+lives inside the spindle bore and can never touch anything. The gauge line
+is the mating face, and the spindle nose starts exactly there. A tool plus a holder plus a stickout is an *assembly*, and
 an assembly is what a `T` number selects.
 
 **G-code interpretation.** A full modal interpreter: linear and helical
@@ -171,7 +173,7 @@ src/
   tools/
     envelope.js       lower-envelope tables — the geometric core
     toolDefs.js       parametric cutters
-    holderDefs.js     parametric holders and spindle tapers
+    holderDefs.js     parametric holders, nose to gauge line
     assembly.js       cutter + holder + stickout -> cut/shank/holder envelopes
     library.js        CRUD, localStorage, JSON import/export
   gcode/

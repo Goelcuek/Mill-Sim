@@ -152,7 +152,7 @@ export class ToolsPanel {
         ['Cutting Ø', `${fmt(built.cutRadius * 2, 3)} mm`],
         ['Flute length', `${fmt(built.fluteLength, 2)} mm`],
         ['Stickout', `${fmt(built.stickout, 2)} mm`],
-        ['Gauge length', `${fmt(built.gaugeLength, 1)} mm`],
+        ['Tip to gauge line', `${fmt(built.gaugeLength, 1)} mm`],
         ['Widest body', `${fmt(built.bodyRadius * 2, 1)} mm`],
         ['Assembly length', `${fmt(built.totalLength, 1)} mm`],
       ]));
@@ -350,18 +350,20 @@ export class ToolsPanel {
         select('Type', Object.entries(HOLDER_TYPES).map(([k, v]) => ({ value: k, label: v })), h.type, (v) => set({ type: v })),
       ]),
       row([
-        select('Spindle taper', Object.entries(TAPERS).map(([k, v]) => ({ value: k, label: v.label })), h.taper, (v) => set({ taper: v })),
+        select('Spindle interface', Object.entries(TAPERS).map(([k, v]) => ({ value: k, label: v.label })), h.taper, (v) => set({ taper: v }), {
+          title: 'Sets the flange diameter below the gauge line. The taper itself is inside the spindle and is not modelled.',
+        }),
         el('label.field', {}, [
           el('span.field-label', {}, 'Colour'),
           el('input', { type: 'color', value: h.color || '#8d97a8', oninput: (e) => set({ color: e.target.value }) }),
         ]),
       ]),
-      el('div.hint', {}, 'Stages are stacked from the nose upwards. Each is a cone from its bottom diameter to its top diameter.'),
+      el('div.hint', {}, 'Stages are stacked from the nose upwards. Each is a cone from its bottom diameter to its top diameter. The stack ends at the gauge line, where the spindle nose mates — the taper above it sits inside the spindle and can never hit anything, so it is not drawn or checked.'),
       ...stageRows,
       row([
         button('+ Add stage', () => set({ stages: [...h.stages, { dia: 40, topDia: 40, length: 20 }] })),
       ]),
-      el('div.stat-value.dim', {}, `Body ${fmt(built.holder ? built.holder.length : 0, 1)} mm long · nose Ø${fmt(built.holder ? built.holder.noseDia : 0, 1)} · widest Ø${fmt(built.holder ? built.holder.maxDia : 0, 1)}`),
+      el('div.stat-value.dim', {}, `Projection ${fmt(built.holder ? built.holder.length : 0, 1)} mm from the gauge line · nose Ø${fmt(built.holder ? built.holder.noseDia : 0, 1)} · widest Ø${fmt(built.holder ? built.holder.maxDia : 0, 1)}`),
     ]);
   }
 

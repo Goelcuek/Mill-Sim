@@ -19,6 +19,54 @@ export const VIEWS = {
   right: [1, 0, 0],
 };
 
+/**
+ * Build a procedural studio environment map.
+ *
+ * Cutters and holders are metal, and metal with nothing to reflect renders
+ * as a black shape with a couple of specular dots. Rather than pull in an
+ * HDR file, this builds a small equirectangular gradient — bright sky, mid
+ * horizon, dark floor, with a soft overhead band — and pre-filters it,
+ * which is enough to make machined surfaces read as machined surfaces.
+ *
+ * @param {THREE.WebGLRenderer} renderer
+ * @returns {THREE.Texture} a PMREM texture to assign to `scene.environment`
+ */
+export function makeStudioEnvironment(renderer) {
+  const W = 64;
+  const H = 32;
+  const data = new Float32Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    const v = y / (H - 1);              // 0 at the top of the sphere
+    const sky = 1 - v;
+    const band = Math.exp(-((v - 0.22) ** 2) / 0.006) * 1.6;
+    const base = 0.10 + sky * sky * 0.55 + band;
+    const warm = 1 + band * 0.06;
+    for (let x = 0; x < W; x++) {
+      // A little azimuthal variation stops flat faces looking uniform.
+      const sweep = 1 + 0.18 * Math.cos((x / W) * Math.PI * 2);
+      const o = (y * W + x) * 4;
+      data[o] = base * sweep * warm;
+      data[o + 1] = base * sweep;
+      data[o + 2] = base * sweep * 1.08;
+      data[o + 3] = 1;
+    }
+  }
+
+  const equirect = new THREE.DataTexture(data, W, H, THREE.RGBAFormat, THREE.FloatType);
+  equirect.mapping = THREE.EquirectangularReflectionMapping;
+  equirect.colorSpace = THREE.LinearSRGBColorSpace;
+  equirect.minFilter = THREE.LinearFilter;
+  equirect.magFilter = THREE.LinearFilter;
+  equirect.needsUpdate = true;
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const texture = pmrem.fromEquirectangular(equirect).texture;
+  pmrem.dispose();
+  equirect.dispose();
+  return texture;
+}
+
 export class Viewer {
   /** @param {HTMLElement} container */
   constructor(container) {
@@ -46,6 +94,7 @@ export class Viewer {
     this.controls.maxDistance = 4000;
     this.controls.minDistance = 5;
 
+    this.buildEnvironment();
     this.buildLights();
     this.buildGround();
 
@@ -59,8 +108,16 @@ export class Viewer {
     this.resize();
   }
 
+  buildEnvironment() {
+    this.environment = makeStudioEnvironment(this.renderer);
+    this.scene.environment = this.environment;
+    this.scene.environmentIntensity = 1.0;
+  }
+
   buildLights() {
-    const hemi = new THREE.HemisphereLight(0xcfd9ea, 0x2a2f3a, 1.5);
+    // The environment map carries most of the ambient now, so the lights
+    // are here for shape and highlights rather than raw brightness.
+    const hemi = new THREE.HemisphereLight(0xcfd9ea, 0x2a2f3a, 0.55);
     this.scene.add(hemi);
 
     const key = new THREE.DirectionalLight(0xffffff, 2.1);
@@ -196,6 +253,7 @@ export class Viewer {
 
   dispose() {
     this.stop();
+    if (this.environment) this.environment.dispose();
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.renderer.dispose();

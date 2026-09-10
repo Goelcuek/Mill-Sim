@@ -1,29 +1,42 @@
 // Parametric tool-holder definitions.
 //
 // A holder is a stack of truncated-cone stages listed from the nose (the
-// face the tool sticks out of) upwards, optionally topped with a standard
-// spindle taper. Holders matter for two reasons: they are the part that
-// usually crashes, and their nose position is what fixes the usable
-// stickout of the cutter.
+// face the tool sticks out of) upwards, ending at the gauge line. Holders
+// matter for two reasons: they are the part that usually crashes, and
+// their nose position is what fixes the usable stickout of the cutter.
+//
+// The model stops at the gauge line on purpose. The 7:24 taper, the HSK
+// shank and the retention knob all sit inside the spindle bore, so they
+// can never touch the work, the fixture or the machine. Drawing them only
+// adds a phantom column of metal where the spindle should be. The gauge
+// line is the mating face: the spindle nose starts exactly there and goes
+// up, so there is never a gap between holder and spindle.
+//
+// The V-flange or HSK collar is kept, because it is below the gauge line
+// and is very often the widest thing on the whole assembly — a BT40 flange
+// is 63 mm across, which is what actually clips a clamp in a deep pocket.
 
 import { buildEnvelope, dedupe } from './envelope.js';
 import { num, uid } from '../core/util.js';
 
 /**
- * Standard spindle interfaces, drawn above the holder body.
- * `flangeDia`/`flangeLength` describe the V-flange or HSK collar,
- * `gaugeDia`/`taperLength` the taper itself and `retention` the stud/knob.
+ * Standard spindle interfaces.
+ *
+ * Only the collar below the gauge line is described, because only that
+ * part is ever outside the spindle. `flangeDia` is the V-flange or HSK
+ * collar diameter and `flangeLength` how far it hangs below the gauge
+ * line. The taper above it is deliberately not modelled.
  */
 export const TAPERS = {
-  none: { label: 'None (bare body)', flangeDia: 0, flangeLength: 0, gaugeDia: 0, taperLength: 0, retention: 0 },
-  BT30: { label: 'BT30', flangeDia: 46, flangeLength: 16, gaugeDia: 31.75, taperLength: 48.4, retention: 22 },
-  BT40: { label: 'BT40', flangeDia: 63, flangeLength: 18, gaugeDia: 44.45, taperLength: 65.4, retention: 26 },
-  BT50: { label: 'BT50', flangeDia: 97.5, flangeLength: 24, gaugeDia: 69.85, taperLength: 101.8, retention: 34 },
-  CAT40: { label: 'CAT40', flangeDia: 63, flangeLength: 18, gaugeDia: 44.45, taperLength: 68.6, retention: 26 },
-  CAT50: { label: 'CAT50', flangeDia: 97.5, flangeLength: 24, gaugeDia: 69.85, taperLength: 101.6, retention: 34 },
-  HSK63A: { label: 'HSK63-A', flangeDia: 63, flangeLength: 10, gaugeDia: 63, taperLength: 50, retention: 0 },
-  HSK100A: { label: 'HSK100-A', flangeDia: 100, flangeLength: 12, gaugeDia: 100, taperLength: 75, retention: 0 },
-  ISO30: { label: 'ISO30 / SK30', flangeDia: 50, flangeLength: 14, gaugeDia: 31.75, taperLength: 48, retention: 0 },
+  none: { label: 'None (bare body)', flangeDia: 0, flangeLength: 0 },
+  BT30: { label: 'BT30', flangeDia: 46, flangeLength: 16 },
+  BT40: { label: 'BT40', flangeDia: 63, flangeLength: 18 },
+  BT50: { label: 'BT50', flangeDia: 97.5, flangeLength: 24 },
+  CAT40: { label: 'CAT40', flangeDia: 63, flangeLength: 18 },
+  CAT50: { label: 'CAT50', flangeDia: 97.5, flangeLength: 24 },
+  HSK63A: { label: 'HSK63-A', flangeDia: 63, flangeLength: 10 },
+  HSK100A: { label: 'HSK100-A', flangeDia: 100, flangeLength: 12 },
+  ISO30: { label: 'ISO30 / SK30', flangeDia: 50, flangeLength: 14 },
 };
 
 export const HOLDER_TYPES = {
@@ -89,23 +102,14 @@ export function buildHolder(def) {
     z += len;
   }
 
+  // The flange or collar, and then stop: z is now the gauge line, the face
+  // the spindle nose mates against.
   const taper = TAPERS[h.taper] || TAPERS.none;
   if (taper.flangeDia > 0) {
     const fr = taper.flangeDia / 2;
     pts.push({ r: fr, z });
     pts.push({ r: fr, z: z + taper.flangeLength });
     z += taper.flangeLength;
-    // The 7:24 taper narrows going up towards the drawbar.
-    const gr = taper.gaugeDia / 2;
-    const topR = Math.max(gr - taper.taperLength * (7 / 24) / 2, gr * 0.55);
-    pts.push({ r: gr, z });
-    pts.push({ r: topR, z: z + taper.taperLength });
-    z += taper.taperLength;
-    if (taper.retention > 0) {
-      pts.push({ r: taper.retention / 2 * 0.55, z });
-      pts.push({ r: taper.retention / 2 * 0.55, z: z + taper.retention });
-      z += taper.retention;
-    }
   }
   pts.push({ r: 0, z });
 
@@ -117,60 +121,66 @@ export function buildHolder(def) {
     def: h,
     points,
     envelope: buildEnvelope(points),
+    /** Nose to gauge line — the holder's projection from the spindle. */
     length: z,
     noseDia: num(stages[0].dia, 20),
+    flangeDia: taper.flangeDia,
     maxDia,
     warnings,
   };
 }
 
 export function defaultHolders() {
+  // Stage lengths add up, with the flange, to the holder's projection from
+  // the gauge line — the number a catalogue quotes and the number that
+  // decides whether the holder clears the part.
   return [
     makeHolder({
-      id: 'hld_er32', name: 'BT40 ER32 collet chuck', type: 'collet', taper: 'BT40',
+      id: 'hld_er32', name: 'BT40 ER32 collet chuck · 100', type: 'collet', taper: 'BT40',
       stages: [
-        { dia: 22, topDia: 34, length: 24 },
-        { dia: 40, topDia: 40, length: 18 },
-        { dia: 48, topDia: 50, length: 28 },
+        { dia: 36, topDia: 50, length: 32 },   // collet nut
+        { dia: 50, topDia: 50, length: 20 },
+        { dia: 50, topDia: 58, length: 30 },
       ],
     }),
     makeHolder({
-      id: 'hld_shrink', name: 'BT40 shrink fit 12mm', type: 'shrink', taper: 'BT40', color: '#7f8a9c',
+      id: 'hld_shrink', name: 'BT40 shrink fit 12 · 90', type: 'shrink', taper: 'BT40', color: '#7f8a9c',
       stages: [
-        { dia: 18, topDia: 21, length: 40 },
-        { dia: 21, topDia: 34, length: 26 },
-        { dia: 40, topDia: 48, length: 24 },
+        { dia: 21, topDia: 24, length: 40 },   // slim shrink nose
+        { dia: 24, topDia: 40, length: 20 },
+        { dia: 40, topDia: 58, length: 12 },
       ],
     }),
     makeHolder({
-      id: 'hld_slim', name: 'BT40 slim extension', type: 'extension', taper: 'BT40', color: '#79839a',
+      id: 'hld_slim', name: 'BT40 slim extension · 120', type: 'extension', taper: 'BT40', color: '#79839a',
       stages: [
-        { dia: 14, topDia: 14, length: 55 },
-        { dia: 24, topDia: 32, length: 22 },
-        { dia: 42, topDia: 48, length: 22 },
+        { dia: 16, topDia: 16, length: 60 },
+        { dia: 16, topDia: 32, length: 14 },
+        { dia: 32, topDia: 58, length: 28 },
       ],
     }),
     makeHolder({
-      id: 'hld_shell', name: 'BT40 shell mill arbor 22', type: 'shell', taper: 'BT40', color: '#96a0b1',
+      id: 'hld_shell', name: 'BT40 shell mill arbor 22 · 60', type: 'shell', taper: 'BT40', color: '#96a0b1',
       stages: [
-        { dia: 22, topDia: 22, length: 18 },
-        { dia: 50, topDia: 58, length: 24 },
-        { dia: 58, topDia: 58, length: 18 },
+        { dia: 22, topDia: 22, length: 16 },   // arbor pilot
+        { dia: 60, topDia: 60, length: 16 },   // drive face
+        { dia: 60, topDia: 58, length: 10 },
       ],
     }),
     makeHolder({
-      id: 'hld_hsk', name: 'HSK63A end mill holder 16', type: 'endmill', taper: 'HSK63A', color: '#8792a5',
+      id: 'hld_hsk', name: 'HSK63A end mill holder 16 · 85', type: 'endmill', taper: 'HSK63A', color: '#8792a5',
       stages: [
-        { dia: 32, topDia: 32, length: 45 },
-        { dia: 44, topDia: 50, length: 25 },
+        { dia: 32, topDia: 32, length: 51 },
+        { dia: 32, topDia: 48, length: 14 },
+        { dia: 48, topDia: 63, length: 10 },
       ],
     }),
     makeHolder({
-      id: 'hld_drill', name: 'BT40 drill chuck 13mm', type: 'drillchuck', taper: 'BT40', color: '#9aa4b4',
+      id: 'hld_drill', name: 'BT40 drill chuck 13 · 110', type: 'drillchuck', taper: 'BT40', color: '#9aa4b4',
       stages: [
-        { dia: 12, topDia: 40, length: 34 },
-        { dia: 44, topDia: 44, length: 30 },
-        { dia: 44, topDia: 48, length: 16 },
+        { dia: 12, topDia: 42, length: 40 },   // chuck jaws and body
+        { dia: 46, topDia: 46, length: 34 },
+        { dia: 46, topDia: 58, length: 18 },
       ],
     }),
   ];

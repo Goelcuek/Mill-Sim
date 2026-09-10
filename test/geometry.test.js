@@ -85,3 +85,45 @@ test('the engagement disc catches a cut deeper than the flutes', () => {
   assert.ok(Number.isFinite(built.shankEnvelope.at(justOutside)));
   assert.ok(Math.abs(built.shankEnvelope.at(justOutside) - 18) < 1e-6);
 });
+
+test('the holder model stops at the gauge line', () => {
+  for (const def of defaultHolders()) {
+    const built = buildHolder(def);
+    const top = built.points[built.points.length - 1];
+    assert.equal(top.r, 0, `${def.name} does not close at the top`);
+    assert.equal(top.z, built.length, `${def.name} top is not the gauge line`);
+
+    // Nothing narrows again on the way up: a drawn taper would show as a
+    // radius shrinking below the flange near the top of the stack.
+    const flangeR = built.flangeDia / 2;
+    if (flangeR > 0) {
+      const belowTop = built.points.filter((pt) => pt.z < built.length - 1e-9);
+      const highest = belowTop[belowTop.length - 1];
+      assert.equal(highest.r, flangeR, `${def.name} should end on the flange, got r=${highest.r}`);
+    }
+  }
+});
+
+test('the spindle nose mates flush with the gauge line', () => {
+  const tools = defaultTools();
+  for (const holderDef of defaultHolders()) {
+    const built = buildAssembly({ stickout: 40 }, tools[1], holderDef, { spindleDiameter: 110, spindleLength: 130 });
+    const gauge = built.stickout + built.holder.length;
+
+    assert.equal(built.gaugeLength, gauge);
+    assert.ok(built.spindlePoints.length > 0, 'spindle nose missing');
+    assert.equal(built.spindlePoints[0].z, gauge, `${holderDef.name}: spindle starts off the gauge line`);
+    assert.equal(built.totalLength, gauge + 130);
+
+    // No holder geometry above the gauge line.
+    const above = built.holderPoints.filter((pt) => pt.z > gauge + 1e-9);
+    assert.equal(above.length, 0, `${holderDef.name} has ${above.length} points above the gauge line`);
+  }
+});
+
+test('a bare cutter still builds without a holder', () => {
+  const built = buildAssembly({ stickout: 30 }, defaultTools()[1], null);
+  assert.equal(built.holder, null);
+  assert.equal(built.holderPoints.length, 0);
+  assert.ok(built.cutEnvelope.at(0) === 0);
+});

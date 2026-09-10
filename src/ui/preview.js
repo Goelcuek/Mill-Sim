@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { assemblyPreviewMesh } from '../scene/toolView.js';
+import { makeStudioEnvironment } from '../scene/viewer.js';
 
 export class PreviewViewer {
   /** @param {HTMLElement} container */
@@ -18,7 +19,11 @@ export class PreviewViewer {
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.add(new THREE.HemisphereLight(0xd6e2f5, 0x2b3140, 2.0));
+    // Same environment as the main viewport, or the preview shows a black
+    // silhouette where the main scene shows steel.
+    this.environment = makeStudioEnvironment(this.renderer);
+    this.scene.environment = this.environment;
+    this.scene.add(new THREE.HemisphereLight(0xd6e2f5, 0x2b3140, 0.7));
     const key = new THREE.DirectionalLight(0xffffff, 2.4);
     key.position.set(160, -220, 240);
     this.scene.add(key);
@@ -143,6 +148,7 @@ export class PreviewViewer {
 
   dispose() {
     cancelAnimationFrame(this.handle);
+    if (this.environment) this.environment.dispose();
     this.resizeObserver.disconnect();
     this.clear();
     this.renderer.dispose();

@@ -94,15 +94,22 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
     }
   }
 
-  // Spindle nose, so a plunge that buries the spindle still gets caught.
+  // The spindle nose starts exactly at the gauge line — the holder's top
+  // face — so the two mate with no gap. Everything above the gauge line on
+  // a real holder is inside this cylinder, which is why it is not drawn.
+  // The nose is part of the crash model so a plunge that buries the spindle
+  // still gets caught.
   const spindleDia = num(machine.spindleDiameter, 0);
   const spindleLen = num(machine.spindleLength, 0);
   let spindlePoints = [];
   if (spindleDia > 0 && spindleLen > 0) {
     const sr = spindleDia / 2;
+    const gauge = totalLength;
     spindlePoints = [
-      { r: sr, z: totalLength },
-      { r: sr, z: totalLength + spindleLen },
+      { r: 0, z: gauge },          // nose face, closed so it exports as a solid
+      { r: sr, z: gauge },
+      { r: sr, z: gauge + spindleLen },
+      { r: 0, z: gauge + spindleLen },
     ];
     totalLength += spindleLen;
   }
@@ -143,7 +150,10 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
     cutRadius: tool.radius,
     bodyRadius: bodyOnly.reduce((m, p) => Math.max(m, p.r), 0),
     fluteLength: tool.fluteLength,
-    /** Gauge length used for tool-length offsets, tip to holder gauge line. */
+    /**
+     * Tip to gauge line: the holder's mating face with the spindle nose,
+     * and the length a control would hold as the tool-length offset.
+     */
     gaugeLength: holder ? stickout + holder.length : tool.length,
     warnings,
   };
