@@ -462,21 +462,22 @@ export class App {
   }
 
   /**
-   * Start a machine from nothing: a base that does not move, a table to
-   * clamp to and a spindle to hang the tool on. No axes — those are added
-   * one at a time, which is the point of starting clean.
+   * Start a machine from nothing: one base, which does not move.
+   *
+   * Nothing else is guessed. A table and a spindle are only the shape most
+   * mills happen to have, and pre-drawing them makes the chain look finished
+   * when it is not — so the tool and the part both start on the base, the
+   * Axes page says so, and the chain grows from there.
    */
   newMachine(name) {
     const def = {
       name: name || 'New machine',
-      toolNode: 'spindle',
-      workNode: 'table',
+      toolNode: 'base',
+      workNode: 'base',
       spindleOffset: [0, 0, 0],
-      tableOffset: [0, 0, 80],
+      tableOffset: [0, 0, 0],
       nodes: [
         { id: 'base', name: 'Base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
-        { id: 'table', name: 'Table', kind: 'carrier', parent: 'base', origin: [0, 0, -80] },
-        { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'base', origin: [0, 0, 290] },
       ],
     };
     this.machineView.setKinematics(new Kinematics(def));
@@ -484,7 +485,7 @@ export class App {
     for (const p of this.machineParts.parts) p.nodeId = null;
     this.applyKinematics();
     this.setPage('machine', 'axes');
-    this.notify('Empty machine: a base, a table and a spindle. Add axes between them.', 'ok');
+    this.notify('An empty machine: one base. Add axes with “Add axis…” — each says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps.', 'ok');
   }
 
   /** Write the current chain out so it can be shared or kept. */

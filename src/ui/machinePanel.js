@@ -59,6 +59,19 @@ export class MachinePanel extends Panel {
     return (this.selectedId && k.byId.get(this.selectedId)) || null;
   }
 
+  /**
+   * Publish a change to the chain.
+   *
+   * Every edit on this page goes through here: the chain is re-ordered, the
+   * rig and the simulator are handed the new one, and the panel is redrawn
+   * so the tree shows what was just done rather than what was there before.
+   */
+  commit() {
+    this.kin.rebuild();
+    this.app.applyKinematics();
+    this.render();
+  }
+
   // ---- pages -------------------------------------------------------------
 
   layoutPage() {
@@ -122,9 +135,9 @@ export class MachinePanel extends Panel {
           app.state.machine.mode, (v) => { app.setMachine({ mode: v }); this.render(); },
           { title: 'In full-machine view every casting moves the way the real machine does.' }),
       ]),
-      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign, or start empty and assemble your own bodies — the simulation follows whatever the chain says.'),
+      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign, or start from a bare base and build the chain yourself — the simulation follows whatever the chain says.'),
       actionRow([
-        { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from an empty base, table and spindle' },
+        { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from a bare base and build the chain yourself' },
       ]),
       actionRow([
         { label: 'Save machine…', onClick: () => app.exportKinematics(), hint: 'The chain, the controller and where every body sits' },
@@ -165,9 +178,10 @@ export class MachinePanel extends Panel {
           el('div.list-title', {}, node.name),
           el('div.list-sub', {}, sub.join(' · ')),
         ]),
-        node.id === k.toolNode ? el('span.axis-end', { title: 'The tool hangs here' }, icon('cutter'))
-          : node.id === k.workNode ? el('span.axis-end', { title: 'The part is clamped here' }, icon('cube'))
-            : el('span'),
+        el('span.axis-end', {}, [
+          node.id === k.toolNode ? el('span', { title: 'The tool hangs here' }, icon('cutter')) : null,
+          node.id === k.workNode ? el('span', { title: 'The part is clamped here' }, icon('cube')) : null,
+        ]),
       ]);
       tree.appendChild(item);
       for (const child of children) renderNode(child, depth + 1);
@@ -177,42 +191,52 @@ export class MachinePanel extends Panel {
     if (!k.nodes.length) tree.appendChild(el('div.hint', {}, 'This machine has no axes.'));
 
     const sel = this.selected;
+    // The two ends of the chain are what make it a machine rather than a
+    // pile of joints, so an unfinished one says so plainly instead of
+    // quietly simulating a tool bolted to the part.
+    const ends = k.toolNode === k.workNode
+      ? el('div.inline-warning', {}, `The tool and the part are both on ${k.byId.get(k.toolNode)?.name || 'the base'}. Build the chain down to a spindle and a table, then select each end and press the button under the tree.`)
+      : null;
+
     return section('Axes', [
-      addBar('Add axis…', () => openAxisDialog(this.app, this), { hint: 'Insert a joint into the chain' }),
+      addBar('Add axis…', () => openAxisDialog(this.app, this), { hint: 'Put a new joint into the chain' }),
       tree,
-      el('div.hint', {}, 'Indentation is the chain: everything nested under an axis is carried by it.'),
+      el('div.hint', {}, 'Indentation is the chain: everything nested under an axis rides on it. The cutter marks where the tool hangs, the block where the part is clamped.'),
+      ends,
       actionRow([
-        { label: 'Tool hangs here', disabled: !sel || sel.id === k.toolNode, onClick: () => { k.toolNode = sel.id; this.commit(); } },
-        { label: 'Part clamps here', disabled: !sel || sel.id === k.workNode, onClick: () => { k.workNode = sel.id; this.commit(); } },
+        { label: 'Tool hangs here', disabled: !sel || sel.id === k.toolNode, onClick: () => { k.toolNode = sel.id; this.commit(); }, hint: 'The spindle nose is on this node' },
+        { label: 'Part clamps here', disabled: !sel || sel.id === k.workNode, onClick: () => { k.workNode = sel.id; this.commit(); }, hint: 'The fixture and the stock sit on this node' },
         { label: 'Delete axis', disabled: !sel, variant: 'warn', onClick: () => this.deleteAxis() },
       ]),
     ]);
   }
 
   /**
-   * @param {object} [spec] what the Add window collected; omitted, a
-   *   sensible new joint is made under whatever is selected.
+   * @param {object} [spec] what the Add window collected: a letter, a kind,
+   *   what it is mounted on and what it takes over carrying. Omitted, a
+   *   sensible joint is made under whatever is selected.
    */
   addAxis(spec = null) {
     const k = this.kin;
-    const parent = (spec && spec.parent && k.byId.get(spec.parent)) || this.selected || k.byId.get(k.toolNode);
+    const s = spec || {};
+    const parent = (s.parent && k.byId.get(s.parent)) || this.selected || k.byId.get(k.toolNode) || k.roots()[0] || null;
     const used = new Set(k.axes().map((n) => n.letter));
-    const letter = (spec && spec.letter) || ['A', 'B', 'C', 'X', 'Y', 'Z'].find((L) => !used.has(L)) || null;
+    const letter = 'letter' in s ? s.letter : (['A', 'B', 'C', 'X', 'Y', 'Z'].find((L) => !used.has(L)) || null);
     const node = makeAxis({
-      ...(spec || {}),
+      ...s,
       letter,
-      name: (spec && spec.name) || (letter ? `${letter} axis` : 'New carrier'),
+      name: s.name || (letter ? `${letter} axis` : 'New carrier'),
       parent: parent ? parent.id : null,
-      limits: (spec && spec.limits) || { min: -360, max: 360 },
+      limits: s.limits || { min: -360, max: 360 },
     });
-    // Where the parent carries exactly one thing, the new axis goes between
-    // them — that is what "a W axis between the ram and the spindle" means,
-    // and it is the usual reason to add one. Where the parent forks, as the
-    // base does between the head and the table, there is no unambiguous
-    // link to insert into, so the new axis is simply carried alongside.
-    const siblings = k.children(node.parent);
-    if (siblings.length === 1) siblings[0].parent = node.id;
     k.nodes.push(node);
+    // What the new axis carries is stated, not guessed. Naming the spindle
+    // here is what "an A axis above the spindle" means: the spindle stops
+    // hanging off the base and hangs off A instead, so A swings it.
+    for (const id of [].concat(s.carries || [])) {
+      const child = k.byId.get(id);
+      if (child && child !== node && child.parent === node.parent) child.parent = node.id;
+    }
     this.selectedId = node.id;
     this.commit();
   }
@@ -243,9 +267,15 @@ export class MachinePanel extends Panel {
     const letterOptions = [{ value: '', label: 'none (carrier)' },
       ...Object.keys(AXIS_LETTERS).map((L) => ({ value: L, label: L }))];
 
-    const parentOptions = [{ value: '', label: 'base (nothing)' },
+    const parentOptions = [{ value: '', label: 'nothing — this is a root' },
       ...k.nodes.filter((n) => n !== node && !k.pathTo(n.id).includes(node))
         .map((n) => ({ value: n.id, label: n.name }))];
+
+    // The same two questions the Add window asks, so a wrong answer there
+    // is corrected in the same words rather than by hunting through the
+    // tree for the child that needs re-parenting.
+    const kids = k.children(node.id);
+    const adoptable = k.children(node.parent).filter((n) => n !== node);
 
     const masterOptions = [{ value: '', label: 'not slaved' },
       ...k.axes().filter((n) => n !== node).map((n) => ({ value: n.id, label: `${n.letter} — ${n.name}` }))];
@@ -263,8 +293,24 @@ export class MachinePanel extends Panel {
         }),
         select('Kind', KINDS, node.kind, (v) => set({ kind: v })),
       ]),
-      select('Carried by', parentOptions, node.parent || '', (v) => set({ parent: v || null })),
+      select('Mounted on', parentOptions, node.parent || '', (v) => set({ parent: v || null }),
+        { title: 'What this joint is bolted to, so what carries it around' }),
     ];
+
+    if (kids.length <= 1) {
+      body.push(select('Carries', [
+        { value: '', label: 'nothing yet — the end of this branch' },
+        ...kids.map((n) => ({ value: n.id, label: n.name })),
+        ...adoptable.map((n) => ({ value: n.id, label: n.name })),
+      ], kids.length === 1 ? kids[0].id : '', (v) => {
+        for (const child of kids) child.parent = node.parent;
+        const chosen = v ? k.byId.get(v) : null;
+        if (chosen) chosen.parent = node.id;
+        this.commit();
+      }, { title: 'What rides on this joint, so what it moves' }));
+    } else {
+      body.push(el('div.hint', {}, `Carries ${kids.map((n) => n.name).join(', ')}. To take one off, open it and change what it is mounted on.`));
+    }
 
     if (node.kind !== 'carrier') {
       body.push(row([
@@ -436,7 +482,7 @@ export class MachinePanel extends Panel {
     };
 
     return section(part.name, [
-      select('Carried by', [{ value: '', label: 'not assembled' }, ...carriers], part.nodeId || '', (v) => {
+      select('Mounted on', [{ value: '', label: 'not assembled' }, ...carriers], part.nodeId || '', (v) => {
         app.machineParts.assign(part, v || null);
         app.applyMachineParts();
         this.render();

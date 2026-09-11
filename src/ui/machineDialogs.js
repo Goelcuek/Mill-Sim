@@ -33,16 +33,26 @@ export function openAxisDialog(app, panel) {
   const kin = panel.kin;
   const used = new Set(kin.axes().map((n) => n.letter));
   const free = Object.keys(AXIS_LETTERS).find((L) => !used.has(L)) || 'A';
+  // Where the window opens pointing. Adding a joint to the end of a branch
+  // nearly always means putting it above that end rather than below it — a
+  // rotary goes between the head and the spindle nose, not under the nose —
+  // so a leaf is read as "above this", and everything else as "under this".
+  const at = kin.byId.get((panel.selected && panel.selected.id) || kin.toolNode) || kin.roots()[0] || null;
+  const leaf = at && at.parent && kin.byId.has(at.parent) && !kin.children(at.id).length;
   const spec = {
     letter: free,
     kind: AXIS_LETTERS[free].kind,
     axis: AXIS_LETTERS[free].axis.slice(),
-    parent: (panel.selected && panel.selected.id) || kin.toolNode,
+    parent: at ? (leaf ? at.parent : at.id) : null,
+    carries: leaf ? at.id : '',
     name: `${free} axis`,
     limits: { min: -360, max: 360 },
   };
 
-  const nameField = field('Name', spec.name, { type: 'text', onChange: (v) => { spec.name = v || `${spec.letter} axis`; } });
+  const nameField = field('Name', spec.name, {
+    type: 'text',
+    onChange: (v) => { spec.name = v || `${spec.letter} axis`; drawChain(); },
+  });
   const travel = el('div.dialog-form');
 
   const drawTravel = () => {
@@ -58,7 +68,47 @@ export function openAxisDialog(app, panel) {
     travel.hidden = spec.kind === 'carrier';
   };
 
-  const parentOptions = kin.nodes.map((n) => ({ value: n.id, label: n.name }));
+  // Two questions, both answered here rather than inferred from the shape
+  // of the tree: what holds the new axis, and what it takes over carrying.
+  // Together they say exactly where in the chain it lands — mounting an A
+  // on the base and having it carry the spindle is how the head gets a
+  // swivel above it.
+  const where = el('div.dialog-form');
+  const chain = el('div.chain-preview');
+
+  const label = (n) => `${n.name}${n.letter ? ` — moves with ${n.letter}` : kin.branchOf(n.id) === 'base' && n.kind === 'carrier' ? ' — fixed' : ''}`;
+  const parentOptions = kin.order.map((n) => ({ value: n.id, label: label(n) }));
+
+  const drawChain = () => {
+    const parent = kin.byId.get(spec.parent);
+    const carried = spec.carries ? kin.byId.get(spec.carries) : null;
+    const names = [...(parent ? kin.pathTo(parent.id).map((n) => n.name) : []), spec.name || 'the new axis'];
+    chain.replaceChildren(
+      el('span', {}, names.slice(0, -1).map((n) => `${n} → `).join('')),
+      el('b', {}, names[names.length - 1]),
+      el('span', {}, carried ? ` → ${carried.name}${kin.children(carried.id).length ? ' →…' : ''}` : ''),
+    );
+  };
+
+  const drawWhere = () => {
+    const kids = kin.children(spec.parent);
+    if (!kids.some((n) => n.id === spec.carries)) spec.carries = kids.length === 1 ? kids[0].id : '';
+    where.replaceChildren(
+      row([
+        select('Mounted on', parentOptions, spec.parent, (v) => { spec.parent = v; drawWhere(); },
+          { title: 'What holds the new axis, so what carries it around' }),
+        select('Carries', [
+          { value: '', label: 'nothing — a new branch' },
+          ...kids.map((n) => ({ value: n.id, label: n.name })),
+        ], spec.carries, (v) => { spec.carries = v; drawChain(); },
+          { title: 'What moves onto the new axis, so what it swings or slides' }),
+      ]),
+      chain,
+      el('div.hint', {}, 'Carries takes something off what it is mounted on and puts it on the new axis instead — that is how an A goes above the spindle: mount it on the base, have it carry the spindle. Leave it empty to start a fresh branch.'),
+    );
+    drawChain();
+  };
+
   // Declared before the body so the letter handler can reach it.
   let kindSelect;
 
@@ -79,13 +129,14 @@ export function openAxisDialog(app, panel) {
           nameField.input.value = spec.name;
           kindSelect.input.value = spec.kind;
           drawTravel();
+          drawChain();
         }),
       (kindSelect = select('Kind', KINDS, spec.kind, (v) => { spec.kind = v; drawTravel(); })),
     ]),
     nameField,
-    select('Carried by', parentOptions, spec.parent, (v) => { spec.parent = v; }),
-    el('div.hint', {}, 'Where the carrier holds exactly one thing, the new axis goes between them — that is what “a W axis between the ram and the head” means. Where it forks, as the base does between the head and the table, the new axis is carried alongside instead.'),
     travel,
+    el('div.dialog-section-label', {}, 'Where it goes'),
+    where,
   ]);
 
   const dialog = new Dialog({
@@ -100,6 +151,7 @@ export function openAxisDialog(app, panel) {
     },
   });
   drawTravel();
+  drawWhere();
   dialog.open();
   return dialog;
 }
@@ -137,7 +189,7 @@ export function openBodyDialog(app, panel) {
       },
     }, 'Choose STL…')]),
     fileLabel,
-    select('Carried by', carriers, state.nodeId, (v) => { state.nodeId = v; }),
+    select('Mounted on', carriers, state.nodeId, (v) => { state.nodeId = v; }),
     el('div.hint', {}, 'A body on the base never moves. A body on an axis rides that axis and everything carrying it — put the saddle on Y, the table on X, the head on Z.'),
     row([
       select('Units in the file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
@@ -170,13 +222,13 @@ export function openNewMachineDialog(app) {
   const state = { name: 'New machine' };
   const body = el('div.dialog-form', {}, [
     field('Name', state.name, { type: 'text', onChange: (v) => { state.name = v || 'New machine'; } }),
-    el('div.hint', {}, 'You get a base that does not move, a table to clamp to and a spindle to hang the tool on — and no axes. Add those one at a time on the Axes page, then bring the bodies in on Assembly.'),
+    el('div.hint', {}, 'You get one thing: a base that does not move. Build the chain out from it on the Axes page — each axis says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps, and bring the bodies in on Assembly.'),
     el('div.inline-warning', {}, 'The machine you have now is replaced, and any bodies already imported come off their axes. Save it first if you want to keep it.'),
   ]);
 
   const dialog = new Dialog({
     title: 'New machine',
-    subtitle: 'Start from an empty chain',
+    subtitle: 'A bare base, and nothing else',
     width: 460,
     body,
     confirm: 'Create',
