@@ -20,6 +20,7 @@ import * as THREE from 'three';
 import * as m4 from '../core/mat4.js';
 import { Kinematics } from '../machine/kinematics.js';
 import { buildPreset } from '../machine/presets.js';
+import { TONES, buildCasting } from './castings.js';
 
 export const DEFAULT_MACHINE = {
   name: '3-axis VMC',
@@ -42,10 +43,6 @@ export const DEFAULT_MACHINE = {
 // Darker than the part and the stock on purpose: the machine is scenery,
 // and at full-machine zoom a white casting against a white background
 // tells you nothing about where one part ends and the next begins.
-const CAST = { color: 0xb4bbc6, metalness: 0.15, roughness: 0.85 };
-const STEEL = { color: 0x99a1ae, metalness: 0.55, roughness: 0.5 };
-const TABLE = { color: 0xaab1bd, metalness: 0.7, roughness: 0.3 };
-const ROTARY = { color: 0x8d95a3, metalness: 0.6, roughness: 0.4 };
 
 /** Column-major m4 into a three.js matrix, which uses the same layout. */
 function toThree(out, m) {
@@ -65,16 +62,6 @@ function box(w, d, h, material, x = 0, y = 0, z = 0) {
   return mesh;
 }
 
-/** A cylinder lying along an arbitrary unit axis, centred on the origin. */
-function cylinderAlong(radius, length, axis, material) {
-  const g = new THREE.CylinderGeometry(radius, radius, length, 32, 1);
-  const mesh = new THREE.Mesh(g, material);
-  const from = new THREE.Vector3(0, 1, 0);
-  const to = new THREE.Vector3(axis[0], axis[1], axis[2]).normalize();
-  mesh.quaternion.setFromUnitVectors(from, to);
-  return mesh;
-}
-
 export class MachineView {
   constructor() {
     this.group = new THREE.Group();
@@ -87,13 +74,13 @@ export class MachineView {
     this.toolGroup = new THREE.Group();
     this.toolGroup.name = 'spindle';
 
-    this.materials = {
-      cast: new THREE.MeshStandardMaterial(CAST),
-      steel: new THREE.MeshStandardMaterial(STEEL),
-      table: new THREE.MeshStandardMaterial(TABLE),
-      rotary: new THREE.MeshStandardMaterial(ROTARY),
-      slot: new THREE.LineBasicMaterial({ color: 0x8d94a2 }),
-    };
+    // One material per tone, shared by every casting that uses it.
+    this.materials = {};
+    for (const [name, spec] of Object.entries(TONES)) {
+      this.materials[name] = new THREE.MeshStandardMaterial(spec);
+    }
+    this.materials.slot = new THREE.LineBasicMaterial({ color: 0x8d94a2 });
+    this.tone = (name) => this.materials[name] || this.materials.body;
 
     /** nodeId -> THREE.Group for that joint. */
     this.nodeGroups = new Map();
@@ -166,6 +153,9 @@ export class MachineView {
     this.nodeGroups.clear();
 
     const kin = this.kinematics;
+    // Each machine paints its moving castings its own colour, so a glance
+    // at the viewport says which family you are looking at.
+    this.materials.accent.color.setHex(kin.accent ?? TONES.accent.color);
     for (const node of kin.order) {
       const g = new THREE.Group();
       g.name = node.name || node.id;
@@ -195,6 +185,10 @@ export class MachineView {
   }
 
   /** Proxy geometry for one axis, or the user's model in its place. */
+  /**
+   * Draw one axis: the castings the preset describes, or a generic shape
+   * for an axis the user added themselves.
+   */
   buildNodeParts(node) {
     const g = this.nodeGroups.get(node.id);
     const kin = this.kinematics;
@@ -206,29 +200,29 @@ export class MachineView {
 
     const parts = [];
     const add = (mesh) => { g.add(mesh); parts.push(mesh); return mesh; };
-    const [tw, td] = this.config.tableSize;
 
+    if (Array.isArray(node.proxy) && node.proxy.length) {
+      for (const spec of node.proxy) {
+        for (const mesh of buildCasting(spec, this.tone)) add(mesh);
+      }
+      this.proxies.set(node.id, parts);
+      return;
+    }
+
+    // No description: fall back to something that at least says where the
+    // joint is and which way it moves.
+    const [tw, td] = this.config.tableSize;
     if (node.id === kin.workNode) {
-      // The fixture face: a plate with its top at the node's own origin.
-      const plate = add(box(tw, td, 70, this.materials.table, 0, 0, -70));
-      plate.name = 'table';
-      add(this.tSlots(tw, td));
+      for (const mesh of buildCasting({ part: 'table', size: [tw, td, 70], at: [0, 0, -70], slots: 5 }, this.tone)) add(mesh);
     } else if (node.id === kin.toolNode) {
-      // The head hangs above the gauge line; how far is set by the
-      // assembly currently loaded, so the castings never swallow the tool.
-      // Centred on the spindle axis so the head reads as a head however it
-      // is tilted, with a short nose bridging down to the gauge line.
-      this.headCasting = add(box(210, 210, 300, this.materials.cast, 0, 0, 0));
-      this.headSlide = add(box(150, 150, 60, this.materials.steel, 0, 0, 0));
-      this.applyAssemblyLength();
+      // The spindle node's own origin is the gauge line, so the cartridge
+      // is drawn upwards from there. It used to be pushed up by the length
+      // of the tool as well, which left the head floating a whole assembly
+      // above the tool it was supposed to be holding.
+      for (const mesh of buildCasting({ part: 'spindle', size: [80, 240], at: [0, 0, 0] }, this.tone)) add(mesh);
     } else if (node.kind === 'rotary') {
-      // A disc about the axis, with a cradle so which way it turns is
-      // legible even before the user hangs a real casting on it.
       const r = Math.max(Math.min(tw, td) * 0.22, 50);
-      const face = add(cylinderAlong(r, r * 0.4, node.axis, this.materials.rotary));
-      face.name = `${node.letter || ''} rotary`;
-      const arm = add(cylinderAlong(r * 1.15, r * 0.16, node.axis, this.materials.cast));
-      arm.position.set(-node.axis[0] * r * 0.34, -node.axis[1] * r * 0.34, -node.axis[2] * r * 0.34);
+      for (const mesh of buildCasting({ part: 'rotary', size: [r, r * 0.32], axis: node.axis, slots: 0 }, this.tone)) add(mesh);
     } else if (node.kind === 'linear') {
       // A pair of ways along the direction of travel: long, thin and
       // clearly pointing the way the axis moves.
@@ -236,34 +230,20 @@ export class MachineView {
       const gap = Math.max(Math.min(tw, td) * 0.34, 90);
       const a = node.axis;
       const along = Math.abs(a[0]) > 0.5 ? 0 : Math.abs(a[1]) > 0.5 ? 1 : 2;
-      // Rails run along the axis and are spaced across the flattest of the
-      // other two directions, which is what a real slideway looks like.
       const across = along === 2 ? 0 : 1;
       for (const sign of [-1, 1]) {
         const dim = [40, 40, 40];
         dim[along] = len;
-        const rail = add(box(dim[0], dim[1], dim[2], this.materials.steel));
+        const rail = add(box(dim[0], dim[1], dim[2], this.tone('slide')));
         rail.position.set(0, 0, -20);
         rail.position.setComponent(across, (sign * gap) / 2);
         rail.name = `${node.letter || ''} way`;
       }
     } else {
-      // A plain carrier: the base, or a bracket the user will replace.
-      add(box(tw * 0.8, td * 1.1, 180, this.materials.cast, 0, 0, -430));
+      for (const mesh of buildCasting({ part: 'box', size: [tw * 0.7, td * 0.9, 160], at: [0, 0, -420], tone: 'base' }, this.tone)) add(mesh);
     }
-    this.proxies.set(node.id, parts);
-  }
 
-  tSlots(tw, td) {
-    const slots = 5;
-    const pts = [];
-    for (let i = 0; i < slots; i++) {
-      const y = -td / 2 + (td * (i + 0.5)) / slots;
-      pts.push(new THREE.Vector3(-tw / 2, y, 0.4), new THREE.Vector3(tw / 2, y, 0.4));
-    }
-    const lines = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), this.materials.slot);
-    lines.name = 't-slots';
-    return lines;
+    this.proxies.set(node.id, parts);
   }
 
   disposeProxies() {
@@ -274,8 +254,6 @@ export class MachineView {
       }
     }
     this.proxies.clear();
-    this.headCasting = null;
-    this.headSlide = null;
   }
 
   buildLimitBox() {
@@ -297,19 +275,20 @@ export class MachineView {
   setLimitsVisible(v) { if (this.limitBox) this.limitBox.visible = v; }
 
   /**
-   * Tell the head how far the tool tip sits below the spindle gauge line,
-   * so the castings never swallow the tool or float above the holder.
+   * How far the tool tip sits below the spindle gauge line.
+   *
+   * The castings do not move with it — the spindle node's frame *is* the
+   * gauge line, so they are drawn upwards from zero and stay put. What this
+   * changes is the inverse-kinematics target: a longer tool means the Z
+   * axis has to stand higher to put the tip in the same place. The head
+   * used to be shifted up by this as well, which left it floating a whole
+   * assembly above the tool it was meant to be holding.
    */
   setAssemblyLength(length) {
-    this.assemblyLength = Math.max(length || 0, 40);
-    this.applyAssemblyLength();
-  }
-
-  applyAssemblyLength() {
-    // Both sit above the gauge line, which is `assemblyLength` above the
-    // tool tip the rig was posed for.
-    if (this.headSlide) this.headSlide.position.z = this.assemblyLength + 30;
-    if (this.headCasting) this.headCasting.position.z = this.assemblyLength + 210;
+    const next = Math.max(length || 0, 40);
+    if (next === this.assemblyLength) return;
+    this.assemblyLength = next;
+    this.update(this.lastPose);
   }
 
   // ---- posing ------------------------------------------------------------

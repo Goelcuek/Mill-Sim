@@ -80,12 +80,12 @@ export class Viewer {
     this.renderer.domElement.style.display = 'block';
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 0.92;
     container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
     this.scene.background = null;
-    this.scene.fog = new THREE.Fog(0xe9ebf0, 2200, 5200);
+    this.scene.fog = new THREE.Fog(0xdfe3ea, 2200, 5200);
 
     this.camera = new THREE.PerspectiveCamera(42, 1, 1, 8000);
     this.camera.position.set(240, -300, 220);
@@ -97,6 +97,9 @@ export class Viewer {
     this.controls.enableDamping = false;
     this.controls.maxDistance = 4000;
     this.controls.minDistance = 5;
+    // Orbiting is the one thing that changes the picture without anything
+    // in the app changing, so it asks for the redraw itself.
+    this.controls.addEventListener('change', () => this.invalidate());
 
     this.buildEnvironment();
     this.buildLights();
@@ -115,24 +118,30 @@ export class Viewer {
   buildEnvironment() {
     this.environment = makeStudioEnvironment(this.renderer);
     this.scene.environment = this.environment;
-    this.scene.environmentIntensity = 1.0;
+    this.scene.environmentIntensity = 0.45;
   }
 
   buildLights() {
-    // The environment map carries most of the ambient now, so the lights
-    // are here for shape and highlights rather than raw brightness.
-    const hemi = new THREE.HemisphereLight(0xffffff, 0xc6cbd6, 0.9);
+    // The environment map carries most of the ambient, so the lights are
+    // here for shape and highlights rather than raw brightness.
+    //
+    // This is deliberately dimmer than it was. With a bright environment,
+    // a strong key and filmic tone mapping, every mid-grey facing the
+    // camera clipped to white — a painted machine casting came out the same
+    // colour as the background behind it, which is no colour at all. Lit
+    // this way a material renders roughly as the colour it was given.
+    const hemi = new THREE.HemisphereLight(0xffffff, 0xb9c0cc, 0.55);
     this.scene.add(hemi);
 
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
+    const key = new THREE.DirectionalLight(0xffffff, 1.05);
     key.position.set(300, -420, 620);
     this.scene.add(key);
 
-    const fill = new THREE.DirectionalLight(0xdfe8f5, 0.7);
+    const fill = new THREE.DirectionalLight(0xdfe8f5, 0.45);
     fill.position.set(-420, 260, 240);
     this.scene.add(fill);
 
-    const rim = new THREE.DirectionalLight(0xfff0d8, 0.45);
+    const rim = new THREE.DirectionalLight(0xfff0d8, 0.32);
     rim.position.set(120, 520, -180);
     this.scene.add(rim);
 
@@ -156,6 +165,42 @@ export class Viewer {
     grid.material.opacity = 0.6;
     this.grid = grid;
     return grid;
+  }
+
+  /**
+   * Paint the backdrop.
+   *
+   * The canvas is transparent and the backdrop is CSS, which keeps a
+   * gradient to one line instead of a skybox. Two things have to follow it:
+   * the distance fog, which otherwise fades the far end of a dark scene
+   * into a pale haze, and the grid, which is drawn in dark lines that
+   * disappear the moment the ground behind them goes dark.
+   *
+   * @param {{css:string, haze:number, dark:boolean}} spec
+   */
+  setBackground(spec) {
+    if (!spec) return;
+    this.background = spec;
+    this.container.style.background = spec.css;
+    if (this.scene.fog) this.scene.fog.color.setHex(spec.haze);
+    if (this.grid) {
+      // Light lines on a dark ground, dark lines on a light one.
+      const major = spec.dark ? 0xf2f5fa : 0xa8b0be;
+      const minor = spec.dark ? 0x9aa3b2 : 0xd2d7e0;
+      const g = this.grid.geometry.getAttribute('color');
+      if (g) {
+        const a = new THREE.Color(major);
+        const bb = new THREE.Color(minor);
+        // GridHelper colours the first four vertices with the centre lines.
+        for (let i = 0; i < g.count; i++) {
+          const c = i < 4 ? a : bb;
+          g.setXYZ(i, c.r, c.g, c.b);
+        }
+        g.needsUpdate = true;
+      }
+      this.grid.material.opacity = spec.dark ? 0.32 : 0.6;
+    }
+    this.invalidate();
   }
 
   makeAxes() {
@@ -196,6 +241,17 @@ export class Viewer {
     this.invalidate();
   }
 
+  /**
+   * The frame loop draws on demand.
+   *
+   * A machining simulator is static most of the time — the program is not
+   * running, nobody is dragging the view, and the picture on screen is the
+   * same picture it was a second ago. Redrawing it sixty times a second
+   * anyway costs a whole core, which a desktop absorbs and a laptop turns
+   * into fan noise and a hot palm rest. So the renderer runs only when
+   * something has said it needs to: `invalidate()` from any change, the
+   * orbit controls while they are moving, or the simulator while it cuts.
+   */
   start() {
     if (this.running) return;
     this.running = true;
@@ -203,9 +259,12 @@ export class Viewer {
       if (!this.running) return;
       this.frameHandle = requestAnimationFrame(loop);
       const dt = this.clock.getDelta();
-      for (const fn of this.callbacks) fn(dt);
-      this.controls.update();
+      for (const fn of this.callbacks) fn(dt, this.needsRender);
+      if (this.controls.enableDamping && this.controls.update()) this.needsRender = true;
+      if (!this.needsRender) return;
+      this.needsRender = false;
       this.renderer.render(this.scene, this.camera);
+      this.frames = (this.frames || 0) + 1;
     };
     loop();
   }
@@ -254,7 +313,7 @@ export class Viewer {
     // The canvas is transparent so the CSS backdrop shows through; paint
     // that backdrop in before exporting or the PNG comes out with a hole.
     const prev = this.scene.background;
-    this.scene.background = new THREE.Color(0xe9ebf0);
+    this.scene.background = new THREE.Color((this.background && this.background.haze) || 0xdfe3ea);
     this.renderer.render(this.scene, this.camera);
     const url = this.renderer.domElement.toDataURL(type);
     this.scene.background = prev;

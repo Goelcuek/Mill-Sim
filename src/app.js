@@ -33,6 +33,7 @@ import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
+import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
 import { fmt, fmtDuration, clamp } from './core/util.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
@@ -60,7 +61,8 @@ export class App {
       display: {
         grid: true, axes: true, stock: true, tool: true, holder: true,
         toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: true,
-        sectionPct: 100, stockColor: '#8e97a6', toolColors: true, showLimits: false,
+        sectionPct: 100, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
+        background: DEFAULT_BACKGROUND, backgroundCustom: '#8b93a3',
       },
       program: null,
       source: '',
@@ -89,7 +91,7 @@ export class App {
     this.refreshSlots();
     this.applyDisplay();
 
-    this.viewer.onFrame((dt) => this.frame(dt));
+    this.viewer.onFrame((dt, redrawing) => this.frame(dt, redrawing));
     this.viewer.start();
     this.bindKeys();
 
@@ -433,6 +435,7 @@ export class App {
 
   applyDisplay() {
     const d = this.state.display;
+    this.viewer.setBackground(resolveBackground(d.background, d.backgroundCustom));
     this.viewer.setGridVisible(d.grid);
     this.viewer.setAxesVisible(d.axes);
     this.stockView.setVisible(d.stock);
@@ -682,7 +685,20 @@ export class App {
 
   // ---- frame -------------------------------------------------------------
 
-  frame(dt) {
+  /**
+   * One tick of the loop.
+   *
+   * @param {number} dt seconds since the last tick
+   * @param {boolean} redrawing whether the viewer is about to draw anyway
+   *
+   * Nothing here runs when the program is paused and nothing has changed.
+   * Posing the machine means solving the chain and an inverse-kinematics
+   * solve on top; rewriting the readout means rebuilding a piece of the
+   * document. Doing either sixty times a second to produce the picture
+   * that is already on screen is how an idle simulator ends up holding a
+   * core at full tilt.
+   */
+  frame(dt, redrawing) {
     const sim = this.simulator;
     let worked = false;
 
@@ -712,12 +728,16 @@ export class App {
     }
 
     if (worked) {
+      // The tool has moved, so the picture is stale whatever else happened.
+      this.viewer.invalidate();
       this.showAssembly(sim.activeSlot);
-      if (this.stockView.sync()) this.viewer.invalidate();
+      this.stockView.sync();
       this.updateTransport();
       this._resultTick = (this._resultTick || 0) + 1;
       if (this._resultTick % 20 === 0) this.refreshResults();
     }
+
+    if (!worked && !redrawing) return;
 
     if (sim.activeSlot) this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
@@ -755,21 +775,46 @@ export class App {
     if (this.panels && this.activeTab === 'program' && mv) this.panels.program.setActiveLine(mv.line);
   }
 
+  /**
+   * The readout over the viewport.
+   *
+   * Its nodes are built once and only their text is rewritten. Setting
+   * innerHTML would reparse and rebuild this markup on every frame of a
+   * run, which is a surprising amount of work to display six numbers.
+   */
+  buildHud() {
+    const cell = (cls, text) => el(cls, {}, text);
+    this.hudFields = {};
+    const val = (key) => (this.hudFields[key] = el('b'));
+    const dim = (key) => (this.hudFields[key] = el('span'));
+
+    clear(this.hud);
+    this.hud.append(
+      el('div.hud-row', {}, [
+        cell('span', 'X'), val('x'), cell('span', 'Y'), val('y'), cell('span', 'Z'), val('z'),
+      ]),
+      el('div.hud-row.dim', {}, [dim('tool'), dim('toolName'), dim('feed'), dim('rpm')]),
+      el('div.hud-row.dim', {}, [cell('span', 'removed'), val('removed')]),
+    );
+  }
+
   updateHud() {
     const sim = this.simulator;
     const mv = this.state.program && this.state.program.moves[sim.moveIndex];
     const slot = sim.activeSlot;
     const errors = sim.collisions.filter((c) => c.severity === 'error');
 
-    this.hud.innerHTML = `
-      <div class="hud-row"><span>X</span><b>${fmt(sim.pos[0], 3)}</b><span>Y</span><b>${fmt(sim.pos[1], 3)}</b><span>Z</span><b>${fmt(sim.pos[2], 3)}</b></div>
-      <div class="hud-row dim">
-        <span>T${sim.currentTool || '–'}</span>
-        <span>${slot ? slot.built.tool.def.name : 'no tool'}</span>
-        <span>${mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${fmt(mv.feed, 0)}`) : ''}</span>
-        <span>${mv && mv.rpm ? `S${mv.rpm}` : ''}</span>
-      </div>
-      <div class="hud-row dim"><span>removed</span><b>${fmt(sim.removedVolume / 1000, 2)} cm³</b></div>`;
+    if (!this.hudFields) this.buildHud();
+    const f = this.hudFields;
+    const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+    set(f.x, fmt(sim.pos[0], 3));
+    set(f.y, fmt(sim.pos[1], 3));
+    set(f.z, fmt(sim.pos[2], 3));
+    set(f.tool, `T${sim.currentTool || '–'}`);
+    set(f.toolName, slot ? slot.built.tool.def.name : 'no tool');
+    set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${fmt(mv.feed, 0)}`) : '');
+    set(f.rpm, mv && mv.rpm ? `S${mv.rpm}` : '');
+    set(f.removed, `${fmt(sim.removedVolume / 1000, 2)} cm³`);
 
     this.toolView.setAlert(errors.length > 0 && this.state.playing && errors[errors.length - 1].moveIndex >= sim.moveIndex - 2);
 

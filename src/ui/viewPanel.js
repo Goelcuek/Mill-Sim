@@ -7,6 +7,7 @@
 
 import { el, select, checkbox, row, section, clear } from './dom.js';
 import { Panel, actionRow } from './panel.js';
+import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
 import { fmt } from '../core/util.js';
 
 export class ViewPanel extends Panel {
@@ -66,6 +67,31 @@ export class ViewPanel extends Panel {
         row([t('Rapid moves', 'rapids'), t('Work origins', 'origins')]),
         row([t('Grid', 'grid'), t('Axes', 'axes')]),
         row([t('Travel envelope', 'showLimits')]),
+      ]),
+      section('Background', [
+        el('div.hint', {}, 'A light part on a light ground has no silhouette, and a machined face reads by its silhouette first. Pick whatever gives the part an edge.'),
+        el('div.swatch-grid', {}, Object.entries(BACKGROUNDS).map(([key, bg]) => el(`button.swatch-tile${d.background === key ? '.active' : ''}`, {
+          type: 'button',
+          title: bg.label,
+          onclick: () => { app.setDisplay({ background: key }); this.render(); },
+        }, [
+          el('span.swatch-chip', { style: { background: bg.css } }),
+          el('span.swatch-name', {}, bg.label),
+        ]))),
+        row([
+          el('label.field', {}, [
+            el('span.field-label', {}, 'Custom'),
+            el('input', {
+              type: 'color',
+              value: d.backgroundCustom,
+              oninput: (e) => app.setDisplay({ background: 'custom', backgroundCustom: e.target.value }),
+            }),
+          ]),
+          checkbox('Use the custom colour', d.background === 'custom', (v) => {
+            app.setDisplay({ background: v ? 'custom' : DEFAULT_BACKGROUND });
+            this.render();
+          }),
+        ]),
       ]),
       section('Colour', [
         row([

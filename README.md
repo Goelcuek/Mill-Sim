@@ -72,6 +72,15 @@ work-plane and tool-centre-point codes are interpreted, the tool is carved
 at whatever angle the machine puts it, and the rig in the viewport moves the
 way the real machine does.
 
+Until you import castings, each preset draws itself: a plinth with a chip
+skirt, a column with ways down its front face, a T-slotted table on a
+saddle, telescoping way covers, a trunnion with two cheeks and a cradle
+between them, a fork head with its tilt bearings. They are coloured by what
+a part *does* — everything that slides one colour, everything that rotates
+another, the spindle bright because it is the bit you watch — and each
+machine family paints its moving castings its own colour. A machine you
+cannot read is a machine you cannot check a program against.
+
 **Models in and out.** Import STL fixtures, clamps and reference parts,
 place them with a gizmo or by typing coordinates, and export the machined
 part as STL or OBJ when the run finishes.
@@ -100,6 +109,20 @@ collapse the page row and give the viewport the space back.
 | **Program** | G-code · Summary |
 | **Results** | Findings · Compare · Export |
 | **View** | Camera · Show · Inspect |
+
+The viewport draws **on demand**. A machining simulator is static most of
+the time — the program is not running, nobody is dragging the view, and the
+picture is the same one it was a second ago. Redrawing it sixty times a
+second anyway costs a whole core, which a desktop absorbs and a laptop
+turns into fan noise. So the renderer runs when something says it needs to:
+a change anywhere in the app, the orbit controls while they move, or the
+simulator while it cuts. Idle is zero frames a second.
+
+**Background** is a setting, on View › Show. A pale part on a pale ground
+has no silhouette, and a machined face reads by its silhouette before
+anything else, so the default puts a mid grey-blue behind the work and
+there is a dark ground for inspecting a bright finish, a blueprint blue, a
+paper white for screenshots, and a colour picker.
 
 Anything that has to be created from nothing is behind an **Add** button at
 the top of the page that lists it, and Add always opens a window: a cutter,
@@ -412,6 +435,8 @@ src/
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
     machineView.js    the chain-driven rig: one group per axis
+    castings.js       proxy machine parts, and the palette they use
+    backgrounds.js    viewport backdrops
     modelsView.js     imported models and the transform gizmo
     pickController.js raycasting and snapping for click-to-place
     originView.js     work-origin markers

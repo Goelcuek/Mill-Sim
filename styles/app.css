@@ -334,8 +334,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
   position: relative;
   flex: 1;
   min-height: 0;
-  background:
-    radial-gradient(120% 90% at 50% 8%, #ffffff 0%, #eef0f5 46%, #dfe3ea 100%);
+  /* Painted by Viewer.setBackground; this is only what shows before the
+     first frame. */
+  background: radial-gradient(120% 95% at 50% 4%, #fdfdff 0%, #dfe4ee 45%, #b9c1d1 100%);
 }
 .viewport canvas { display: block; }
 
@@ -968,3 +969,24 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .panel-program .toolbar .field { flex: 1 1 130px; min-width: 0; }
 .panel-program .toolbar .field select { min-width: 0; }
 .panel-program .toolbar .btn { flex: 0 0 auto; }
+
+/* ── background picker ───────────────────────────────────────────────── */
+
+.swatch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.swatch-tile {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 4px 4px 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: stretch;
+}
+.swatch-tile:hover { border-color: var(--line-strong); }
+.swatch-tile.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.swatch-chip { display: block; height: 34px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, 0.08); }
+.swatch-name { font-size: 10.5px; color: var(--text-3); text-align: center; }
+.swatch-tile.active .swatch-name { color: var(--accent-press); font-weight: 600; }

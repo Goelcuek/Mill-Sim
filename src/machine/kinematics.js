@@ -44,6 +44,7 @@ export const AXIS_LETTERS = {
  * @property {{min:number, max:number}} limits
  * @property {boolean} invert          flip the commanded sign
  * @property {string[]} modelIds       STL models rigidly attached to this node
+ * @property {object[]|null} proxy      castings to draw, as plain data
  * @property {string|null} slaveTo      follows another axis's value
  * @property {number} slaveRatio
  */
@@ -64,6 +65,12 @@ export function makeAxis(patch = {}) {
     modelIds: patch.modelIds ? [...patch.modelIds] : [],
     slaveTo: patch.slaveTo || null,
     slaveRatio: patch.slaveRatio ?? 1,
+    /**
+     * Castings to draw for this joint, as plain data so the presets can
+     * describe their own shape without this file knowing about three.js.
+     * An axis the user adds has none and gets a generic shape instead.
+     */
+    proxy: patch.proxy ? patch.proxy.map((s) => ({ ...s })) : null,
     notes: patch.notes || '',
   };
 }
@@ -87,6 +94,8 @@ export class Kinematics {
     this.spindleOffset = def.spindleOffset || [0, 0, 0];
     /** Fixture face in the work node's frame; the stock sits on it. */
     this.tableOffset = def.tableOffset || [0, 0, 0];
+    /** The colour this machine's moving castings are painted. */
+    this.accent = def.accent ?? null;
     this.scratch = { a: m4.create(), b: m4.create() };
     this._refGauge = null;
     this._refTip = [0, 0, 0];
@@ -469,6 +478,7 @@ export class Kinematics {
       workNode: this.workNode,
       spindleOffset: this.spindleOffset,
       tableOffset: this.tableOffset,
+      accent: this.accent,
     };
   }
 }
