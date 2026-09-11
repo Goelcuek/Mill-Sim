@@ -942,6 +942,16 @@ export class App {
   }
 
   applyExampleSetup(setup) {
+    // The machine comes first: changing the chain reloads the program, and
+    // the stock has to be the right size before that runs.
+    if (setup.machine) {
+      Object.assign(this.state.stock, setup.stock || {});
+      if (setup.stock) this.rebuildStock();
+      this.setMachine(setup.machine);
+      this.panels.setup.refresh();
+      this.panels.machine.refresh();
+      return;
+    }
     if (setup.stock) {
       Object.assign(this.state.stock, setup.stock);
       this.rebuildStock();

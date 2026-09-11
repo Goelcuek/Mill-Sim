@@ -341,7 +341,14 @@ export class MachineView {
       return { tip: p.tip.slice(), dir: p.dir.slice() };
     }
 
-    this.workGroup.position.set(...kin.tableOffset);
+    // Where the part's zero sits on the table for the tool now loaded. It
+    // is the tool tip at machine home, which is the point the programmed
+    // numbers are measured from, so it moves with the gauge length — hold
+    // the Z axis still and fit a longer tool and the tip goes lower, so the
+    // zero those numbers refer to is lower too.
+    const ref = kin.partOrigin(this.assemblyLength);
+    const off = kin.tableOffset;
+    this.workGroup.position.set(off[0] + ref[0], off[1] + ref[1], off[2] + ref[2]);
     this.toolGroup.position.set(...kin.spindleOffset);
 
     // Drive the rig from the tool tip, not from the programmed word. Once
@@ -350,8 +357,7 @@ export class MachineView {
     // Z axis has to stand a whole gauge length higher. Solving for the
     // axis positions is what keeps the castings around the tool instead of
     // through it, and it is exact.
-    const off = kin.tableOffset;
-    const wanted = [p.tip[0] + off[0], p.tip[1] + off[1], p.tip[2] + off[2]];
+    const wanted = [p.tip[0] + ref[0], p.tip[1] + ref[1], p.tip[2] + ref[2]];
     const rot = p.rot || {};
     const lin = kin.linearsForTip(wanted, rot, this.assemblyLength);
     kin.solve(lin ? { ...rot, ...lin } : (p.values || {}));

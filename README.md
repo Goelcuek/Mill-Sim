@@ -64,6 +64,14 @@ corner, the ramp from a helical entry.
 holder and the spindle nose are all part of the crash model, along with
 imported fixtures, the table surface and the travel limits.
 
+**Five-axis machines.** A machine is a tree of joints rather than a fixed
+layout, so head-head, head-table and table-table are the same code with the
+rotaries in different places. Start from a preset, move a pivot, slave one
+axis to another, and hang your own STL castings on each axis. The tilted
+work-plane and tool-centre-point codes are interpreted, the tool is carved
+at whatever angle the machine puts it, and the rig in the viewport moves the
+way the real machine does.
+
 **Models in and out.** Import STL fixtures, clamps and reference parts,
 place them with a gizmo or by typing coordinates, and export the machined
 part as STL or OBJ when the run finishes.
@@ -72,7 +80,7 @@ part as STL or OBJ when the run finishes.
 
 ## Getting around
 
-An Office-style ribbon: five tabs, each holding a band of grouped controls
+An Office-style ribbon: six tabs, each holding a band of grouped controls
 with the group's name printed underneath. Everything the app can do is
 visible and one click away rather than behind a menu. Double-click a tab, or
 use the chevron on the right, to collapse the band and give the viewport the
@@ -80,7 +88,8 @@ space back.
 
 | Tab | |
 | --- | --- |
-| **Setup** | Stock, the click-to-place tools, which work offset is active, fixtures, and the machine. |
+| **Setup** | Stock, the click-to-place tools, which work offset is active, and fixtures. |
+| **Machine** | The kinematic chain: pick a layout, edit axes, hang castings on them. |
 | **Tools** | Create and edit cutters, holders and assemblies; import and export the library. |
 | **Program** | Open, save, re-parse, load an example, and frame the toolpath. |
 | **Results** | Playback, exports, and the running count of findings. |
@@ -200,6 +209,71 @@ mill), whole program, in Node:
 
 Removed volume agrees to 0.01 cm³ across all four.
 
+### When the tool leans
+
+A leaning tool is a different problem. The swept envelope of an upright
+cutter is just the envelope translated, which is what makes the fast path
+fast; tilt it and that stops being true. So a tilted move is carved by a
+second routine that works from the same lower-envelope table but answers a
+harder question per column.
+
+Along the vertical line through a column, with `u` the height above the tool
+tip's plane, both the distance along the tool axis and the distance from it
+are quadratics in `u`:
+
+```
+s(u)        = k + u·az                     along the axis
+radial²(u)  = A + B·u + C·u²               from the axis,  C = 1 − az²
+```
+
+`C` vanishes when the tool stands upright, which is the upright case falling
+out of the same algebra. The column is inside the cutter where
+`s ≥ LE(radial²)`, and since every cutter here is convex that region is a
+single interval — so the carve brackets where the tool could reach at all,
+finds the deepest penetration by golden-section search, and bisects down to
+the surface the tool leaves.
+
+Two guards matter. The lowest point the whole tilted solid can reach is
+computed once per move, so most columns are rejected on one compare. And a
+tilted tool can sit entirely *below* the surface without having touched it —
+the overhanging side passes under standing material. A heightmap cannot hold
+that undercut, but it must not claim the material was removed either, so a
+column past the tool's upper crossing is left alone.
+
+Tilted moves are stamped rather than swept, at a spacing taken from the
+scallop it leaves (`d²/8r`) and capped so the swing between stamps cannot
+step down a wall. Validated against the analytic shapes: a tilted ball nose
+bottoms out within 3 µm of where the sphere says, at every angle from 0° to
+60°, and a flat end mill leaning 30° leaves an ellipse whose axes match
+`d` and `d/cos 30°` to a tenth of a millimetre.
+
+### Kinematics
+
+A machine is a tree of joints rooted at the base. Two paths lead away from
+it, one ending at the spindle and one at the table, and which path a rotary
+sits on is the entire difference between the three families:
+
+| | |
+| --- | --- |
+| **head-head** | both rotaries on the spindle path — a gantry |
+| **head-table** | one on each — the classic 5-axis conversion of a VMC |
+| **table-table** | both on the table path — a trunnion |
+
+There is no separate code for the three, only different trees. What the
+simulator asks for is the tool expressed in the workpiece's frame,
+`inverse(workChain) · toolChain`, which gives a tip and a direction and
+nothing about how many axes produced them.
+
+Two inverse problems come up. Tool centre point control needs the linear
+axes that put the tip on a given point: with the rotaries fixed the tip
+depends on X/Y/Z through a pure translation chain, so the map is affine, and
+sampling it at the origin and three unit steps recovers it exactly — the
+solve is then one 3×3 system, no iteration. `G53.1` needs the rotaries that
+point the tool along a given direction, which is trigonometric and wound
+differently by every machine; that one is searched, coarsely then by pattern
+search, staying inside the travel throughout so it can report "cannot reach"
+rather than a pose the machine cannot make.
+
 ### Gouging
 
 Import a model as a **reference part** and it becomes the shape the job is
@@ -248,6 +322,10 @@ interpolation.
 **Cycles** `G73` `G81` `G82` `G83` `G84` `G85` `G89` `G80`, with `G98`/`G99`
 return planes, `Q` pecks, `P` dwells and `L` repeats
 
+**Five axis** `G68.2` tilted work plane (`P1` Euler ZXZ, `P2` roll-pitch-yaw),
+`G69` cancel, `G53.1` orient the tool normal to the plane, `G43.4`/`G43.5`
+tool centre point control, and `A`/`B`/`C` words on any move
+
 **Other** `G04` dwell, `G28`/`G30` reference return, `G40`–`G42`,
 `G61`/`G64`, `G93`/`G94`/`G95`
 
@@ -257,9 +335,9 @@ return planes, `Q` pecks, `P` dwells and `L` repeats
 **Syntax** `%` markers, `O` numbers, `N` line numbers, `( )` and `;`
 comments, `/` block delete
 
-Not supported: macro variables and expressions (`#1`, `[ ]`), cutter radius
-compensation as an actual path offset, and rotary axes. Each is reported
-rather than silently ignored.
+Not supported: macro variables and expressions (`#1`, `[ ]`), and cutter
+radius compensation as an actual path offset. Each is reported rather than
+silently ignored.
 
 ---
 
@@ -273,7 +351,18 @@ rather than silently ignored.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
-- **Three axes only.** There is no rotary kinematics.
+- **A tilted tool can pass under standing material.** The heightmap holds
+  one surface per column, so an undercut a leaning cutter creates cannot be
+  drawn. The carver refuses to remove a column the tool passes entirely
+  beneath rather than report material gone that is still there, which is the
+  honest failure of the two.
+- **Non-TCP five-axis programs assume the part zero is at the machine's home
+  tip.** Without `G43.4` the programmed X/Y/Z are axis positions, and turning
+  those into a point on the part needs the work offset and the tool length
+  that the control holds. Mill-Sim ties the two frames together at the
+  machine's home position, where the programmed point and the tool tip
+  coincide by definition. Under `G43.4`/`G43.5` there is nothing to assume:
+  the programmed point is the tip.
 - **Cutter compensation is not applied.** The simulated path is the
   programmed centreline, which is what most posted CAM output already is.
 - **Feed rates are taken from the program**, not from any cutting model.
@@ -287,18 +376,24 @@ rather than silently ignored.
 index.html            page shell, import map, WebGL2 check
 styles/app.css        the whole stylesheet
 src/
-  core/util.js        formatting and small helpers
+  core/
+    util.js           formatting and small helpers
+    mat4.js           4x4 maths, dependency-free so kinematics tests run in Node
   tools/
     envelope.js       lower-envelope tables — the geometric core
     toolDefs.js       parametric cutters
     holderDefs.js     parametric holders, nose to gauge line
     assembly.js       cutter + holder + stickout -> cut/shank/holder envelopes
     library.js        CRUD, localStorage, JSON import/export
+  machine/
+    kinematics.js     the joint tree, forward kinematics and both IK solves
+    presets.js        3-axis VMC, head-head, head-table, table-table
+    parts.js          imported castings, kept apart from the job's fixtures
   gcode/
     lexer.js          tokeniser
     interpreter.js    modal state machine -> flat move list
   sim/
-    stock.js          heightmap, swept carving, tile pyramid, surface picking
+    stock.js          heightmap, swept and tilted carving, tile pyramid
     target.js         reference-part rasterisation and gouge comparison
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
@@ -307,7 +402,7 @@ src/
     stockView.js      GPU-displaced heightmap mesh
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
-    machineView.js    parametric VMC and its kinematics
+    machineView.js    the chain-driven rig: one group per axis
     modelsView.js     imported models and the transform gizmo
     pickController.js raycasting and snapping for click-to-place
     originView.js     work-origin markers
@@ -321,15 +416,15 @@ src/
     icons.js          the stroked icon set
     ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
-examples/             the four example programs
+examples/             the five example programs
 scripts/              static server, smoke test, single-file build
 test/                 unit tests (node --test)
 dist/mill-sim.html    self-contained build, committed so it can just be opened
 vendor/three/         three.js r180, MIT
 ```
 
-Everything under `src/core`, `src/tools`, `src/gcode`, `src/sim` and
-`src/io` is free of three.js, which is why the test suite runs in plain
+Everything under `src/core`, `src/tools`, `src/gcode`, `src/sim`,
+`src/machine/kinematics.js` and `src/io` is free of three.js, which is why the test suite runs in plain
 Node with no browser and no mocks.
 
 ### Rendering the cut
@@ -346,7 +441,7 @@ frame instead of a geometry rebuild.
 ## Testing
 
 ```bash
-npm test           # 67 unit tests: geometry, G-code, simulation, gouging, I/O
+npm test           # 103 unit tests: geometry, G-code, kinematics, cutting, I/O
 npm run smoke      # optional: boots the app in headless Chromium
 ```
 

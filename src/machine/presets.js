@@ -7,6 +7,17 @@
 
 import { Kinematics } from './kinematics.js';
 
+/**
+ * Spindle nose height above the fixture face with every axis at zero.
+ *
+ * This is what decides where the part sits on the table, because Mill-Sim
+ * ties the part's zero to the tool tip at machine home: with a typical
+ * 230 mm assembly the tip parks about 60 mm clear of the table, which is
+ * roughly where a part on parallels lives. Set it too low and the part is
+ * drawn inside the table.
+ */
+const NOSE_AT_HOME = 290;
+
 /** The 3-axis VMC: table carries the work in X and Y, head moves in Z. */
 export function vmc3Axis() {
   return {
@@ -18,7 +29,9 @@ export function vmc3Axis() {
       { id: 'x', name: 'X axis (table)', letter: 'X', parent: 'y', origin: [0, 0, 0], limits: { min: -380, max: 380 }, invert: true },
       { id: 'table', name: 'Table', kind: 'carrier', parent: 'x', origin: [0, 0, 0] },
 
-      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, 0], limits: { min: -120, max: 330 } },
+      // The table face sits 80 below the base, so the nose starts there plus
+      // the standing clearance.
+      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, NOSE_AT_HOME - 80], limits: { min: -120, max: 330 } },
       { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'z', origin: [0, 0, 0] },
     ],
     toolNode: 'spindle',
@@ -42,7 +55,8 @@ export function headHead() {
 
       { id: 'x', name: 'X axis (bridge)', letter: 'X', parent: 'base', origin: [0, 0, 0], limits: { min: -400, max: 400 } },
       { id: 'y', name: 'Y axis (saddle)', letter: 'Y', parent: 'x', origin: [0, 0, 0], limits: { min: -300, max: 300 } },
-      { id: 'z', name: 'Z axis (ram)', letter: 'Z', parent: 'y', origin: [0, 0, 0], limits: { min: -150, max: 350 } },
+      // The fork hangs 240 below the ram, and the table is 80 below the base.
+      { id: 'z', name: 'Z axis (ram)', letter: 'Z', parent: 'y', origin: [0, 0, NOSE_AT_HOME + 240 - 80], limits: { min: -150, max: 350 } },
 
       // C swings the whole fork about the ram, then B tilts inside it. The
       // order matters: with B outermost, C would only spin the tool about
@@ -73,7 +87,8 @@ export function headTable() {
       { id: 'c', name: 'C axis (rotary table)', letter: 'C', parent: 'x', origin: [0, 0, 0], limits: { min: -360, max: 360 } },
       { id: 'table', name: 'Rotary table face', kind: 'carrier', parent: 'c', origin: [0, 0, 0] },
 
-      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, 0], limits: { min: -120, max: 330 } },
+      // The nose hangs 180 below the slide, and the table is 80 below the base.
+      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, NOSE_AT_HOME + 180 - 80], limits: { min: -120, max: 330 } },
       { id: 'b', name: 'B axis (head tilt)', letter: 'B', parent: 'z', origin: [0, 0, -140], limits: { min: -120, max: 120 } },
       { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'b', origin: [0, 0, -40] },
     ],
@@ -102,7 +117,8 @@ export function tableTable() {
       { id: 'c', name: 'C axis (rotary)', letter: 'C', parent: 'a', origin: [0, 0, 0], limits: { min: -360, max: 360 } },
       { id: 'table', name: 'Table face', kind: 'carrier', parent: 'c', origin: [0, 0, 0] },
 
-      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, 0], limits: { min: -150, max: 330 } },
+      // The trunnion face sits 50 below the base.
+      { id: 'z', name: 'Z axis (head)', letter: 'Z', parent: 'base', origin: [0, 0, NOSE_AT_HOME - 50], limits: { min: -150, max: 330 } },
       { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'z', origin: [0, 0, 0] },
     ],
     toolNode: 'spindle',

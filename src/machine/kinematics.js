@@ -285,17 +285,29 @@ export class Kinematics {
    * whole reason non-TCP 5-axis programs look the way they do.
    */
   toolInPart(values, gaugeLength = 0) {
-    if (this._refGauge !== gaugeLength) {
-      this._refGauge = gaugeLength;
-      this._refTip = this.toolInWork({}, gaugeLength).tip;
-    }
-    const ref = this._refTip;
+    const ref = this.partOrigin(gaugeLength);
     const r = this.toolInWork(values, gaugeLength);
     return {
       tip: [r.tip[0] - ref[0], r.tip[1] - ref[1], r.tip[2] - ref[2]],
       axis: r.axis,
       matrix: r.matrix,
     };
+  }
+
+  /**
+   * Where the part's zero sits in the work frame, for a given tool.
+   *
+   * This is the tool tip at machine home, which is the point `toolInPart`
+   * measures from. It moves with the gauge length, and so it should: hold
+   * the Z axis still and fit a longer tool and the tip goes lower, so the
+   * part zero the programmed numbers refer to is lower too.
+   */
+  partOrigin(gaugeLength = 0) {
+    if (this._refGauge !== gaugeLength) {
+      this._refGauge = gaugeLength;
+      this._refTip = this.toolInWork({}, gaugeLength).tip;
+    }
+    return this._refTip;
   }
 
   /** The tool's direction in part coordinates; only the rotaries matter. */

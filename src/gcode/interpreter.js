@@ -455,6 +455,8 @@ export function interpret(text, config = {}) {
     // ---- Non-modal and modal G codes -------------------------------------
     let motionThisBlock = null;
     let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false;
+    /** Set by codes whose X/Y/Z words are data, not a destination. */
+    let axesConsumed = false;
 
     for (const code of g) {
       switch (code) {
@@ -521,6 +523,8 @@ export function interpret(text, config = {}) {
             axis.Z !== undefined ? toMM(axis.Z, st.metric) : 0,
           ];
           const mode = p === 2 ? 2 : 1;
+          // X/Y/Z here are where the plane sits, not somewhere to go.
+          axesConsumed = true;
           st.tilt = tiltedPlaneMatrix(origin, iArc || 0, jArc || 0, kArc || 0, mode);
           // Carry the current point into the new frame so the first block
           // in the plane can leave any axis word out.
@@ -686,6 +690,7 @@ export function interpret(text, config = {}) {
     }
 
     // ---- Motion ----------------------------------------------------------
+    if (axesConsumed) continue;
     const hasAxisWord = axis.X !== undefined || axis.Y !== undefined || axis.Z !== undefined;
     const motion = motionThisBlock !== null ? motionThisBlock : st.motion;
 

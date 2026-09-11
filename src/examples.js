@@ -88,6 +88,30 @@ export const EXAMPLES = [
     },
     "file": "examples/crash-test-deliberately-bad-.nc",
     "lines": 29
+  },
+  {
+    "name": "Five axis: tilted planes and a swarf pass",
+    "description": "G68.2 tilted work planes with G53.1 to swing the head onto each flank, then a continuous swarf pass under G43.4 tool centre point control.",
+    "setup": {
+      "stock": {
+        "size": [
+          120,
+          90,
+          40
+        ],
+        "origin": [
+          -60,
+          -45,
+          -40
+        ],
+        "resolution": 0.25
+      },
+      "machine": {
+        "preset": "headTable"
+      }
+    },
+    "file": "examples/five-axis-tilted-planes-and-swarf.nc",
+    "lines": 101
   }
 ];
 

@@ -151,6 +151,36 @@ test('programming in a tilted plane moves along that plane, not the machine', ()
   near(f[0].to[2], -10, 1e-9, 'ten millimetres down instead');
 });
 
+test('G68.2 sets the plane without moving the machine', () => {
+  const p = run([
+    'G90 G21 G54', 'G0 X-75 Y30 Z30',
+    'G68.2 X0 Y0 Z0 I0 J30 K0 P2',      // X/Y/Z here are the plane origin
+    'G69', 'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  const last = p.moves[p.moves.length - 1];
+  assert.deepEqual(last.to, [-75, 30, 30], 'the tool stayed where it was');
+  assert.equal(p.moves.filter((m) => m.line === 3).length, 0, 'G68.2 emitted no move');
+});
+
+test('the rotaries carry forward, so a later move does not re-swing', () => {
+  const p = run([
+    'G90 G21 G54', 'G0 X0 Y0 Z0',
+    'G1 C90 F500',
+    'G1 X10',
+    'G1 X20',
+    'M30',
+  ]);
+  const f = p.moves.filter((m) => m.kind === 'feed');
+  assert.equal(f[0].rotFrom.C, 0);
+  assert.equal(f[0].rotTo.C, 90);
+  // Everything after starts and ends at 90 — the table is already there.
+  for (const m of f.slice(1)) {
+    assert.equal(m.rotFrom.C, 90, `line ${m.line} starts at the angle it left off`);
+    assert.equal(m.rotTo.C, 90);
+  }
+});
+
 test('G69 puts the machine back in its own frame', () => {
   const p = run([
     'G90 G21 G54', 'G0 X0 Y0 Z0',
@@ -344,6 +374,21 @@ test('a tilted move leaves a sloped floor, and the tool stays on the part', () =
   const lean = rad(30);
   near(s.heightAt(20 + r * Math.sin(lean), 0), -2 - r * (1 - Math.cos(lean)), 0.1,
     'and under the ball at the end, after 30 degrees of lean');
+});
+
+test('a rotary past its stop is reported as a travel limit', () => {
+  const machine = buildPreset('tableTable');   // A is limited to -120..+30
+  const sim = simulate([
+    'G90 G21 G17 G54', 'T1 M6', 'S6000 M3',
+    'G0 X0 Y0 Z5',
+    'G1 A80 F500',
+    'G0 Z20', 'M30',
+  ], { stock: blank(0.5), kinematics: machine, gauge: 160 });
+
+  const lim = sim.collisions.filter((c) => c.type === 'limit');
+  assert.equal(lim.length, 1, 'one limit reported');
+  assert.match(lim[0].message, /A axis travel limit/);
+  assert.ok(lim[0].depth > 49 && lim[0].depth < 51, `overshoot ${lim[0].depth}`);
 });
 
 test('travel limits are reported against the machine, not the program', () => {

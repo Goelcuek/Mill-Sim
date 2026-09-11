@@ -582,6 +582,26 @@ export class Simulator {
     }
     }
 
+    // The rotaries have travels of their own, and a program that asks for
+    // C400 or a trunnion past its stop is just as stopped as one that runs
+    // the table off its ways. Reading them straight off the move costs
+    // nothing, so it is checked on every chunk.
+    if (this.fiveAxis) {
+      const rot = this.rotaryAt(mv, u1);
+      for (const n of this.kinematics.rotaries()) {
+        const v = rot[n.letter];
+        if (v === undefined) continue;
+        const over = v < n.limits.min ? n.limits.min : v > n.limits.max ? n.limits.max : null;
+        if (over === null) continue;
+        this.report('limit', {
+          line: mv.line,
+          message: `${n.letter} axis travel limit exceeded: ${v.toFixed(2)}° vs ${over.toFixed(2)}°.`,
+          position: poseB.tip.slice(),
+          depth: Math.abs(v - over),
+        });
+      }
+    }
+
     return removed > 0;
   }
 
