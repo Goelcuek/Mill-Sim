@@ -72,12 +72,33 @@ work-plane and tool-centre-point codes are interpreted, the tool is carved
 at whatever angle the machine puts it, and the rig in the viewport moves the
 way the real machine does.
 
+**Assembling a machine.** Start from a preset, or from **New machine…** —
+a base that does not move, a table to clamp to, a spindle to hang the tool
+on, and no axes. Add the axes on the Axes page, then bring the machine in
+as STL bodies on the Assembly page and say which axis carries each one. A
+body on the base never moves; a body on X rides the X slide; an axis can
+carry as many bodies as it has castings. **Mate by two points** does the
+placing: click a point on the body, click where that point belongs, and it
+moves so the two coincide — joints snap as targets, so a casting drops
+straight onto its own pivot. The move is measured in the frame of the axis
+that carries it, so a saddle nudged 20 mm has moved 20 mm along its own
+slide whatever the rest of the machine is doing.
+
+**The controller** is part of the machine too. Controls do not agree on the
+modal state they power up in, and a program posted for one machine read by
+another is the classic way to crash — the second one starts in inches, or
+reads I/J as absolute, or comes up in G18. The Controller page holds those
+defaults and changing one re-reads the program.
+
 Your own machine goes in as JSON: **Machine › Layout › Load machine…**.
 `examples/machines/fidia-kr199.json` is a worked example — a bridge machine
 with a fixed table and an A/C birotary head, X Y Z C A all in series — to
 copy and edit. The chain is the part that has to be right; travels and
 pivot distances are numbers off your machine. **Save machine…** writes the
-current chain back out.
+chain, the controller settings and where every body sits. It does not carry
+the geometry — a set of castings is tens of megabytes and has no business
+inside a text file — so loading one restores the arrangement and asks for
+the STLs again.
 
 Until you import castings, each preset draws itself: a plinth with a chip
 skirt, a column with ways down its front face, a T-slotted table on a
@@ -111,7 +132,7 @@ collapse the page row and give the viewport the space back.
 | Tab | Pages |
 | --- | --- |
 | **Setup** | Stock · Work offsets · Fixtures |
-| **Machine** | Layout · Axes · Castings · Travels |
+| **Machine** | Layout · Axes · Assembly · Controller · Travels |
 | **Tools** | Tool table · Cutters · Holders · Library |
 | **Program** | G-code · Summary |
 | **Results** | Findings · Compare · Export |
@@ -427,7 +448,7 @@ src/
   machine/
     kinematics.js     the joint tree, forward kinematics and both IK solves
     presets.js        3-axis VMC, head-head, head-table, table-table
-    parts.js          imported castings, kept apart from the job's fixtures
+    parts.js          the machine's own bodies and where each one sits
   gcode/
     lexer.js          tokeniser
     interpreter.js    modal state machine -> flat move list

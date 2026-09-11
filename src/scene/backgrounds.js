@@ -7,9 +7,9 @@
 // ground for inspecting a bright finish, a flat one for screenshots that
 // have to sit on a page.
 //
-// Each entry carries the CSS for the backdrop, a single `haze` colour for
-// the distance fog and screenshots to match it, and whether the grid should
-// switch to light lines.
+// Each entry carries the CSS for the backdrop, a flat `haze` colour for
+// screenshots to be painted on (a PNG cannot carry the page's gradient),
+// and whether the grid should switch to light lines.
 
 export const BACKGROUNDS = {
   studio: {

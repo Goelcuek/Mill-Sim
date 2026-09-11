@@ -8,7 +8,7 @@
 import { el, field, select, checkbox, button, row, section, clear } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
-import { openAxisDialog, openCastingDialog } from './machineDialogs.js';
+import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineDialogs.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
 import { fmt } from '../core/util.js';
@@ -44,7 +44,8 @@ export class MachinePanel extends Panel {
     super(app, [
       { id: 'layout', label: 'Layout', icon: 'machine', hint: 'Which machine this is, and how it is drawn', render: MachinePanel.prototype.layoutPage },
       { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
-      { id: 'castings', label: 'Castings', icon: 'import', hint: 'Your own STLs, hung on the axes that carry them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.castingsPage },
+      { id: 'assembly', label: 'Assembly', icon: 'import', hint: 'Import bodies and assemble the machine from them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
+      { id: 'controller', label: 'Controller', icon: 'report', hint: 'Which G-code this machine reads', render: MachinePanel.prototype.controllerPage },
       { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
     ]);
     this.selectedId = null;
@@ -69,8 +70,18 @@ export class MachinePanel extends Panel {
     return [this.treeSection(), sel ? this.axisSection(sel) : null];
   }
 
-  castingsPage() {
-    return [this.partsSection()];
+  assemblyPage() {
+    const body = this.selectedBody;
+    return [this.partsSection(), body ? this.bodySection(body) : null];
+  }
+
+  controllerPage() {
+    return [this.controllerSection()];
+  }
+
+  /** The body the Assembly page is acting on. */
+  get selectedBody() {
+    return (this.bodyId && this.app.machineParts.byId(this.bodyId)) || null;
   }
 
   limitsPage() {
@@ -111,10 +122,13 @@ export class MachinePanel extends Panel {
           app.state.machine.mode, (v) => { app.setMachine({ mode: v }); this.render(); },
           { title: 'In full-machine view every casting moves the way the real machine does.' }),
       ]),
-      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign or hang your own castings on the axes and the simulation follows.'),
+      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign, or start empty and assemble your own bodies — the simulation follows whatever the chain says.'),
       actionRow([
-        { label: 'Save machine…', onClick: () => app.exportKinematics(), hint: 'Write the chain out as JSON' },
-        { label: 'Load machine…', onClick: () => app.importKinematics(), hint: 'Read a chain saved earlier' },
+        { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from an empty base, table and spindle' },
+      ]),
+      actionRow([
+        { label: 'Save machine…', onClick: () => app.exportKinematics(), hint: 'The chain, the controller and where every body sits' },
+        { label: 'Load machine…', onClick: () => app.importKinematics(), hint: 'Read a machine saved earlier' },
       ]),
     ]);
   }
@@ -301,7 +315,7 @@ export class MachinePanel extends Panel {
     return section(`${node.letter ? `${node.letter} — ` : ''}${node.name}`, body);
   }
 
-  // ---- imported castings -------------------------------------------------
+  // ---- assembly ----------------------------------------------------------
 
   /**
    * @param {File[]} files
@@ -327,26 +341,35 @@ export class MachinePanel extends Panel {
 
   partsSection() {
     const app = this.app;
+    const kin = this.kin;
 
     const list = el('div.list');
     if (!app.machineParts.parts.length) {
       list.appendChild(el('div.empty', {}, [
-        el('div.empty-title', {}, 'No castings imported'),
-        el('div.hint', {}, 'Until one is, each axis draws a plain proxy that says where it is and which way it moves. Export each casting about its own joint and leave the origin as exported; that way the pivot numbers stay at zero.'),
+        el('div.empty-title', {}, 'Nothing imported yet'),
+        el('div.hint', {}, 'Bring in the machine as STL bodies — a base, a saddle, a table, a head — then put each one on the axis that carries it. A body on the base never moves; a body on X rides the X slide. Until then each axis draws a plain proxy.'),
       ]));
     }
     for (const part of app.machineParts.parts) {
-      const node = part.nodeId ? this.kin.byId.get(part.nodeId) : null;
-      list.appendChild(el(`div.list-item${node && node.id === this.selectedId ? '.selected' : ''}`, {
-        onclick: () => { if (node) { this.selectedId = node.id; this.setPage('axes'); } },
+      const node = part.nodeId ? kin.byId.get(part.nodeId) : null;
+      const fixed = node && kin.branchOf(node.id) === 'base' && node.kind === 'carrier';
+      const placed = part.position.some((v) => Math.abs(v) > 1e-6) || part.rotation.some((v) => Math.abs(v) > 1e-6);
+      list.appendChild(el(`div.list-item${this.bodyId === part.id ? '.selected' : ''}`, {
+        onclick: () => { this.bodyId = part.id; this.render(); },
       }, [
+        el(`div.swatch${node ? '.on' : ''}`, { style: { background: node ? (fixed ? '#7b8494' : '#0a7cff') : '#d0d4db' } }),
         el('div.list-main', {}, [
           el('div.list-title', {}, part.name),
-          el('div.list-sub', {}, `${node ? node.name : 'not on an axis'} · ${part.triangles.toLocaleString()} tris · ${part.size.map((v) => fmt(v, 0)).join(' × ')} mm`),
+          el('div.list-sub', {}, [
+            node ? (fixed ? `${node.name} · fixed` : node.name) : 'not assembled',
+            ` · ${part.size.map((v) => fmt(v, 0)).join(' × ')} mm`,
+            placed ? ' · moved' : '',
+          ].join('')),
         ]),
         el('div.list-actions', {}, [
           button('✕', (e) => {
             e.stopPropagation();
+            if (this.bodyId === part.id) this.bodyId = null;
             app.machineParts.remove(part);
             app.applyMachineParts();
             this.render();
@@ -364,15 +387,135 @@ export class MachinePanel extends Panel {
         drop.classList.remove('over');
         this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
       },
-    }, 'or drop STL castings here');
+    }, 'or drop STL bodies here');
 
-    return section('Castings', [
-      addBar('Add casting…', () => openCastingDialog(this.app, this), { hint: 'Import an STL and hang it on an axis' }),
+    const waiting = app.machineParts.unassigned().length;
+    return section(`Bodies (${app.machineParts.parts.length})`, [
+      addBar('Add body…', () => openBodyDialog(this.app, this), { hint: 'Import an STL and say which axis carries it' }),
       drop,
+      waiting ? el('div.hint', {}, `${waiting} ${waiting === 1 ? 'body is' : 'bodies are'} not on an axis yet, so ${waiting === 1 ? 'it is' : 'they are'} not drawn.`) : null,
       list,
       actionRow([
-        { label: 'Remove all', disabled: !app.machineParts.parts.length, variant: 'warn', onClick: () => { app.machineParts.clear(); app.applyMachineParts(); this.render(); } },
+        { label: 'Remove all', disabled: !app.machineParts.parts.length, variant: 'warn', onClick: () => { app.machineParts.clear(); this.bodyId = null; app.applyMachineParts(); this.render(); } },
       ]),
+    ]);
+  }
+
+  /**
+   * One body: which axis carries it, and where it sits on that axis.
+   *
+   * Assembling is mostly mating — click a point on the body, click where
+   * that point belongs — so that is the primary action. The numbers are
+   * there for when you know them.
+   */
+  bodySection(part) {
+    const app = this.app;
+    const kin = this.kin;
+    const node = part.nodeId ? kin.byId.get(part.nodeId) : null;
+
+    const carriers = kin.order.map((n) => {
+      const branch = kin.branchOf(n.id);
+      const fixed = n.kind === 'carrier' && branch === 'base';
+      return {
+        value: n.id,
+        label: `${n.name}${fixed ? ' — fixed' : n.letter ? ` — moves with ${n.letter}` : ''}`,
+      };
+    });
+
+    const setPos = (i, v) => {
+      const p = [...part.position];
+      p[i] = Number(v) || 0;
+      app.machineParts.place(part, { position: p });
+      app.applyMachineParts();
+    };
+    const setRot = (i, v) => {
+      const r = [...part.rotation];
+      r[i] = Number(v) || 0;
+      app.machineParts.place(part, { rotation: r });
+      app.applyMachineParts();
+    };
+
+    return section(part.name, [
+      select('Carried by', [{ value: '', label: 'not assembled' }, ...carriers], part.nodeId || '', (v) => {
+        app.machineParts.assign(part, v || null);
+        app.applyMachineParts();
+        this.render();
+      }),
+      el('div.hint', {}, node
+        ? (kin.branchOf(node.id) === 'base' && node.kind === 'carrier'
+          ? 'On the base: this body never moves.'
+          : `Rides ${node.name}, so it moves with everything that carries it.`)
+        : 'Not on an axis yet, so it is not drawn.'),
+      addBar('Mate by two points…', () => app.mateBodyByPoints(part), {
+        disabled: !part.nodeId,
+        hint: 'Click a point on this body, then the point it should sit on',
+      }),
+      el('div.hint', {}, 'The body moves so the two points coincide. Joints snap as targets, so a casting can be dropped straight onto its own pivot.'),
+      row(TRAVEL_AXES.map((a, i) => field(a, Number(part.position[i].toFixed(3)), {
+        step: 1, unit: 'mm', onChange: (v) => setPos(i, v),
+      }))),
+      row(['RX', 'RY', 'RZ'].map((a, i) => field(a, Number(part.rotation[i].toFixed(2)), {
+        step: 15, unit: '°', onChange: (v) => setRot(i, v),
+      }))),
+      actionRow([
+        { label: 'Back to the joint', onClick: () => { app.machineParts.place(part, { position: [0, 0, 0], rotation: [0, 0, 0] }); app.applyMachineParts(); this.render(); }, hint: 'Put it back on its axis origin' },
+        { label: 'Deselect', onClick: () => { this.bodyId = null; this.render(); } },
+      ]),
+    ]);
+  }
+
+  // ---- controller --------------------------------------------------------
+
+  /**
+   * What the control makes of a program before the program says anything.
+   *
+   * Controls do not agree on their power-up state, and a program posted for
+   * one machine read by another is the classic way to crash: the second one
+   * starts in inches, or reads I/J as absolute, or comes up in G18. So these
+   * belong to the machine, and changing one re-reads the program.
+   */
+  controllerSection() {
+    const app = this.app;
+    const c = app.state.machine.controller;
+    const set = (patch) => {
+      app.setMachine({ controller: { ...c, ...patch } });
+      this.render();
+    };
+
+    return section('Controller', [
+      select('Flavour', [
+        { value: 'fanuc', label: 'Fanuc' },
+        { value: 'haas', label: 'Haas' },
+        { value: 'fidia', label: 'Fidia' },
+        { value: 'generic', label: 'Generic ISO' },
+      ], c.flavour, (v) => set({ flavour: v })),
+      el('div.hint', {}, 'The five-axis codes read are the Fanuc ones — G68.2, G69, G53.1, G43.4 and G43.5. The flavour is recorded with the machine; it does not yet change how they are interpreted.'),
+
+      el('div.dialog-section-label', {}, 'Power-up state'),
+      row([
+        select('Units', [{ value: 'mm', label: 'Millimetres (G21)' }, { value: 'in', label: 'Inches (G20)' }],
+          c.metric ? 'mm' : 'in', (v) => set({ metric: v === 'mm' })),
+        select('Plane', [
+          { value: '17', label: 'G17 — XY' },
+          { value: '18', label: 'G18 — ZX' },
+          { value: '19', label: 'G19 — YZ' },
+        ], String(c.plane), (v) => set({ plane: Number(v) })),
+      ]),
+      row([
+        select('Distance', [{ value: 'abs', label: 'Absolute (G90)' }, { value: 'inc', label: 'Incremental (G91)' }],
+          c.absolute ? 'abs' : 'inc', (v) => set({ absolute: v === 'abs' })),
+        select('Arc centres', [
+          { value: 'inc', label: 'Incremental I/J/K (G91.1)' },
+          { value: 'abs', label: 'Absolute I/J/K (G90.1)' },
+        ], c.arcCentreAbsolute ? 'abs' : 'inc', (v) => set({ arcCentreAbsolute: v === 'abs' })),
+      ]),
+      row([
+        select('Feed mode', [
+          { value: '94', label: 'Per minute (G94)' },
+          { value: '95', label: 'Per revolution (G95)' },
+        ], String(c.feedMode), (v) => set({ feedMode: Number(v) })),
+      ]),
+      el('div.hint', {}, 'A program that names these itself overrides them on the block it appears in. These are what applies until it does.'),
     ]);
   }
 

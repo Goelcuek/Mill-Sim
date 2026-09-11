@@ -990,3 +990,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .swatch-chip { display: block; height: 34px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, 0.08); }
 .swatch-name { font-size: 10.5px; color: var(--text-3); text-align: center; }
 .swatch-tile.active .swatch-name { color: var(--accent-press); font-weight: 600; }
+
+/* A body that has been assembled shows a coloured spine; one still waiting
+   for an axis shows a grey one. */
+.swatch.on { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06); }

@@ -53,7 +53,7 @@ export class App {
     this.root = root;
     this.state = {
       stock: { size: [120, 80, 25], origin: [-60, -40, -25], resolution: 0.28 },
-      machine: { ...DEFAULT_MACHINE },
+      machine: { ...DEFAULT_MACHINE, controller: { ...DEFAULT_MACHINE.controller } },
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
       machineZero: [0, 0, 250],
       /** Which work offset the Setup panel and the placement tools act on. */
@@ -189,6 +189,19 @@ export class App {
       // Work coordinates are whatever the table is carrying, which in
       // full-machine view is somewhere else entirely.
       workFrame: () => this.machineView.workGroup,
+      bodies: () => this.machineView.bodyMeshes(),
+      axisOrigins: () => {
+        const kin = this.machineView.kinematics;
+        const out = [];
+        for (const node of kin.order) {
+          const g = this.machineView.nodeGroups.get(node.id);
+          if (!g) continue;
+          g.updateWorldMatrix(true, false);
+          const e = g.matrixWorld.elements;
+          out.push({ name: node.name, point: [e[12], e[13], e[14]] });
+        }
+        return out;
+      },
     });
     this.pick.onUpdate = (s) => this.renderPickBar(s);
     this.refreshOrigins();
@@ -371,6 +384,7 @@ export class App {
     const presetChanged = patch.preset && patch.preset !== 'custom'
       && patch.preset !== this.state.machine.preset;
     const chainChanged = presetChanged
+      || patch.controller !== undefined
       || patch.spindleDiameter !== undefined || patch.spindleLength !== undefined;
     Object.assign(this.state.machine, patch);
     this.machineView.setConfig(this.state.machine);
@@ -405,11 +419,87 @@ export class App {
     this.viewer.invalidate();
   }
 
+  /**
+   * Mate a body to a point: click a point on it, click where that point
+   * should sit, and the body moves so the two coincide.
+   *
+   * The delta is measured in the scene and then carried into the frame of
+   * the axis that carries the body, because that is where its placement is
+   * stored — a saddle nudged 20 mm has moved 20 mm along its own slide, not
+   * along the floor, and the two are different once anything has rotated.
+   */
+  mateBodyByPoints(part) {
+    if (!part) return;
+    if (!part.nodeId) {
+      this.notify('Put the body on an axis first — mating moves it within whatever carries it.', 'error');
+      return;
+    }
+    if (this.state.machine.mode !== 'machine') {
+      this.setMachine({ mode: 'machine' });
+      this.notify('Switched to the full machine so there is something to mate against.', 'info');
+    }
+    this.pick.begin({
+      steps: 2,
+      space: 'world',
+      bodies: true,
+      title: `Mate ${part.name}`,
+      hints: [`Click a point on ${part.name}`, 'Click where that point should sit'],
+      onDone: ([a, b]) => {
+        const node = this.machineView.nodeGroups.get(part.nodeId);
+        const delta = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+        if (node) {
+          node.updateWorldMatrix(true, false);
+          const basis = new THREE.Matrix4().extractRotation(node.matrixWorld).invert();
+          delta.applyMatrix4(basis);
+        }
+        this.machineParts.nudge(part, [delta.x, delta.y, delta.z]);
+        this.applyMachineParts();
+        if (this.panels && this.panels.machine) this.panels.machine.refresh();
+        this.notify(`${part.name} moved ${fmt(delta.x, 2)}, ${fmt(delta.y, 2)}, ${fmt(delta.z, 2)} mm on its axis.`, 'ok');
+      },
+    });
+    this.buildRibbon();
+  }
+
+  /**
+   * Start a machine from nothing: a base that does not move, a table to
+   * clamp to and a spindle to hang the tool on. No axes — those are added
+   * one at a time, which is the point of starting clean.
+   */
+  newMachine(name) {
+    const def = {
+      name: name || 'New machine',
+      toolNode: 'spindle',
+      workNode: 'table',
+      spindleOffset: [0, 0, 0],
+      tableOffset: [0, 0, 80],
+      nodes: [
+        { id: 'base', name: 'Base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+        { id: 'table', name: 'Table', kind: 'carrier', parent: 'base', origin: [0, 0, -80] },
+        { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'base', origin: [0, 0, 290] },
+      ],
+    };
+    this.machineView.setKinematics(new Kinematics(def));
+    this.state.machine.preset = 'custom';
+    for (const p of this.machineParts.parts) p.nodeId = null;
+    this.applyKinematics();
+    this.setPage('machine', 'axes');
+    this.notify('Empty machine: a base, a table and a spindle. Add axes between them.', 'ok');
+  }
+
   /** Write the current chain out so it can be shared or kept. */
   exportKinematics() {
     const kin = this.machineView.kinematics;
+    const def = {
+      ...kin.toJSON(),
+      controller: { ...this.state.machine.controller },
+      // Where each body sits, but not the body itself: a set of castings is
+      // tens of megabytes and has no business inside a text file. Loading
+      // this back restores the arrangement and asks for the STLs again.
+      bodies: this.machineParts.placements(),
+    };
     download(`${kin.name.replace(/\s+/g, '-').toLowerCase()}.json`,
-      JSON.stringify(kin.toJSON(), null, 2), 'application/json');
+      JSON.stringify(def, null, 2), 'application/json');
   }
 
   /** Load a chain saved with "Save machine…". */
@@ -422,22 +512,30 @@ export class App {
       this.machineView.setKinematics(new Kinematics(def));
       // It is no longer one of the presets, and the picker should say so.
       this.state.machine.preset = 'custom';
+      if (def.controller) Object.assign(this.state.machine.controller, def.controller);
       for (const p of this.machineParts.parts) {
         if (!this.machineView.nodeGroups.has(p.nodeId)) p.nodeId = null;
       }
+      const matched = def.bodies ? this.machineParts.restorePlacements(def.bodies) : 0;
       this.applyKinematics();
       this.setPage('machine', 'layout');
-      this.notify(`Loaded ${this.machineView.kinematics.name}.`, 'ok');
+      const missing = (def.bodies || []).length - matched;
+      this.notify(missing > 0
+        ? `Loaded ${this.machineView.kinematics.name}. ${missing} ${missing === 1 ? 'body is' : 'bodies are'} still to import — the file carries the arrangement, not the geometry.`
+        : `Loaded ${this.machineView.kinematics.name}.`, 'ok');
     } catch (err) {
       this.notify(`Could not read that machine: ${err.message}`, 'error');
     }
   }
 
-  /** Hang each imported casting on the axis it has been assigned to. */
+  /** Hang each body on the axis it has been assembled onto. */
   applyMachineParts() {
     const map = new Map();
     for (const part of this.machineParts.parts) {
-      if (part.nodeId && this.machineView.nodeGroups.has(part.nodeId)) map.set(part.nodeId, part.object);
+      if (!part.nodeId || !this.machineView.nodeGroups.has(part.nodeId)) continue;
+      this.machineParts.applyTransform(part);
+      if (!map.has(part.nodeId)) map.set(part.nodeId, []);
+      map.get(part.nodeId).push(part.object);
     }
     this.machineView.setNodeModels(map);
     this.viewer.invalidate();
@@ -596,6 +694,7 @@ export class App {
       g30: this.state.machineZero,
       kinematics: this.machineView ? this.machineView.kinematics : null,
       gaugeLength: this.fallbackSlot ? this.fallbackSlot.built.gaugeLength : 0,
+      controller: this.state.machine.controller,
     });
     this.state.program = program;
     this.toolpathView.setProgram(program);

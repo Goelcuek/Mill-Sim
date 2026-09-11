@@ -85,7 +85,6 @@ export class Viewer {
 
     this.scene = new THREE.Scene();
     this.scene.background = null;
-    this.scene.fog = new THREE.Fog(0xdfe3ea, 2200, 5200);
 
     // A 1 mm near plane against a 8 km far plane spends almost all of the
     // depth buffer on the first few centimetres, which is what makes two
@@ -218,10 +217,10 @@ export class Viewer {
    * Paint the backdrop.
    *
    * The canvas is transparent and the backdrop is CSS, which keeps a
-   * gradient to one line instead of a skybox. Two things have to follow it:
-   * the distance fog, which otherwise fades the far end of a dark scene
-   * into a pale haze, and the grid, which is drawn in dark lines that
-   * disappear the moment the ground behind them goes dark.
+   * gradient to one line instead of a skybox. The grid has to follow it:
+   * its lines are dark, and they disappear the moment the ground behind
+   * them goes dark. `haze` is only the flat colour a screenshot is painted
+   * on, since a PNG cannot carry the page's gradient.
    *
    * @param {{css:string, haze:number, dark:boolean}} spec
    */
@@ -229,7 +228,6 @@ export class Viewer {
     if (!spec) return;
     this.background = spec;
     this.container.style.background = spec.css;
-    if (this.scene.fog) this.scene.fog.color.setHex(spec.haze);
     if (this.grid) {
       // Light lines on a dark ground, dark lines on a light one.
       const major = spec.dark ? 0xf2f5fa : 0xa8b0be;
@@ -328,14 +326,6 @@ export class Viewer {
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.length() * 0.5, 5);
     const dist = (radius / Math.sin((this.camera.fov * Math.PI) / 360)) * factor * 0.5;
-
-    // Distance fog has to follow the scene. Fixed at a couple of metres it
-    // is invisible on a small part and, on a bridge machine four metres
-    // across, fades the whole machine into the backdrop.
-    if (this.scene.fog) {
-      this.scene.fog.near = Math.max(dist * 1.5, 400);
-      this.scene.fog.far = Math.max(dist * 4.5, 2000);
-    }
 
     const dir = this.camera.position.clone().sub(this.controls.target);
     if (dir.lengthSq() < 1e-6) dir.set(1, -1, 0.8);

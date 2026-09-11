@@ -33,7 +33,7 @@ export class PickController {
    * @param {import('./viewer.js').Viewer} viewer
    * @param {{stock:() => object, models:() => object, machine:() => object,
    *          origins:() => Array<{name:string, point:number[]}>,
-   *          workFrame?:() => object}} ctx
+   *          workFrame?:() => object, bodies?:() => object[]}} ctx
    *
    * Everything this controller produces is in **work coordinates**, because
    * that is what a work offset, a stock origin and a model position are all
@@ -42,6 +42,12 @@ export class PickController {
    * they are not. Hence `workFrame`: the ray is carried into it before
    * anything is tested, and the markers are parented to it so a point drawn
    * at (0,0,0) lands on the part's zero rather than the floor of the shop.
+   *
+   * A request may ask for `space: 'world'` instead. Assembling a machine is
+   * the case: the two points being mated are on castings, not on the job,
+   * and the answer has nothing to do with where the part happens to be
+   * clamped. Then the frame is the scene and `bodies: true` adds the
+   * machine's own geometry to what can be hit.
    */
   constructor(viewer, ctx) {
     this.viewer = viewer;
@@ -60,8 +66,7 @@ export class PickController {
     this.tmpVec = new THREE.Vector3();
     this.group = new THREE.Group();
     this.group.name = 'pick';
-    const frame = ctx.workFrame && ctx.workFrame();
-    (frame || viewer.scene).add(this.group);
+    viewer.scene.add(this.group);
 
     this.buildMarkers();
     this.bind();
@@ -156,12 +161,24 @@ export class PickController {
   begin(req) {
     this.cancel(true);
     this.request = req;
+    // Markers are drawn in the frame the request works in, so a point at
+    // the origin lands where the numbers say it does.
+    const frame = this.frameObject();
+    if (this.group.parent !== (frame || this.viewer.scene)) {
+      (frame || this.viewer.scene).add(this.group);
+    }
     this.points = [];
     this.hover = null;
     this.axisLock = null;
     this.lastEvent = null;
     this.dom.style.cursor = 'crosshair';
     this.emit();
+  }
+
+  /** The object work coordinates are expressed in, or null for world. */
+  frameObject() {
+    if (this.request && this.request.space === 'world') return null;
+    return (this.ctx.workFrame && this.ctx.workFrame()) || null;
   }
 
   cancel(silent = false) {
@@ -230,7 +247,7 @@ export class PickController {
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.viewer.camera);
 
-    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    const frame = this.frameObject();
     if (frame) {
       frame.updateWorldMatrix(true, false);
       this.invWork.copy(frame.matrixWorld).invert();
@@ -250,7 +267,7 @@ export class PickController {
 
   /** A work point projected to the screen, for snap ranking. */
   projectWork(point, out) {
-    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    const frame = this.frameObject();
     out.set(point[0], point[1], point[2]);
     if (frame) out.applyMatrix4(frame.matrixWorld);
     return out.project(this.viewer.camera);
@@ -300,7 +317,7 @@ export class PickController {
   /** Keep the marker a constant size on screen. */
   markerScale(point) {
     const v = new THREE.Vector3(...point);
-    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    const frame = this.frameObject();
     if (frame) v.applyMatrix4(frame.matrixWorld);
     const d = this.viewer.camera.position.distanceTo(v);
     return Math.max(d * 0.005, 0.15);
@@ -338,8 +355,11 @@ export class PickController {
     const origin = [r.origin.x, r.origin.y, r.origin.z];
     const dir = [r.direction.x, r.direction.y, r.direction.z];
     let best = null;
+    // Mating castings has nothing to do with the job: hitting the stock or
+    // a clamp while assembling a machine is never what anyone meant.
+    const assembling = !!(this.request && this.request.bodies);
 
-    const stock = this.ctx.stock();
+    const stock = assembling ? null : this.ctx.stock();
     if (stock) {
       const hit = stock.raycast(origin, dir);
       if (hit && (!best || hit.distance < best.distance)) {
@@ -347,9 +367,15 @@ export class PickController {
       }
     }
 
-    const models = this.ctx.models();
+    const meshes = [];
+    const models = assembling ? null : this.ctx.models();
     if (models && models.models.length) {
-      const meshes = models.models.filter((m) => m.visible).map((m) => m.mesh);
+      for (const m of models.models) if (m.visible) meshes.push(m.mesh);
+    }
+    if (this.request && this.request.bodies && this.ctx.bodies) {
+      for (const mesh of this.ctx.bodies()) meshes.push(mesh);
+    }
+    if (meshes.length) {
       const hits = this.raycaster.intersectObjects(meshes, false);
       if (hits.length && (!best || hits[0].distance < best.distance)) {
         const h = hits[0];
@@ -408,27 +434,36 @@ export class PickController {
   /** Snap candidates worth testing for this ray. */
   candidates(free) {
     const out = [];
+    const assembling = !!(this.request && this.request.bodies);
 
-    const stock = this.ctx.stock();
-    if (stock) {
-      for (const s of stock.snapPoints()) out.push({ ...s, label: 'stock' });
-    }
+    if (!assembling) {
+      const stock = this.ctx.stock();
+      if (stock) {
+        for (const s of stock.snapPoints()) out.push({ ...s, label: 'stock' });
+      }
 
-    const models = this.ctx.models();
-    if (models) {
-      for (const m of models.models) {
-        if (!m.visible) continue;
-        for (const s of modelBoxSnaps(m, this.invWork)) out.push({ ...s, label: m.name });
+      const models = this.ctx.models();
+      if (models) {
+        for (const m of models.models) {
+          if (!m.visible) continue;
+          for (const s of modelBoxSnaps(m, this.invWork)) out.push({ ...s, label: m.name });
+        }
+      }
+
+      for (const o of this.ctx.origins()) {
+        out.push({ point: o.point, kind: 'origin', label: o.name });
+      }
+    } else if (this.ctx.axisOrigins) {
+      // Assembling, the useful landmarks are the joints themselves: a
+      // casting is located on its own pivot, not on the workpiece.
+      for (const o of this.ctx.axisOrigins()) {
+        out.push({ point: o.point, kind: 'origin', label: o.name });
       }
     }
 
     // Vertices of the triangle actually under the cursor.
     if (free && free.intersection && free.intersection.face) {
       for (const s of triangleSnaps(free.intersection, this.invWork)) out.push({ ...s, label: free.label });
-    }
-
-    for (const o of this.ctx.origins()) {
-      out.push({ point: o.point, kind: 'origin', label: o.name });
     }
 
     return out;

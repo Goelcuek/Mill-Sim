@@ -36,6 +36,19 @@ export const DEFAULT_MACHINE = {
   table: { enabled: true, z: -80, xMin: -450, xMax: 450, yMin: -230, yMax: 230 },
   rapidRate: 15000,
   maxFeed: 10000,
+  /**
+   * The control, not the iron. Which flavour of G-code this machine reads
+   * and what modal state it powers up in — see DEFAULT_CONFIG.controller
+   * in the interpreter.
+   */
+  controller: {
+    flavour: 'fanuc',
+    plane: 17,
+    metric: true,
+    absolute: true,
+    arcCentreAbsolute: false,
+    feedMode: 94,
+  },
   mode: 'part',
   visible: true,
 };
@@ -86,7 +99,7 @@ export class MachineView {
     this.nodeGroups = new Map();
     /** nodeId -> the proxy meshes drawn for it. */
     this.proxies = new Map();
-    /** nodeId -> a user-supplied Object3D standing in for the proxy. */
+    /** nodeId -> the user's bodies hung on that axis, replacing the proxy. */
     this.models = new Map();
 
     this.config = { ...DEFAULT_MACHINE };
@@ -125,24 +138,24 @@ export class MachineView {
   }
 
   /**
-   * Attach imported meshes to axes, replacing those axes' proxies.
-   * The whole set is passed at once because each change re-rigs the tree,
-   * and doing that once per casting on a machine with a dozen of them is
-   * wasted work.
-   * @param {Map<string, THREE.Object3D>|Iterable<[string, THREE.Object3D]>} map
+   * Attach the user's bodies to the axes that carry them.
+   *
+   * An axis can carry several — a saddle is a casting, two way covers and a
+   * motor — so the value is a list. The whole set is passed at once because
+   * each change re-rigs the tree, and doing that once per body on a machine
+   * with a dozen of them is wasted work.
+   *
+   * @param {Map<string, THREE.Object3D[]>|Iterable<[string, THREE.Object3D[]]>} map
    */
   setNodeModels(map) {
-    for (const obj of this.models.values()) if (obj.parent) obj.parent.remove(obj);
-    this.models = new Map(map || []);
+    for (const list of this.models.values()) {
+      for (const obj of list) if (obj.parent) obj.parent.remove(obj);
+    }
+    this.models = new Map();
+    for (const [id, value] of map || []) {
+      this.models.set(id, Array.isArray(value) ? value : [value]);
+    }
     this.rebuild();
-  }
-
-  /** Attach one mesh, leaving the others where they are. */
-  setNodeModel(nodeId, object) {
-    const next = new Map(this.models);
-    if (object) next.set(nodeId, object);
-    else next.delete(nodeId);
-    this.setNodeModels(next);
   }
 
   clearNodeModels() {
@@ -198,9 +211,11 @@ export class MachineView {
   buildNodeParts(node) {
     const g = this.nodeGroups.get(node.id);
     const kin = this.kinematics;
-    const model = this.models.get(node.id);
-    if (model) {
-      g.add(model);
+    // A body on an axis replaces that axis's proxy: once you have modelled
+    // the real saddle, a stand-in slab next to it is just clutter.
+    const bodies = this.models.get(node.id);
+    if (bodies && bodies.length) {
+      for (const obj of bodies) g.add(obj);
       return;
     }
 
@@ -371,13 +386,20 @@ export class MachineView {
     for (const [id, parts] of this.proxies) {
       for (const p of parts) p.visible = show;
     }
-    for (const obj of this.models.values()) obj.visible = show;
+    for (const list of this.models.values()) for (const obj of list) obj.visible = show;
     this.update(this.lastPose);
   }
 
   setVisible(v) {
     this.config.visible = v;
     this.setMode(this.config.mode);
+  }
+
+  /** Every user body currently in the rig, for picking against. */
+  bodyMeshes() {
+    const out = [];
+    for (const list of this.models.values()) for (const obj of list) if (obj.visible) out.push(obj);
+    return out;
   }
 
   /** Scene-space bounding box of the whole machine. */
@@ -391,10 +413,12 @@ export class MachineView {
         any = true;
       }
     }
-    for (const obj of this.models.values()) {
-      if (!obj.visible) continue;
-      b.expandByObject(obj);
-      any = true;
+    for (const list of this.models.values()) {
+      for (const obj of list) {
+        if (!obj.visible) continue;
+        b.expandByObject(obj);
+        any = true;
+      }
     }
     return any ? b : new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1));
   }

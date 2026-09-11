@@ -108,16 +108,25 @@ export function openAxisDialog(app, panel) {
  * @param {object} app
  * @param {{kin:object, selected:object, importFiles:Function}} panel
  */
-export function openCastingDialog(app, panel) {
+/**
+ * @param {object} app
+ * @param {{kin:object, selected:object, importFiles:Function}} panel
+ */
+export function openBodyDialog(app, panel) {
   const kin = panel.kin;
   const state = {
     files: [],
     units: 'mm',
     origin: 'as-is',
-    nodeId: (panel.selected && panel.selected.id) || kin.toolNode,
+    nodeId: (panel.selected && panel.selected.id) || kin.roots()[0]?.id || kin.toolNode,
   };
 
   const fileLabel = el('div.hint', {}, 'No file chosen.');
+  const carriers = kin.order.map((n) => {
+    const fixed = n.kind === 'carrier' && kin.branchOf(n.id) === 'base';
+    return { value: n.id, label: `${n.name}${fixed ? ' — fixed' : n.letter ? ` — moves with ${n.letter}` : ''}` };
+  });
+
   const body = el('div.dialog-form', {}, [
     row([el('button.btn', {
       type: 'button',
@@ -128,22 +137,23 @@ export function openCastingDialog(app, panel) {
       },
     }, 'Choose STL…')]),
     fileLabel,
-    select('Hang it on', kin.nodes.map((n) => ({ value: n.id, label: n.name })), state.nodeId, (v) => { state.nodeId = v; }),
+    select('Carried by', carriers, state.nodeId, (v) => { state.nodeId = v; }),
+    el('div.hint', {}, 'A body on the base never moves. A body on an axis rides that axis and everything carrying it — put the saddle on Y, the table on X, the head on Z.'),
     row([
       select('Units in the file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
         state.units, (v) => { state.units = v; }),
       select('Origin', [{ value: 'as-is', label: 'As exported' }, { value: 'base', label: 'Centre on its base' }],
         state.origin, (v) => { state.origin = v; }),
     ]),
-    el('div.hint', {}, 'Export each casting about the joint it belongs to and leave the origin as exported; then the axis pivots stay at zero and the part lands where it should.'),
+    el('div.hint', {}, 'Leave the origin as exported if the bodies were modelled in one assembly — they will land in the right places relative to each other. Otherwise drop them in and mate them.'),
   ]);
 
   const dialog = new Dialog({
-    title: 'Add a casting',
-    subtitle: 'An STL of your own, carried by one axis',
+    title: 'Add a body',
+    subtitle: 'An STL of the machine, carried by one axis',
     width: 480,
     body,
-    confirm: 'Add casting',
+    confirm: 'Add body',
     onConfirm: () => {
       if (!state.files.length) return false;
       panel.importFiles(state.files, { units: state.units, origin: state.origin, nodeId: state.nodeId });
@@ -151,6 +161,30 @@ export function openCastingDialog(app, panel) {
     },
   });
   dialog.setConfirmEnabled(false);
+  dialog.open();
+  return dialog;
+}
+
+/** Start a machine from nothing. */
+export function openNewMachineDialog(app) {
+  const state = { name: 'New machine' };
+  const body = el('div.dialog-form', {}, [
+    field('Name', state.name, { type: 'text', onChange: (v) => { state.name = v || 'New machine'; } }),
+    el('div.hint', {}, 'You get a base that does not move, a table to clamp to and a spindle to hang the tool on — and no axes. Add those one at a time on the Axes page, then bring the bodies in on Assembly.'),
+    el('div.inline-warning', {}, 'The machine you have now is replaced, and any bodies already imported come off their axes. Save it first if you want to keep it.'),
+  ]);
+
+  const dialog = new Dialog({
+    title: 'New machine',
+    subtitle: 'Start from an empty chain',
+    width: 460,
+    body,
+    confirm: 'Create',
+    onConfirm: () => {
+      app.newMachine(state.name);
+      return true;
+    },
+  });
   dialog.open();
   return dialog;
 }

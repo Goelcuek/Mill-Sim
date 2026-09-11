@@ -12,6 +12,27 @@ import * as m4 from '../core/mat4.js';
 export const DEFAULT_CONFIG = {
   /** Rapid traverse used for time estimates, mm/min. */
   rapidRate: 15000,
+  /**
+   * The control's own defaults — the modal state a program starts in
+   * before it says anything.
+   *
+   * Controls do not agree on these. A program posted for one machine and
+   * run on another is the classic way to crash: the second control starts
+   * in inches, or reads I/J as absolute, or comes up in G18. So they are
+   * settings of the *machine*, not assumptions baked into the reader.
+   */
+  controller: {
+    /** G17 / G18 / G19 before any plane is commanded. */
+    plane: 17,
+    /** true for G21 (mm), false for G20 (inch). */
+    metric: true,
+    /** true for G90 absolute, false for G91 incremental. */
+    absolute: true,
+    /** true for G90.1 — arc centres absolute rather than incremental. */
+    arcCentreAbsolute: false,
+    /** G94 feed per minute, or G95 feed per revolution. */
+    feedMode: 94,
+  },
   /** Where machine zero sits in scene coordinates, for G53/G28/G30. */
   machineZero: [0, 0, 250],
   /** Secondary reference point for G30. */
@@ -53,12 +74,13 @@ class State {
   constructor(cfg) {
     this.cfg = cfg;
     this.pos = (cfg.initialPosition || cfg.machineZero || [0, 0, 0]).slice();
+    const ctl = cfg.controller || {};
     this.motion = 0;             // modal motion G code
-    this.plane = 17;
-    this.metric = true;
-    this.absolute = true;
-    this.arcAbsolute = false;
-    this.feedMode = 94;
+    this.plane = ctl.plane ?? 17;
+    this.metric = ctl.metric !== false;
+    this.absolute = ctl.absolute !== false;
+    this.arcAbsolute = !!ctl.arcCentreAbsolute;
+    this.feedMode = ctl.feedMode ?? 94;
     this.feed = 0;
     this.rpm = 0;
     this.spindleDir = 0;         // -1 CCW, 0 off, 1 CW
@@ -197,7 +219,12 @@ export function flattenArc(from, to, center, plane, ccw, tolerance) {
  * @param {Partial<typeof DEFAULT_CONFIG>} [config]
  */
 export function interpret(text, config = {}) {
-  const cfg = { ...DEFAULT_CONFIG, ...config, wcs: { ...DEFAULT_CONFIG.wcs, ...(config.wcs || {}) } };
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    ...config,
+    wcs: { ...DEFAULT_CONFIG.wcs, ...(config.wcs || {}) },
+    controller: { ...DEFAULT_CONFIG.controller, ...(config.controller || {}) },
+  };
   const blocks = lex(text);
   const st = new State(cfg);
 
