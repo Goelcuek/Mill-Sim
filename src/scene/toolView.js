@@ -195,6 +195,9 @@ function mergeGeometries(geoms) {
   return out;
 }
 
+const _up = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+
 export class ToolView {
   constructor() {
     this.group = new THREE.Group();
@@ -239,6 +242,22 @@ export class ToolView {
   /** Position the assembly by its tool tip. */
   setPosition(x, y, z) {
     this.group.position.set(x, y, z);
+  }
+
+  /**
+   * Position and aim the assembly. The silhouette is modelled up the +Z
+   * axis from the tip, so pointing the tool is one rotation from +Z onto
+   * the direction the machine has put it.
+   * @param {number[]} tip
+   * @param {number[]} dir unit vector up the tool from the tip
+   */
+  setPose(tip, dir) {
+    this.group.position.set(tip[0], tip[1], tip[2]);
+    if (!dir) return;
+    _up.set(0, 0, 1);
+    _dir.set(dir[0], dir[1], dir[2]);
+    if (_dir.lengthSq() < 1e-12) return;
+    this.group.quaternion.setFromUnitVectors(_up, _dir.normalize());
   }
 
   setVisible(v) { this.group.visible = v; }

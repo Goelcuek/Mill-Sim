@@ -8,6 +8,9 @@ import { StockView } from './scene/stockView.js';
 import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE } from './scene/machineView.js';
+import { MachineParts } from './machine/parts.js';
+import { PRESETS } from './machine/presets.js';
+import { Kinematics } from './machine/kinematics.js';
 import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
 import { OriginView } from './scene/originView.js';
@@ -22,8 +25,9 @@ import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mes
 import { buildTargetMap, compareToTarget } from './sim/target.js';
 import { writeSTL, writeOBJ } from './io/stl.js';
 
-import { el, clear, button, download } from './ui/dom.js';
+import { el, clear, button, download, pickFile } from './ui/dom.js';
 import { SetupPanel } from './ui/setupPanel.js';
+import { MachinePanel } from './ui/machinePanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
 import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
@@ -242,6 +246,70 @@ export class App {
         ],
       },
       {
+        id: 'machine',
+        label: 'Machine',
+        groups: () => {
+          const kin = this.machineView.kinematics;
+          const panel = () => this.panels.machine;
+          const sel = () => panel().selected;
+          return [
+            {
+              label: 'Configuration',
+              items: [
+                {
+                  kind: 'select', label: 'Machine', width: 220, value: this.state.machine.preset,
+                  options: Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
+                  onChange: (v) => { this.setMachine({ preset: v }); this.setTab('machine'); },
+                },
+                { kind: 'text', label: 'Layout', value: kin.configuration },
+                { kind: 'text', label: 'Axes', value: kin.axes().map((n) => n.letter).join(' ') || '–' },
+              ],
+            },
+            {
+              label: 'Axes',
+              items: [
+                { kind: 'big', icon: 'machine', label: 'Add axis', hint: 'Insert a joint under the selected one', onClick: () => { this.setTab('machine'); panel().addAxis(); } },
+                {
+                  kind: 'stack',
+                  items: [
+                    { icon: 'cutter', label: 'Tool hangs here', disabled: !sel() || (sel() && sel().id === kin.toolNode), onClick: () => { kin.toolNode = sel().id; panel().commit(); } },
+                    { icon: 'cube', label: 'Part clamps here', disabled: !sel() || (sel() && sel().id === kin.workNode), onClick: () => { kin.workNode = sel().id; panel().commit(); } },
+                    { icon: 'trash', label: 'Delete axis', disabled: !sel(), onClick: () => panel().deleteAxis() },
+                  ],
+                },
+              ],
+            },
+            {
+              label: 'Castings',
+              items: [
+                { kind: 'big', icon: 'import', label: 'Import STL…', hint: 'Bring in a casting and hang it on an axis', onClick: async () => { this.setTab('machine'); await panel().importFiles(await pickFile('.stl', true)); } },
+                {
+                  kind: 'stack',
+                  items: [
+                    { icon: 'reset', label: 'Remove all', disabled: !this.machineParts.parts.length, onClick: () => { this.machineParts.clear(); this.applyMachineParts(); panel().refresh(); } },
+                    { icon: 'export', label: 'Export machine', hint: 'Save the chain as JSON', onClick: () => download(`${kin.name.replace(/\s+/g, '-').toLowerCase()}.json`, JSON.stringify(kin.toJSON(), null, 2), 'application/json') },
+                    { icon: 'import', label: 'Import machine', hint: 'Load a chain saved earlier', onClick: () => this.importKinematics() },
+                  ],
+                },
+              ],
+            },
+            {
+              label: 'View',
+              items: [
+                { kind: 'big', icon: 'view', label: this.state.machine.mode === 'machine' ? 'Part only' : 'Full machine', onClick: () => { this.setMachine({ mode: this.state.machine.mode === 'machine' ? 'part' : 'machine' }); this.buildRibbon(); } },
+                {
+                  kind: 'stack',
+                  items: [
+                    { icon: 'gauge', label: 'Travel envelope', active: d().showLimits, onClick: () => { this.setDisplay({ showLimits: !d().showLimits }); this.buildRibbon(); } },
+                    { icon: 'machine', label: 'Machine…', hint: 'Travels, table and rates', onClick: () => openMachineDialog(this) },
+                  ],
+                },
+              ],
+            },
+          ];
+        },
+      },
+      {
         id: 'tools',
         label: 'Tools',
         groups: () => [
@@ -455,6 +523,7 @@ export class App {
 
   buildScene() {
     this.viewer = new Viewer(this.viewportHost);
+    this.machineParts = new MachineParts();
     this.machineView = new MachineView();
     this.machineView.setConfig(this.state.machine);
     this.viewer.add(this.machineView.group);
@@ -534,6 +603,7 @@ export class App {
   buildPanels() {
     this.panels = {
       setup: new SetupPanel(this),
+      machine: new MachinePanel(this),
       tools: new ToolsPanel(this),
       program: new ProgramPanel(this),
       results: new ResultsPanel(this),
@@ -541,6 +611,7 @@ export class App {
     };
     this.tabOrder = [
       ['setup', 'Setup'],
+      ['machine', 'Machine'],
       ['tools', 'Tools'],
       ['program', 'Program'],
       ['results', 'Results'],
@@ -639,11 +710,60 @@ export class App {
   }
 
   setMachine(patch) {
+    const presetChanged = patch.preset && patch.preset !== this.state.machine.preset;
     Object.assign(this.state.machine, patch);
     this.machineView.setConfig(this.state.machine);
     this.machineView.setLimitsVisible(this.state.display.showLimits);
-    this.simulator.load({ machine: this.state.machine });
+    if (presetChanged) {
+      // A different chain means different castings; nothing hung on the old
+      // axes belongs on the new ones.
+      for (const p of this.machineParts.parts) p.nodeId = null;
+    }
+    this.applyKinematics();
     this.scheduleSlotRefresh();
+    this.viewer.invalidate();
+  }
+
+  /**
+   * Push the current chain everywhere it is needed: the rig, the simulator
+   * and the interpreter, which needs it for G53.1.
+   */
+  applyKinematics() {
+    const kin = this.machineView.kinematics;
+    kin.rebuild();
+    this.applyMachineParts();          // which re-rigs the tree as it goes
+    this.simulator.load({ machine: this.state.machine, kinematics: kin });
+    if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
+    if (this.panels && this.panels.machine) this.panels.machine.refresh();
+    this.viewer.invalidate();
+  }
+
+  /** Load a chain saved with "Export machine". */
+  async importKinematics() {
+    const [file] = await pickFile('.json');
+    if (!file) return;
+    try {
+      const def = JSON.parse(await file.text());
+      if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('That file has no axes in it.');
+      this.machineView.setKinematics(new Kinematics(def));
+      for (const p of this.machineParts.parts) {
+        if (!this.machineView.nodeGroups.has(p.nodeId)) p.nodeId = null;
+      }
+      this.applyKinematics();
+      this.setTab('machine');
+      this.notify(`Loaded ${this.machineView.kinematics.name}.`, 'ok');
+    } catch (err) {
+      this.notify(`Could not read that machine: ${err.message}`, 'error');
+    }
+  }
+
+  /** Hang each imported casting on the axis it has been assigned to. */
+  applyMachineParts() {
+    const map = new Map();
+    for (const part of this.machineParts.parts) {
+      if (part.nodeId && this.machineView.nodeGroups.has(part.nodeId)) map.set(part.nodeId, part.object);
+    }
+    this.machineView.setNodeModels(map);
     this.viewer.invalidate();
   }
 
@@ -797,6 +917,8 @@ export class App {
       wcs: this.state.wcs,
       machineZero: this.state.machineZero,
       g30: this.state.machineZero,
+      kinematics: this.machineView ? this.machineView.kinematics : null,
+      gaugeLength: this.fallbackSlot ? this.fallbackSlot.built.gaugeLength : 0,
     });
     this.state.program = program;
     this.toolpathView.setProgram(program);
@@ -806,6 +928,7 @@ export class App {
       slots: this.slots || new Map(),
       fallbackSlot: this.fallbackSlot,
       machine: this.state.machine,
+      kinematics: this.machineView ? this.machineView.kinematics : null,
       fixtures: this.models.collisionBoxes(),
     });
     this.pause();
@@ -944,8 +1067,9 @@ export class App {
 
     if (sim.activeSlot) this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
-    const tip = this.machineView.update(this.state.program ? sim.pos : this.parkPosition());
-    this.toolView.setPosition(tip[0], tip[1], tip[2]);
+    const pose = this.state.program ? sim.currentPose() : this.parkPose();
+    const placed = this.machineView.update(pose);
+    this.toolView.setPose(placed.tip, placed.dir);
     this.toolpathView.setProgress(sim.progress);
     if (this.state.display.toolpath && this.state.program) {
       const r = sim.activeSlot ? sim.activeSlot.built.cutRadius : 1;
@@ -960,6 +1084,11 @@ export class App {
   parkPosition() {
     const top = this.stock ? this.stock.top : 0;
     return [0, 0, top + 45];
+  }
+
+  parkPose() {
+    const p = this.parkPosition();
+    return { values: { X: p[0], Y: p[1], Z: p[2] }, tip: p, dir: [0, 0, 1], rot: { A: 0, B: 0, C: 0 } };
   }
 
   updateTransport() {

@@ -120,6 +120,7 @@ export class Simulator {
     this.pos = this.program && this.program.moves.length
       ? this.program.moves[0].from.slice()
       : [0, 0, 0];
+    this.u = 0;
     this.moveStats = this.program ? new Float32Array(this.program.moves.length) : new Float32Array(0);
     if (this.stock) this.stock.reset();
     this.notified = new Set();
@@ -254,6 +255,7 @@ export class Simulator {
 
       this.segPos += advanceLen;
       const uNow = mv._segTotal > 1e-12 ? (cum[s] + this.segPos) / mv._segTotal : 1;
+      this.u = uNow;
       const t = Math.min(1, this.segPos / segLen);
       const x = ax + (bx - ax) * t;
       const y = ay + (by - ay) * t;
@@ -339,6 +341,31 @@ export class Simulator {
     if (mv.tcp) return { tip: point, dir: k.toolAxis(rot, gauge) };
     const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
     return { tip: r.tip, dir: r.axis };
+  }
+
+  /**
+   * Where the machine is right now: axis positions for the rig, and the
+   * tool on the part for the viewport.
+   *
+   * Under TCP the programmed point is the tip, so the axis positions have
+   * to be solved for rather than read off — that solve is exact and runs
+   * once a frame, which is nothing.
+   */
+  currentPose() {
+    const point = this.pos.slice();
+    const flat = { values: { X: point[0], Y: point[1], Z: point[2] }, tip: point, dir: UP, rot: ZERO_ROT };
+    const mv = this.program && this.program.moves[this.moveIndex];
+    if (!this.fiveAxis || !mv) return flat;
+
+    const u = Math.max(0, Math.min(1, this.u || 0));
+    const rot = this.rotaryAt(mv, u);
+    const pose = this.poseAt(mv, point, u);
+    let values = { ...rot, X: point[0], Y: point[1], Z: point[2] };
+    if (mv.tcp) {
+      const sol = this.kinematics.linearsForTip(pose.tip, rot, this.gaugeLength);
+      if (sol) values = { ...rot, ...sol };
+    }
+    return { values, tip: pose.tip, dir: pose.dir, rot };
   }
 
   /** True when the tool stands close enough to vertical to sweep normally. */
@@ -573,7 +600,12 @@ export class Simulator {
       + poseA.dir[1] * poseB.dir[1] + poseA.dir[2] * poseB.dir[2])));
     const r = Math.max(slot.built.cutRadius, 0.05);
     const cell = this.stock ? Math.max(this.stock.dx, this.stock.dy) : 0.05;
-    const spacing = Math.max(cell, r * 0.25);
+    // Stamping leaves a scallop of about d^2/(8r) between cuts, so a big
+    // cutter tolerates a longer step — but only up to a point, because the
+    // swing between stamps moves the far end of the flutes much further
+    // than the tip. Capping the step keeps a tilting face mill from leaving
+    // a scalloped wall, and the floor at one cell stops it going pointless.
+    const spacing = Math.max(cell, Math.min(r * 0.12, 0.8));
     // The far end of the flutes travels further than the tip when the tool
     // swings, so the swing gets a say in the count as well.
     const arc = swing * Math.max(slot.built.fluteLength, r);

@@ -87,7 +87,7 @@ export class Kinematics {
     this.spindleOffset = def.spindleOffset || [0, 0, 0];
     /** Fixture face in the work node's frame; the stock sits on it. */
     this.tableOffset = def.tableOffset || [0, 0, 0];
-    this.scratch = { a: m4.create(), b: m4.create(), c: m4.create() };
+    this.scratch = { a: m4.create(), b: m4.create() };
     this._refGauge = null;
     this._refTip = [0, 0, 0];
     this.rebuild();
@@ -98,6 +98,8 @@ export class Kinematics {
     this.byId = new Map(this.nodes.map((n) => [n.id, n]));
     this.order = this.topoOrder();
     this.matrices = new Map(this.order.map((n) => [n.id, m4.create()]));
+    /** Each joint relative to its parent, which is what a scene graph wants. */
+    this.locals = new Map(this.order.map((n) => [n.id, m4.create()]));
     this.toolPath = this.pathTo(this.toolNode);
     this.workPath = this.pathTo(this.workNode);
     this.toolSet = new Set(this.toolPath.map((n) => n.id));
@@ -204,10 +206,10 @@ export class Kinematics {
     const values = this.resolve(rawValues || {});
     const t = this.scratch.a;
     const j = this.scratch.b;
-    const local = this.scratch.c;
 
     for (const node of this.order) {
       const mat = this.matrices.get(node.id);
+      const local = this.locals.get(node.id);
       m4.fromTranslation(t, node.origin);
 
       if (node.kind === 'linear') {
@@ -231,6 +233,10 @@ export class Kinematics {
 
   matrixOf(id) {
     return this.matrices.get(id) || m4.create();
+  }
+
+  localOf(id) {
+    return this.locals.get(id) || m4.create();
   }
 
   /**
