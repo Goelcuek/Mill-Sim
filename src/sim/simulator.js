@@ -21,6 +21,19 @@ export const COLLISION_TYPES = {
 };
 
 const MAX_COLLISIONS = 400;
+const UP = [0, 0, 1];
+
+/** Interpolate two unit directions along the shorter great-circle arc. */
+function slerp(a, b, t) {
+  const d = Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]));
+  const theta = Math.acos(d);
+  if (theta < 1e-6) return b.slice();
+  const s = Math.sin(theta);
+  const wa = Math.sin((1 - t) * theta) / s;
+  const wb = Math.sin(t * theta) / s;
+  return [a[0] * wa + b[0] * wb, a[1] * wa + b[1] * wb, a[2] * wa + b[2] * wb];
+}
+const ZERO_ROT = { A: 0, B: 0, C: 0 };
 
 /** Cached per-move segment lengths. */
 function segmentsOf(mv) {
@@ -28,13 +41,16 @@ function segmentsOf(mv) {
   const p = mv.path;
   const n = p.length / 3 - 1;
   const len = new Float64Array(Math.max(n, 1));
+  const cum = new Float64Array(Math.max(n, 1) + 1);
   let total = 0;
   for (let i = 0; i < n; i++) {
     const d = Math.hypot(p[i * 3 + 3] - p[i * 3], p[i * 3 + 4] - p[i * 3 + 1], p[i * 3 + 5] - p[i * 3 + 2]);
     len[i] = d;
     total += d;
+    cum[i + 1] = total;
   }
   mv._segLen = len;
+  mv._segCum = cum;
   mv._segTotal = total;
   return len;
 }
@@ -60,6 +76,14 @@ export class Simulator {
     this.columnBudget = 2_000_000;
     /** Collision probes are point tests, so they get their own spacing. */
     this.probeSpacing = 2.5;
+    /**
+     * The machine, when one with rotary axes is loaded. Without it every
+     * move is taken as tool-down-Z, which is what a 3-axis program means
+     * and what the fast swept carver assumes.
+     */
+    this.kinematics = null;
+    /** Cosine below which a move counts as tilted rather than upright. */
+    this.uprightCos = Math.cos(0.25 * Math.PI / 180);
     this.reset();
   }
 
@@ -73,6 +97,7 @@ export class Simulator {
     if (opts.slots !== undefined) this.slots = opts.slots;
     if (opts.fallbackSlot !== undefined) this.fallbackSlot = opts.fallbackSlot;
     if (opts.machine !== undefined) this.machine = opts.machine;
+    if (opts.kinematics !== undefined) this.kinematics = opts.kinematics;
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
     if (opts.target !== undefined) this.target = opts.target;
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
@@ -183,6 +208,8 @@ export class Simulator {
       // Dwells and zero-length moves just consume time.
       const lens = segmentsOf(mv);
       if (mv._segTotal <= 1e-9) {
+        // No linear travel, but the rotaries may still be swinging the tool
+        // through the part, so the swing is carved before the move retires.
         const take = Math.min(remaining, Math.max(mv.time - (this._dwelt || 0), 0));
         this._dwelt = (this._dwelt || 0) + take;
         this.time += take;
@@ -191,6 +218,7 @@ export class Simulator {
         if (this._dwelt >= mv.time - 1e-9) {
           this._dwelt = 0;
           this.pos = mv.to.slice();
+          if (this.swings(mv) && this.sweep(mv, mv.from, mv.to, 0, 1)) didCut = true;
           this.nextMove();
         }
         continue;
@@ -204,10 +232,12 @@ export class Simulator {
 
       const ax = p[s * 3], ay = p[s * 3 + 1], az = p[s * 3 + 2];
       const bx = p[s * 3 + 3], by = p[s * 3 + 4], bz = p[s * 3 + 5];
+      const cum = mv._segCum;
+      const uPrev = mv._segTotal > 1e-12 ? (cum[s] + this.segPos) / mv._segTotal : 0;
 
       // Does this segment interact with anything? Rejecting whole segments
       // is what makes long air moves free.
-      const info = this.segmentInfo(mv, ax, ay, az, bx, by, bz);
+      const info = this.segmentInfo(mv, ax, ay, az, bx, by, bz, uPrev);
       const step = info.stepSize;
 
       const allowedByTime = remaining * speed;
@@ -223,6 +253,7 @@ export class Simulator {
       const fromZ = az + (bz - az) * tPrev;
 
       this.segPos += advanceLen;
+      const uNow = mv._segTotal > 1e-12 ? (cum[s] + this.segPos) / mv._segTotal : 1;
       const t = Math.min(1, this.segPos / segLen);
       const x = ax + (bx - ax) * t;
       const y = ay + (by - ay) * t;
@@ -236,7 +267,7 @@ export class Simulator {
       advanced += dt;
 
       if (info.active) {
-        const cut = this.sweep(mv, [fromX, fromY, fromZ], [x, y, z]);
+        const cut = this.sweep(mv, [fromX, fromY, fromZ], [x, y, z], uPrev, uNow);
         if (cut) didCut = true;
       }
 
@@ -266,16 +297,80 @@ export class Simulator {
     }
   }
 
+  /** Does this machine have rotaries that could tilt the tool at all? */
+  get fiveAxis() {
+    return !!(this.kinematics && this.kinematics.rotaries().length);
+  }
+
+  /** Gauge length of the assembly currently in the spindle. */
+  get gaugeLength() {
+    return this.activeSlot ? this.activeSlot.built.gaugeLength : 0;
+  }
+
+  /** Rotary positions part way through a move. */
+  rotaryAt(mv, u) {
+    const a = mv.rotFrom || ZERO_ROT;
+    const b = mv.rotTo || ZERO_ROT;
+    return {
+      A: a.A + (b.A - a.A) * u,
+      B: a.B + (b.B - a.B) * u,
+      C: a.C + (b.C - a.C) * u,
+    };
+  }
+
+  /**
+   * Where the tool tip is on the part, and which way the tool points.
+   *
+   * Two conventions meet here. Under G43.4/G43.5 the control is doing the
+   * work: the programmed point *is* the tip on the part, and the rotaries
+   * only say which way the tool leans. Without it the programmed point is
+   * an axis position, so the part has to be carried through the chain to
+   * find out where that lands — with a rotary table, the same X/Y/Z is a
+   * different place on the part at every angle.
+   *
+   * @param {number[]} point programmed point, work coordinates
+   * @param {number} u  0..1 through the move, for interpolating the swing
+   */
+  poseAt(mv, point, u) {
+    if (!this.fiveAxis) return { tip: point, dir: UP };
+    const rot = this.rotaryAt(mv, u);
+    const gauge = this.gaugeLength;
+    const k = this.kinematics;
+    if (mv.tcp) return { tip: point, dir: k.toolAxis(rot, gauge) };
+    const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
+    return { tip: r.tip, dir: r.axis };
+  }
+
+  /** True when the tool stands close enough to vertical to sweep normally. */
+  isUpright(dir) {
+    return dir[2] >= this.uprightCos;
+  }
+
   /**
    * Decide whether a segment needs sampling at all and how finely.
    * The whole-segment rejection uses the stock tile pyramid plus the
    * bounding boxes of the fixtures.
    */
-  segmentInfo(mv, ax, ay, az, bx, by, bz) {
+  segmentInfo(mv, ax, ay, az, bx, by, bz, u = 1) {
     const slot = this.activeSlot;
     const stock = this.stock;
 
     if (!slot) return { active: false, stepSize: Infinity };
+
+    // On a 5-axis machine the programmed point is not the tool tip, so the
+    // rejection box is built from the tip and padded for the lean: the
+    // flutes reach sideways and the ball of a tilted cutter dips below the
+    // tip. Padding only ever makes the box bigger, so a segment is never
+    // skipped when it should have been sampled.
+    let lean = 0;
+    if (this.fiveAxis) {
+      const pa = this.poseAt(mv, [ax, ay, az], u);
+      const pb = this.poseAt(mv, [bx, by, bz], 1);
+      ax = pa.tip[0]; ay = pa.tip[1]; az = pa.tip[2];
+      bx = pb.tip[0]; by = pb.tip[1]; bz = pb.tip[2];
+      const sin = Math.max(Math.hypot(pa.dir[0], pa.dir[1]), Math.hypot(pb.dir[0], pb.dir[1]));
+      lean = sin * Math.max(slot.built.fluteLength, slot.built.cutRadius);
+    }
 
     // How far to advance before carving. Sweeping means the cost of a chunk
     // is the area of the band it covers, so the chunk is sized to a column
@@ -297,8 +392,8 @@ export class Simulator {
         : Math.min(Math.max(((this.columnBudget - discColumns) * cellArea) / (2 * r), 0.25), 25);
     }
 
-    const rBody = Math.max(slot.built.bodyRadius, slot.built.cutRadius);
-    const zLow = Math.min(az, bz);
+    const rBody = Math.max(slot.built.bodyRadius, slot.built.cutRadius) + lean;
+    const zLow = Math.min(az, bz) - (lean > 0 ? slot.built.cutRadius : 0);
 
     let touchesStock = false;
     if (stock) {
@@ -312,6 +407,10 @@ export class Simulator {
     const limitsOn = this.machine && this.machine.limits && this.machine.limits.enabled;
 
     if (touchesStock) {
+      // A tilted cut is stamped rather than swept, so a long chunk would
+      // just become a long inner loop; keeping the chunk short instead
+      // keeps each frame's work bounded and the orientation fresh.
+      if (lean > 0) return { active: true, stepSize: Math.min(chunk, Math.max(r, 1)) };
       return { active: true, stepSize: chunk };
     }
     if (hasObstacles) {
@@ -323,22 +422,52 @@ export class Simulator {
     return { active: false, stepSize: Infinity };
   }
 
-  /** Carve the volume swept between two tool positions, then look for crashes. */
-  sweep(mv, from, to) {
+  /** Does the tool swing during this move, so orientation has to be sampled? */
+  swings(mv) {
+    if (!this.fiveAxis) return false;
+    const a = mv.rotFrom || ZERO_ROT;
+    const b = mv.rotTo || ZERO_ROT;
+    return Math.abs(a.A - b.A) + Math.abs(a.B - b.B) + Math.abs(a.C - b.C) > 1e-9
+      || !this.isUpright(this.poseAt(mv, mv.to, 1).dir);
+  }
+
+  /**
+   * Remove the material the tool passes through between two programmed
+   * points, then look for crashes.
+   *
+   * With the tool upright this is one swept carve, which is the cheap case
+   * and the one that matters for the 3-axis programs that make up most
+   * work. Once the tool leans the swept solid stops being a translated
+   * envelope, so the tilted carver is stamped along the chunk instead —
+   * more work per millimetre, paid only where it is needed.
+   */
+  sweep(mv, from, to, u0 = 1, u1 = 1) {
     const slot = this.activeSlot;
     if (!slot) return false;
     const stock = this.stock;
-    const [x, y, z] = to;
     let removed = 0;
 
+    const poseA = this.poseAt(mv, from, u0);
+    const poseB = this.poseAt(mv, to, u1);
+    const tilted = !this.isUpright(poseA.dir) || !this.isUpright(poseB.dir);
+    const [x, y, z] = poseB.tip;
+
     if (stock) {
-      const result = stock.carveSweep(slot.built.cutEnvelope, from, to, slot.index, {
-        target: this.target,
-        tolerance: this.gougeTolerance,
-      });
-      removed = result.volume;
-      if (result.gouge) {
-        const g = result.gouge;
+      const opts = { target: this.target, tolerance: this.gougeTolerance };
+      let gouged = null;
+      if (!tilted) {
+        const result = stock.carveSweep(slot.built.cutEnvelope, poseA.tip, poseB.tip, slot.index, opts);
+        removed = result.volume;
+        gouged = result.gouge;
+      } else {
+        for (const [tip, dir] of this.stamps(poseA, poseB, slot)) {
+          const result = stock.carveTilted(slot.built.cutEnvelope, tip, dir, slot.built.fluteLength, slot.index, opts);
+          removed += result.volume;
+          if (result.gouge && (!gouged || result.gouge.depth > gouged.depth)) gouged = result.gouge;
+        }
+      }
+      if (gouged) {
+        const g = gouged;
         this.report('gouge', {
           line: mv.line,
           message: (d) => `Cut ${d.toFixed(3)} mm into the reference part — this is gouging, not stock removal.`,
@@ -368,7 +497,7 @@ export class Simulator {
 
       // Chunks can be tens of millimetres long, so the body is probed at a
       // fixed spacing along the chunk rather than only where it ends.
-      for (const p of this.probePoints(from, to)) {
+      for (const p of this.probePoints(poseA.tip, poseB.tip)) {
         const shankHit = stock.probeBody(slot.built.shankEnvelope, p[0], p[1], p[2]);
         if (shankHit) {
           this.report('deep', {
@@ -391,7 +520,7 @@ export class Simulator {
       }
     }
 
-    for (const tip of this.probePoints(from, to)) {
+    for (const tip of this.probePoints(poseA.tip, poseB.tip)) {
     if (this.fixtures && this.fixtures.length) {
       const f = checkFixtures(slot.spheres, tip, this.fixtures, 0);
       if (f) {
@@ -427,6 +556,36 @@ export class Simulator {
     }
 
     return removed > 0;
+  }
+
+  /**
+   * Tool positions along a tilted chunk, close enough together that
+   * consecutive cuts overlap rather than leaving scallops between them.
+   * The spacing is a fraction of the cutter radius, which is what decides
+   * how quickly the footprint moves off itself.
+   */
+  stamps(poseA, poseB, slot) {
+    const dx = poseB.tip[0] - poseA.tip[0];
+    const dy = poseB.tip[1] - poseA.tip[1];
+    const dz = poseB.tip[2] - poseA.tip[2];
+    const len = Math.hypot(dx, dy, dz);
+    const swing = Math.acos(Math.max(-1, Math.min(1, poseA.dir[0] * poseB.dir[0]
+      + poseA.dir[1] * poseB.dir[1] + poseA.dir[2] * poseB.dir[2])));
+    const r = Math.max(slot.built.cutRadius, 0.05);
+    const cell = this.stock ? Math.max(this.stock.dx, this.stock.dy) : 0.05;
+    const spacing = Math.max(cell, r * 0.25);
+    // The far end of the flutes travels further than the tip when the tool
+    // swings, so the swing gets a say in the count as well.
+    const arc = swing * Math.max(slot.built.fluteLength, r);
+    const n = Math.max(1, Math.min(4096, Math.ceil(Math.max(len, arc) / spacing)));
+
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      const tip = [poseA.tip[0] + dx * t, poseA.tip[1] + dy * t, poseA.tip[2] + dz * t];
+      out.push([tip, slerp(poseA.dir, poseB.dir, t)]);
+    }
+    return out;
   }
 
   /**

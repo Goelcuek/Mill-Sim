@@ -88,6 +88,8 @@ export class Kinematics {
     /** Fixture face in the work node's frame; the stock sits on it. */
     this.tableOffset = def.tableOffset || [0, 0, 0];
     this.scratch = { a: m4.create(), b: m4.create(), c: m4.create() };
+    this._refGauge = null;
+    this._refTip = [0, 0, 0];
     this.rebuild();
   }
 
@@ -261,6 +263,38 @@ export class Kinematics {
       axis,
       matrix: frame,
     };
+  }
+
+  /**
+   * The tool in part coordinates, measured from where the part zero sits.
+   *
+   * `toolInWork` answers in the work node's own frame, which is a machine
+   * fact: on a VMC with an X/Y table it moves when X moves. What the stock
+   * grid needs is the frame the part is set up in, and the tie between the
+   * two is the machine at home — with every axis at zero, the programmed
+   * point and the tool tip are the same point by definition. Subtracting
+   * that reference makes this exact for a 3-axis machine (it collapses to
+   * the programmed point) and correct for a rotary: the same X/Y/Z with the
+   * table turned puts the tool somewhere else on the part, which is the
+   * whole reason non-TCP 5-axis programs look the way they do.
+   */
+  toolInPart(values, gaugeLength = 0) {
+    if (this._refGauge !== gaugeLength) {
+      this._refGauge = gaugeLength;
+      this._refTip = this.toolInWork({}, gaugeLength).tip;
+    }
+    const ref = this._refTip;
+    const r = this.toolInWork(values, gaugeLength);
+    return {
+      tip: [r.tip[0] - ref[0], r.tip[1] - ref[1], r.tip[2] - ref[2]],
+      axis: r.axis,
+      matrix: r.matrix,
+    };
+  }
+
+  /** The tool's direction in part coordinates; only the rotaries matter. */
+  toolAxis(values, gaugeLength = 0) {
+    return this.toolInWork(values, gaugeLength).axis;
   }
 
   /**

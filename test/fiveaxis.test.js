@@ -252,3 +252,105 @@ test('a five-axis program runs end to end without warnings', () => {
   assert.ok(p.moves.every((m) => m.to.every(Number.isFinite)), 'every point is a real number');
   assert.ok(p.moves.some((m) => m.kind === 'arc'), 'the arc survived the tilt');
 });
+
+// ------------------------------------------------------------- simulator
+
+import { Simulator } from '../src/sim/simulator.js';
+import { silhouetteSpheres } from '../src/sim/collision.js';
+import { buildAssembly } from '../src/tools/assembly.js';
+import { defaultHolders } from '../src/tools/holderDefs.js';
+
+function slotFor(toolSpec) {
+  // buildAssembly builds the tool itself, so it wants the definition.
+  const built = buildAssembly({ stickout: 60 }, makeTool(toolSpec), defaultHolders()[0],
+    { spindleDiameter: 90, spindleLength: 80 });
+  return { built, index: 0, spheres: silhouetteSpheres([...built.toolPoints, ...built.holderPoints, ...built.spindlePoints]) };
+}
+
+function simulate(lines, opts = {}) {
+  const program = interpret(lines.join('\n'), { kinematics: opts.kinematics || null, gaugeLength: opts.gauge || 0 });
+  const slot = slotFor(opts.tool || { type: 'flat', diameter: 10, fluteLength: 30 });
+  const sim = new Simulator();
+  sim.load({
+    program,
+    stock: opts.stock,
+    slots: new Map([[1, slot]]),
+    fallbackSlot: slot,
+    kinematics: opts.kinematics || null,
+  });
+  sim.runAll();
+  return sim;
+}
+
+test('a three-axis program is untouched by the machine being five-axis', () => {
+  const lines = ['G90 G21 G17 G54', 'T1 M6', 'S6000 M3', 'G0 X-30 Y0 Z5',
+    'G1 Z-2 F300', 'G1 X30 F900', 'G0 Z20', 'M30'];
+  const plain = simulate(lines, { stock: blank(0.25) });
+  const five = simulate(lines, { stock: blank(0.25), kinematics: buildPreset('tableTable'), gauge: 0 });
+  near(five.removedVolume, plain.removedVolume, 1e-6, 'same material removed');
+  assert.deepEqual(five.collisions.map((c) => c.type), plain.collisions.map((c) => c.type));
+});
+
+test('a rotary table puts the cut where the part has turned to, not where X points', () => {
+  const machine = buildPreset('tableTable');
+  const gauge = slotFor({ type: 'flat', diameter: 10, fluteLength: 30 }).built.gaugeLength;
+  const s = blank(0.25);
+  simulate([
+    'G90 G21 G17 G54', 'T1 M6', 'S6000 M3',
+    'G0 X0 Y0 Z5',
+    'C90',                         // swing the table a quarter turn
+    'G0 X20 Y0',
+    'G1 Z-3 F300', 'G1 X28 F600',
+    'G0 Z20', 'M30',
+  ], { stock: s, kinematics: machine, gauge });
+
+  // In part coordinates the cut is along -Y, not +X.
+  let cutX = 0, cutY = 0, n = 0;
+  for (let j = 0; j < s.ny; j++) {
+    for (let i = 0; i < s.nx; i++) {
+      if (s.height[j * s.nx + i] > -0.5) continue;
+      cutX += s.cx(i); cutY += s.cy(j); n++;
+    }
+  }
+  assert.ok(n > 0, 'something was cut');
+  near(cutX / n, 0, 1.0, 'no material removed along the machine X axis');
+  near(cutY / n, -24, 2.0, 'the groove came out along part -Y');
+});
+
+test('a tilted move leaves a sloped floor, and the tool stays on the part', () => {
+  const machine = buildPreset('headTable');
+  const gauge = slotFor({ type: 'ball', diameter: 8, fluteLength: 30 }).built.gaugeLength;
+  const s = blank(0.2);
+  const sim = simulate([
+    'G90 G21 G17 G54', 'T1 M6', 'S8000 M3',
+    'G0 X-20 Y0 Z10',
+    'G43.4 H1',
+    'G1 X-20 Y0 Z-2 B0 F400',
+    'G1 X20 B30',                  // lean the head over as it feeds across
+    'G0 Z30', 'G49 M30',
+  ], { stock: s, kinematics: machine, gauge, tool: { type: 'ball', diameter: 8, fluteLength: 30 } });
+
+  assert.ok(sim.finished);
+  assert.ok(sim.removedVolume > 0, 'the tilted pass cut something');
+  assert.ok(s.height.every((h) => h <= 1e-9 && Number.isFinite(h)), 'no column was left invalid');
+  // Under TCP the tip follows the programmed line, so the groove runs the
+  // full width at roughly the programmed depth whatever the head is doing.
+  // A ball nose tilted by t dips r*(1 - cos t) below its tip, and the
+  // contact point slides r*sin t ahead of it, so the floor sinks a little
+  // and leans forward as the head comes over. Both ends are checked under
+  // the ball, which is where the tool is actually touching.
+  const r = 4;
+  near(s.heightAt(-18, 0), -2, 0.1, 'depth at the start of the pass');
+  const lean = rad(30);
+  near(s.heightAt(20 + r * Math.sin(lean), 0), -2 - r * (1 - Math.cos(lean)), 0.1,
+    'and under the ball at the end, after 30 degrees of lean');
+});
+
+test('travel limits are reported against the machine, not the program', () => {
+  const machine = buildPreset('tableTable');
+  assert.deepEqual(machine.violations({ X: 100, Y: 0, Z: 0, A: -30, C: 0 }), []);
+  const over = machine.violations({ X: 0, Y: 0, Z: 0, A: 60, C: 0 });
+  assert.equal(over.length, 1);
+  assert.equal(over[0].axis, 'A');
+  assert.equal(over[0].limit, 30);
+});

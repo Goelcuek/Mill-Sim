@@ -221,6 +221,10 @@ export function interpret(text, config = {}) {
   const push = (move) => {
     move.i = moves.length;
     moves.push(move);
+    // Every move ends where the rotaries now are, so the next one starts
+    // there. Leaving this to the blocks that carry an A/B/C word would make
+    // each of them look like it swung all the way from the last angle.
+    st.rotPrev = { ...st.rot };
     return move;
   };
 
