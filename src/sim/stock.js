@@ -424,6 +424,231 @@ export class Stock {
   }
 
   /**
+   * Remove material under a tool whose axis is not vertical.
+   *
+   * The heightmap still stores one surface per column, so the question for
+   * each column is the same as ever — what is the lowest point of the tool
+   * solid above it — but with the tool tilted that point no longer comes
+   * from a table lookup.
+   *
+   * Working along the vertical line through the column, with `u` the height
+   * above the tool tip's plane:
+   *
+   *     s(u)       = k + u*az                distance along the tool axis
+   *     radial²(u) = A + B*u + C*u²          distance from the axis
+   *
+   * both quadratic, with C = 1 - az² vanishing when the tool stands
+   * upright. The point is inside the cutter where s >= LE(radial²), and
+   * since every cutter shape here is convex that region is a single
+   * interval — so the search is: bracket where the tool could reach at all,
+   * find the deepest point of penetration, then bisect down to where the
+   * surface actually is.
+   *
+   * @param {import('../tools/envelope.js').Envelope} env
+   * @param {number[]} tip   tool tip in stock coordinates
+   * @param {number[]} dir   unit vector pointing up the tool from the tip
+   * @param {number} fluteLength
+   * @param {number} [toolIndex]
+   * @param {{target?:Float32Array, tolerance?:number}} [opts]
+   */
+  carveTilted(env, tip, dir, fluteLength, toolIndex = 0, opts = {}) {
+    const none = { volume: 0, gouge: null };
+    if (env.isEmpty) return none;
+
+    const ax = dir[0], ay = dir[1], az = dir[2];
+    const rMax = env.rMax;
+    const rMax2 = env.rMax2;
+    const L = Math.max(fluteLength, 1e-6);
+
+    // Footprint: the tip disc and the disc at the top of the flutes.
+    const topX = tip[0] + ax * L;
+    const topY = tip[1] + ay * L;
+    const minX = Math.min(tip[0], topX) - rMax;
+    const maxX = Math.max(tip[0], topX) + rMax;
+    const minY = Math.min(tip[1], topY) - rMax;
+    const maxY = Math.max(tip[1], topY) + rMax;
+    const reach = Math.min(tip[2], tip[2] + az * L) - rMax;
+    if (reach >= this.maxHeightIn(minX, minY, maxX, maxY)) return none;
+
+    const i0 = Math.max(0, Math.floor((minX - this.origin[0]) / this.dx - 0.5));
+    const i1 = Math.min(this.nx - 1, Math.ceil((maxX - this.origin[0]) / this.dx - 0.5));
+    const j0 = Math.max(0, Math.floor((minY - this.origin[1]) / this.dy - 0.5));
+    const j1 = Math.min(this.ny - 1, Math.ceil((maxY - this.origin[1]) / this.dy - 0.5));
+    if (i0 > i1 || j0 > j1) return none;
+
+    const lut = env.lut;
+    const nLut = env.n;
+    const invStep = env.invStep;
+    const height = this.height;
+    const cutBy = this.cutBy;
+    const nx = this.nx;
+    const base = this.base;
+    const top = this.top;
+    const tilesX = this.tilesX;
+    const tileDirty = this.tileDirty;
+    const flag = Math.min(255, toolIndex + 1);
+    const target = opts.target || null;
+    const tolerance = opts.tolerance || 0;
+
+    const le = (r2) => {
+      if (r2 >= rMax2) return Infinity;
+      const x = r2 * invStep;
+      const kk = x | 0;
+      if (kk >= nLut) return lut[nLut];
+      const a0 = lut[kk];
+      const b0 = lut[kk + 1];
+      return b0 === Infinity ? a0 : a0 + (b0 - a0) * (x - kk);
+    };
+
+    const C = 1 - az * az;
+
+    // The lowest point the whole tilted solid can reach, computed once.
+    // Most columns in a second pass are already below it, and rejecting
+    // those on a single compare is what keeps a tilted cut affordable —
+    // without it every column pays for a bracketed search.
+    const sinT = Math.sqrt(C > 0 ? C : 0);
+    let floorOffset = Infinity;
+    for (let b = 0; b <= nLut; b++) {
+      const sv = lut[b];
+      if (!Number.isFinite(sv)) continue;
+      const rb = Math.sqrt((b / nLut) * rMax2);
+      const zb = sv * az - rb * sinT;
+      if (zb < floorOffset) floorOffset = zb;
+    }
+    const zFloor = tip[2] + floorOffset;
+
+    let removed = 0;
+    let touched = false;
+    let ti0 = 0, tj0 = 0, ti1 = 0, tj1 = 0;
+    let gouge = null;
+
+    for (let j = j0; j <= j1; j++) {
+      const py = this.origin[1] + (j + 0.5) * this.dy;
+      const dy0 = py - tip[1];
+      const row = j * nx;
+      const tileRow = ((j / TILE) | 0) * tilesX;
+
+      for (let i = i0; i <= i1; i++) {
+        const px = this.origin[0] + (i + 0.5) * this.dx;
+        const dx0 = px - tip[0];
+
+        const k = dx0 * ax + dy0 * ay;
+        const P = dx0 * dx0 + dy0 * dy0;
+        const A = P - k * k;
+        const B = -2 * k * az;
+
+        // Where can the tool reach this column at all?
+        let uLo;
+        let uHi;
+        if (C > 1e-12) {
+          const disc = B * B - 4 * C * (A - rMax2);
+          if (disc <= 0) continue;
+          const sq = Math.sqrt(disc);
+          uLo = (-B - sq) / (2 * C);
+          uHi = (-B + sq) / (2 * C);
+        } else {
+          if (A >= rMax2) continue;              // upright and outside the disc
+          uLo = -1e6;
+          uHi = 1e6;
+        }
+
+        // Clip to the flute band along the tool axis.
+        if (Math.abs(az) > 1e-9) {
+          const a1 = (0 - k) / az;
+          const a2 = (L - k) / az;
+          const bLo = Math.min(a1, a2);
+          const bHi = Math.max(a1, a2);
+          if (bLo > uLo) uLo = bLo;
+          if (bHi < uHi) uHi = bHi;
+        } else if (k < 0 || k > L) {
+          continue;                              // tool lies flat, column off the band
+        }
+        if (uLo > uHi) continue;
+
+        const cell = row + i;
+        const h = height[cell];
+        if (h <= zFloor) continue;               // below anything the tool can reach
+        if (h <= tip[2] + uLo) continue;         // below anything reachable here
+
+        const g = (u) => {
+          const r2 = A + B * u + C * u * u;
+          const sv = k + u * az;
+          return sv - le(r2 < 0 ? 0 : r2);
+        };
+
+        // Deepest penetration first: g is quasi-concave on the bracket.
+        let lo = uLo;
+        let hi = uHi;
+        const R = 0.6180339887498949;
+        let x1 = hi - R * (hi - lo);
+        let x2 = lo + R * (hi - lo);
+        let f1 = g(x1);
+        let f2 = g(x2);
+        for (let it = 0; it < 14; it++) {
+          if (f1 > f2) { hi = x2; x2 = x1; f2 = f1; x1 = hi - R * (hi - lo); f1 = g(x1); }
+          else { lo = x1; x1 = x2; f1 = f2; x2 = lo + R * (hi - lo); f2 = g(x2); }
+        }
+        const uPeak = f1 > f2 ? x1 : x2;
+        if (Math.max(f1, f2) < 0) continue;      // the line misses the cutter
+
+        // A tilted tool can sit entirely below the surface without having
+        // touched it — the overhanging side of the cutter passes under
+        // standing material. A heightmap cannot hold that undercut, but it
+        // must not pretend the material was removed either. Since the solid
+        // meets this column in a single interval, the tool reaches the
+        // surface unless the surface is past the peak and outside it, which
+        // is one more evaluation rather than a second bisection.
+        const hU = h - tip[2];
+        if (hU > uHi) continue;
+        if (hU > uPeak && g(hU) < 0) continue;
+
+        // Then the lower crossing, which is the surface the tool leaves.
+        let a = uLo;
+        let b = uPeak;
+        if (g(a) >= 0) b = a;                    // already inside at the bracket end
+        else {
+          for (let it = 0; it < 20; it++) {
+            const mid = (a + b) * 0.5;
+            if (g(mid) >= 0) b = mid; else a = mid;
+          }
+        }
+        const zt = tip[2] + b;
+
+        if (h - zt <= MIN_CUT) continue;
+
+        const cut = (h < top ? h : top) - (zt > base ? zt : base);
+        if (cut > 0) removed += cut;
+        height[cell] = zt < base ? base : zt;
+        cutBy[cell] = flag;
+
+        if (target !== null) {
+          const want = target[cell];
+          if (want > -Infinity) {
+            const depth = want - height[cell];
+            if (depth > tolerance && (gouge === null || depth > gouge.depth)) {
+              gouge = { depth, x: px, y: py, z: height[cell] };
+            }
+          }
+        }
+
+        if (!touched) { ti0 = i; ti1 = i; tj0 = j; tj1 = j; touched = true; }
+        else {
+          if (i < ti0) ti0 = i; else if (i > ti1) ti1 = i;
+          if (j < tj0) tj0 = j; else if (j > tj1) tj1 = j;
+        }
+        tileDirty[tileRow + ((i / TILE) | 0)] = 1;
+      }
+    }
+
+    if (!touched) return none;
+    this.markDirtyRect(ti0, tj0, ti1, tj1);
+    this.version++;
+    const volume = removed * this.dx * this.dy;
+    this.removedVolume += volume;
+    return { volume, gouge };
+  }
+
+  /**
    * Test the non-cutting body of an assembly against remaining material.
    *
    * @returns {null | {x:number, y:number, z:number, depth:number}}

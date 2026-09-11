@@ -7,6 +7,7 @@
 
 import { lex } from './lexer.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
+import * as m4 from '../core/mat4.js';
 
 export const DEFAULT_CONFIG = {
   /** Rapid traverse used for time estimates, mm/min. */
@@ -30,6 +31,13 @@ export const DEFAULT_CONFIG = {
   arcTolerance: 0.008,
   /** Safety valve for runaway subprogram loops. */
   maxBlocks: 400000,
+  /**
+   * The machine, when one is loaded. Only the 5-axis codes need it: G53.1
+   * has to solve the rotaries against a real chain.
+   */
+  kinematics: null,
+  /** Tip distance below the spindle gauge line, for those solves. */
+  gaugeLength: 0,
   /**
    * Units of the P word in G04. Fanuc/Haas read it as milliseconds,
    * LinuxCNC as seconds. G04 X/U is always seconds.
@@ -61,6 +69,19 @@ class State {
     this.lengthComp = false;
     this.hNumber = 0;
     this.cutterComp = 0;         // 40/41/42
+    /** Rotary axis positions in degrees, and where they were last block. */
+    this.rot = { A: 0, B: 0, C: 0 };
+    this.rotPrev = { A: 0, B: 0, C: 0 };
+    /** Last programmed point in the tilted plane's own coordinates. */
+    this.tiltLocal = [0, 0, 0];
+    this.tiltLocalPrev = [0, 0, 0];
+    /** Tool centre point control: 0 off, 4 = G43.4, 5 = G43.5. */
+    this.tcp = 0;
+    /**
+     * Tilted working plane from G68.2, or null. Deliberately NOT called
+     * `plane` — that is the G17/18/19 arc plane and they are unrelated.
+     */
+    this.tilt = null;
     this.retractMode = 98;
     this.cycleR = 0;
     this.cycleZ = 0;
@@ -77,6 +98,39 @@ class State {
 }
 
 const toMM = (v, metric) => (metric ? v : v * MM_PER_INCH);
+
+/**
+ * Build the frame G68.2 defines.
+ *
+ * Fanuc's default (P1) reads I, J, K as ZXZ Euler angles in degrees about
+ * the rotating axes, applied after shifting the origin to X, Y, Z. P2 is
+ * the roll-pitch-yaw form about the fixed axes. Both are handled because
+ * posts differ on which they emit, and picking the wrong one tilts the
+ * whole operation the wrong way.
+ */
+export function tiltedPlaneMatrix(origin, i, j, k, mode = 1) {
+  const out = m4.fromTranslation(m4.create(), origin);
+  const tmp = m4.create();
+  const rot = m4.create();
+
+  if (mode === 2) {
+    m4.fromRotation(rot, [0, 0, 1], deg2rad(k));
+    m4.multiply(tmp, out, rot);
+    m4.fromRotation(rot, [0, 1, 0], deg2rad(j));
+    m4.multiply(out, tmp, rot);
+    m4.fromRotation(rot, [1, 0, 0], deg2rad(i));
+    m4.multiply(tmp, out, rot);
+    return m4.copy(out, tmp);
+  }
+
+  m4.fromRotation(rot, [0, 0, 1], deg2rad(i));
+  m4.multiply(tmp, out, rot);
+  m4.fromRotation(rot, [1, 0, 0], deg2rad(j));
+  m4.multiply(out, tmp, rot);
+  m4.fromRotation(rot, [0, 0, 1], deg2rad(k));
+  m4.multiply(tmp, out, rot);
+  return m4.copy(out, tmp);
+}
 
 function dist3(a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
@@ -180,6 +234,9 @@ export function interpret(text, config = {}) {
       from,
       to: target.slice(),
       path: [from[0], from[1], from[2], target[0], target[1], target[2]],
+      rotFrom: { ...st.rotPrev },
+      rotTo: { ...st.rot },
+      tcp: st.tcp,
       feed: kind === 'rapid' ? cfg.rapidRate : feed,
       rpm: st.rpm,
       spindleDir: st.spindleDir,
@@ -193,9 +250,28 @@ export function interpret(text, config = {}) {
     return move;
   };
 
-  const emitArc = (line, target, center, ccw, feed) => {
+  /**
+   * @param {null|{from:number[], to:number[], center:number[]}} local
+   *   When a tilted plane is active the arc is a circle only in that plane,
+   *   so it is flattened there and the polyline brought out afterwards.
+   */
+  const emitArc = (line, target, center, ccw, feed, local = null) => {
     const from = st.pos.slice();
-    const path = flattenArc(from, target, center, st.plane, ccw, cfg.arcTolerance);
+    let centre = center;
+    let path;
+    if (local) {
+      const lp = flattenArc(local.from, local.to, local.center, st.plane, ccw, cfg.arcTolerance);
+      path = new Array(lp.length);
+      for (let i = 0; i < lp.length; i += 3) {
+        const w = planeToWork([lp[i], lp[i + 1], lp[i + 2]]);
+        path[i] = w[0];
+        path[i + 1] = w[1];
+        path[i + 2] = w[2];
+      }
+      centre = planeToWork(local.center);
+    } else {
+      path = flattenArc(from, target, center, st.plane, ccw, cfg.arcTolerance);
+    }
     let len = 0;
     for (let i = 3; i < path.length; i += 3) {
       len += Math.hypot(path[i] - path[i - 3], path[i + 1] - path[i - 2], path[i + 2] - path[i - 1]);
@@ -206,7 +282,10 @@ export function interpret(text, config = {}) {
       line,
       from,
       to: target.slice(),
-      center: center.slice(),
+      rotFrom: { ...st.rotPrev },
+      rotTo: { ...st.rot },
+      tcp: st.tcp,
+      center: centre.slice(),
       plane: st.plane,
       ccw,
       path,
@@ -229,6 +308,9 @@ export function interpret(text, config = {}) {
       line,
       from: st.pos.slice(),
       to: st.pos.slice(),
+      rotFrom: { ...st.rot },
+      rotTo: { ...st.rot },
+      tcp: st.tcp,
       path: [st.pos[0], st.pos[1], st.pos[2], st.pos[0], st.pos[1], st.pos[2]],
       feed: 0,
       rpm: st.rpm,
@@ -241,13 +323,75 @@ export function interpret(text, config = {}) {
     });
   };
 
-  /** Resolve an axis word into a scene coordinate. */
+  /**
+   * Resolve the three linear axis words into work coordinates.
+   *
+   * With a tilted working plane in force the programmed point is expressed
+   * in that plane, so it is transformed out of it before anything else sees
+   * it — everything downstream keeps working in one frame.
+   */
+  const resolveLinear = (axis, metric, machineCoords) => {
+    if (st.tilt && !machineCoords) {
+      // The block is written in the plane's own frame, so the position is
+      // tracked there too: a G91 delta is a step along the plane's axes,
+      // and an arc's I/J are offsets in the plane. Keeping the local point
+      // rather than re-deriving it from the machine position is what lets
+      // arcs stay circles once the frame is tilted.
+      const prev = st.tiltLocal;
+      const local = [0, 1, 2].map((i) => {
+        const w = [axis.X, axis.Y, axis.Z][i];
+        const d = w === undefined ? undefined : toMM(w, metric);
+        if (st.absolute) return d === undefined ? prev[i] : d;
+        return prev[i] + (d === undefined ? 0 : d);
+      });
+      st.tiltLocalPrev = prev;
+      st.tiltLocal = local;
+      return planeToWork(local);
+    }
+
+    return [0, 1, 2].map((i) => {
+      const w = [axis.X, axis.Y, axis.Z][i];
+      if (w === undefined) return st.pos[i];
+      const v = toMM(w, metric);
+      if (machineCoords) return cfg.machineZero[i] + v;
+      if (st.absolute) return st.offset()[i] + v;
+      return st.pos[i] + v;
+    });
+  };
+
+  /** A point in the active tilted plane, expressed in work coordinates. */
+  const planeToWork = (local) => {
+    const w = m4.transformPoint([0, 0, 0], st.tilt, local);
+    const off = st.offset();
+    return [w[0] + off[0], w[1] + off[1], w[2] + off[2]];
+  };
+
+  /** The reverse, used to pick up the current point when a plane is set. */
+  const workToPlane = (pos) => {
+    const off = st.offset();
+    const rel = [pos[0] - off[0], pos[1] - off[1], pos[2] - off[2]];
+    return m4.transformPoint([0, 0, 0], m4.invertRigid(m4.create(), st.tilt), rel);
+  };
+
+  /** Single-axis form, still needed by G28/G30 and the canned cycles. */
   const resolveAxis = (idx, word, metric, machineCoords) => {
     if (word === undefined) return st.pos[idx];
     const v = toMM(word, metric);
     if (machineCoords) return cfg.machineZero[idx] + v;
     if (st.absolute) return st.offset()[idx] + v;
     return st.pos[idx] + v;
+  };
+
+  /** Apply A/B/C words to the rotary state. */
+  const applyRotaries = (axis) => {
+    st.rotPrev = { ...st.rot };
+    let moved = false;
+    for (const L of ['A', 'B', 'C']) {
+      if (axis[L] === undefined) continue;
+      st.rot[L] = st.absolute ? axis[L] : st.rot[L] + axis[L];
+      moved = true;
+    }
+    return moved;
   };
 
   const callStack = [];
@@ -333,6 +477,61 @@ export function interpret(text, config = {}) {
           if (st.cutterComp !== code) warn(b.line, `Cutter compensation G${code} is acknowledged but not applied; the simulated path is the programmed centreline.`);
           st.cutterComp = code;
           break;
+        case 43.4:
+        case 43.5:
+          st.lengthComp = true;
+          st.tcp = code === 43.4 ? 4 : 5;
+          events.push({ line: b.line, type: 'tcp', moveIndex: moves.length, text: `Tool centre point control on (G${code})` });
+          break;
+        case 53.1: {
+          // Orient the tool normal to the tilted plane. The rotary values
+          // are solved against the machine, so this needs one to be loaded.
+          if (!st.tilt) {
+            warn(b.line, 'G53.1 without an active G68.2 plane; nothing to align to.', 'error');
+            break;
+          }
+          const normal = m4.normalize(m4.transformDir([0, 0, 0], st.tilt, [0, 0, 1]));
+          if (!cfg.kinematics || !cfg.kinematics.rotaries().length) {
+            warn(b.line, 'G53.1 needs a machine with rotary axes; load a 5-axis machine in Setup.', 'error');
+            break;
+          }
+          const sol = cfg.kinematics.rotariesForToolAxis(normal, st.rot, cfg.gaugeLength || 0);
+          if (!sol) {
+            warn(b.line, `G53.1 cannot reach a tool axis of ${normal.map((v) => v.toFixed(3)).join(', ')} within the machine's travel.`, 'error');
+            break;
+          }
+          st.rotPrev = { ...st.rot };
+          Object.assign(st.rot, sol);
+          events.push({
+            line: b.line, type: 'align', moveIndex: moves.length,
+            text: `G53.1 aligned the tool: ${Object.entries(sol).map(([k, v]) => `${k}${v.toFixed(3)}`).join(' ')}`,
+          });
+          // A rotary-only move, so the machine actually swings there.
+          emitLinear(b.line, 'rapid', st.pos.slice(), cfg.rapidRate);
+          break;
+        }
+        case 68.2: {
+          const origin = [
+            axis.X !== undefined ? toMM(axis.X, st.metric) : 0,
+            axis.Y !== undefined ? toMM(axis.Y, st.metric) : 0,
+            axis.Z !== undefined ? toMM(axis.Z, st.metric) : 0,
+          ];
+          const mode = p === 2 ? 2 : 1;
+          st.tilt = tiltedPlaneMatrix(origin, iArc || 0, jArc || 0, kArc || 0, mode);
+          // Carry the current point into the new frame so the first block
+          // in the plane can leave any axis word out.
+          st.tiltLocal = workToPlane(st.pos);
+          st.tiltLocalPrev = st.tiltLocal;
+          events.push({
+            line: b.line, type: 'plane', moveIndex: moves.length,
+            text: `G68.2 tilted plane at ${origin.join(', ')} (${mode === 2 ? 'RPY' : 'Euler ZXZ'} ${iArc || 0}, ${jArc || 0}, ${kArc || 0})`,
+          });
+          break;
+        }
+        case 69:
+          if (st.tilt) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G69 tilted plane cancelled' });
+          st.tilt = null;
+          break;
         case 43:
           st.lengthComp = true;
           st.hNumber = h !== undefined ? h : st.hNumber;
@@ -340,7 +539,12 @@ export function interpret(text, config = {}) {
           else if (st.tool && h !== st.tool) warn(b.line, `G43 H${h} does not match the active tool T${st.tool}. On the machine this is a length-offset crash.`, 'error');
           break;
         case 44: st.lengthComp = true; st.hNumber = h !== undefined ? h : st.hNumber; break;
-        case 49: st.lengthComp = false; st.hNumber = 0; break;
+        case 49:
+          st.lengthComp = false;
+          st.hNumber = 0;
+          if (st.tcp) events.push({ line: b.line, type: 'tcp', moveIndex: moves.length, text: 'Tool centre point control off (G49)' });
+          st.tcp = 0;
+          break;
         case 53: machineCoords = true; break;
         case 54: case 55: case 56: case 57: case 58: case 59: st.wcs = `G${code}`; break;
         case 61: case 61.1: case 64: break;
@@ -508,16 +712,22 @@ export function interpret(text, config = {}) {
       continue;
     }
 
-    if (motion === 80 || !hasAxisWord) {
+    const hasRotaryWord = axis.A !== undefined || axis.B !== undefined || axis.C !== undefined;
+    if (hasRotaryWord) applyRotaries(axis);
+
+    if (motion === 80 || (!hasAxisWord && !hasRotaryWord)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');
       continue;
     }
 
-    const target = [
-      resolveAxis(0, axis.X, st.metric, machineCoords),
-      resolveAxis(1, axis.Y, st.metric, machineCoords),
-      resolveAxis(2, axis.Z, st.metric, machineCoords),
-    ];
+    if (!hasAxisWord && hasRotaryWord) {
+      // A rotary-only block still moves the machine, and on a table machine
+      // it moves the tool relative to the part.
+      emitLinear(b.line, motion === 0 ? 'rapid' : 'feed', st.pos.slice(), st.feed > 0 ? st.feed : 100);
+      continue;
+    }
+
+    const target = resolveLinear(axis, st.metric, machineCoords);
 
     if (motion === 0) {
       emitLinear(b.line, 'rapid', target, cfg.rapidRate);
@@ -526,18 +736,32 @@ export function interpret(text, config = {}) {
       emitLinear(b.line, 'feed', target, st.feed > 0 ? st.feed : 100);
     } else if (motion === 2 || motion === 3) {
       const ccw = motion === 3;
-      const center = arcCentre(b.line, target, { i: iArc, j: jArc, k: kArc, r }, warn);
+      const feed = st.feed > 0 ? st.feed : 100;
+      const words = { i: iArc, j: jArc, k: kArc, r };
+      const tilted = st.tilt && !machineCoords;
+      const from = tilted ? st.tiltLocalPrev : st.pos;
+      const to = tilted ? st.tiltLocal : target;
+      const center = arcCentre(b.line, to, words, warn, from, tilted ? [0, 0, 0] : null);
       if (!center) {
-        emitLinear(b.line, 'feed', target, st.feed > 0 ? st.feed : 100);
+        emitLinear(b.line, 'feed', target, feed);
+      } else if (tilted) {
+        emitArc(b.line, target, center, ccw, feed, { from, to, center });
       } else {
-        emitArc(b.line, target, center, ccw, st.feed > 0 ? st.feed : 100);
+        emitArc(b.line, target, center, ccw, feed);
       }
     }
   }
 
-  /** Compute an arc centre from IJK or R for the current plane. */
-  function arcCentre(line, target, words, warnFn) {
-    const p0 = st.pos;
+  /**
+   * Compute an arc centre from IJK or R for the current plane.
+   *
+   * `p0` and `target` are in whatever frame the block was written in — work
+   * coordinates normally, the tilted plane's own frame under G68.2 — and
+   * `absBase` is where an absolute centre (G90.1) is measured from in that
+   * same frame.
+   */
+  function arcCentre(line, target, words, warnFn, p0 = st.pos, absBase = null) {
+    const base = absBase || st.offset();
     const ax = st.plane === 18 ? [2, 0] : st.plane === 19 ? [1, 2] : [0, 1];
     const offs = st.plane === 18 ? [words.k, words.i] : st.plane === 19 ? [words.j, words.k] : [words.i, words.j];
     const hasIJK = offs[0] !== undefined || offs[1] !== undefined;
@@ -546,7 +770,7 @@ export function interpret(text, config = {}) {
       const c = p0.slice();
       for (let n = 0; n < 2; n++) {
         const v = offs[n] === undefined ? 0 : toMM(offs[n], st.metric);
-        c[ax[n]] = st.arcAbsolute ? st.offset()[ax[n]] + v : p0[ax[n]] + v;
+        c[ax[n]] = st.arcAbsolute ? base[ax[n]] + v : p0[ax[n]] + v;
       }
       // Sanity check: the two radii should agree.
       const r0 = Math.hypot(p0[ax[0]] - c[ax[0]], p0[ax[1]] - c[ax[1]]);
