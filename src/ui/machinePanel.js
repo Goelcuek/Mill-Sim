@@ -90,9 +90,17 @@ export class MachinePanel extends Panel {
       rot.length ? ` · rotaries ${rot.map((n) => n.letter).join(' and ')}` : ' · no rotaries',
     ]);
 
+    // A machine loaded from a file is not one of the presets, so the list
+    // says so rather than naming whichever preset happened to be showing
+    // when it was loaded.
+    const custom = app.state.machine.preset === 'custom';
+    const options = Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label }));
+    if (custom) options.unshift({ value: 'custom', label: `${k.name} (loaded)` });
+
     return section('Machine', [
-      select('Start from', Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
+      select(custom ? 'Machine' : 'Start from', options,
         app.state.machine.preset, (v) => {
+          if (v === 'custom') return;
           app.setMachine({ preset: v });
           this.selectedId = null;
           this.render();

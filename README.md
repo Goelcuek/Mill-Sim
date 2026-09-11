@@ -72,6 +72,13 @@ work-plane and tool-centre-point codes are interpreted, the tool is carved
 at whatever angle the machine puts it, and the rig in the viewport moves the
 way the real machine does.
 
+Your own machine goes in as JSON: **Machine › Layout › Load machine…**.
+`examples/machines/fidia-kr199.json` is a worked example — a bridge machine
+with a fixed table and an A/C birotary head, X Y Z C A all in series — to
+copy and edit. The chain is the part that has to be right; travels and
+pivot distances are numbers off your machine. **Save machine…** writes the
+current chain back out.
+
 Until you import castings, each preset draws itself: a plinth with a chip
 skirt, a column with ways down its front face, a T-slotted table on a
 saddle, telescoping way covers, a trunnion with two cheeks and a cradle
@@ -455,6 +462,7 @@ src/
     ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
 examples/             the five example programs
+  machines/           a worked machine definition to copy
 scripts/              static server, smoke test, single-file build
 test/                 unit tests (node --test)
 dist/mill-sim.html    self-contained build, committed so it can just be opened

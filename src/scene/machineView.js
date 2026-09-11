@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import * as m4 from '../core/mat4.js';
 import { Kinematics } from '../machine/kinematics.js';
-import { buildPreset } from '../machine/presets.js';
+import { buildPreset, PRESETS } from '../machine/presets.js';
 import { TONES, buildCasting } from './castings.js';
 
 export const DEFAULT_MACHINE = {
@@ -101,7 +101,13 @@ export class MachineView {
   // ---- configuration -----------------------------------------------------
 
   setConfig(cfg) {
-    const changedPreset = cfg && cfg.preset && cfg.preset !== this.config.preset;
+    // Only a name that is actually a preset rebuilds the chain. A machine
+    // loaded from a file carries a name that is not in the list, and
+    // buildPreset falls back to the 3-axis VMC for anything it does not
+    // recognise — so this used to throw the imported machine away the next
+    // time any unrelated setting changed.
+    const named = cfg && cfg.preset;
+    const changedPreset = !!named && PRESETS[named] && named !== this.config.preset;
     this.config = {
       ...DEFAULT_MACHINE,
       ...cfg,

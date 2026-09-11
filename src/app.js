@@ -368,7 +368,8 @@ export class App {
    * block.
    */
   setMachine(patch) {
-    const presetChanged = patch.preset && patch.preset !== this.state.machine.preset;
+    const presetChanged = patch.preset && patch.preset !== 'custom'
+      && patch.preset !== this.state.machine.preset;
     const chainChanged = presetChanged
       || patch.spindleDiameter !== undefined || patch.spindleLength !== undefined;
     Object.assign(this.state.machine, patch);
@@ -419,6 +420,8 @@ export class App {
       const def = JSON.parse(await file.text());
       if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('That file has no axes in it.');
       this.machineView.setKinematics(new Kinematics(def));
+      // It is no longer one of the presets, and the picker should say so.
+      this.state.machine.preset = 'custom';
       for (const p of this.machineParts.parts) {
         if (!this.machineView.nodeGroups.has(p.nodeId)) p.nodeId = null;
       }

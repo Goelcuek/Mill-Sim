@@ -329,6 +329,14 @@ export class Viewer {
     const radius = Math.max(size.length() * 0.5, 5);
     const dist = (radius / Math.sin((this.camera.fov * Math.PI) / 360)) * factor * 0.5;
 
+    // Distance fog has to follow the scene. Fixed at a couple of metres it
+    // is invisible on a small part and, on a bridge machine four metres
+    // across, fades the whole machine into the backdrop.
+    if (this.scene.fog) {
+      this.scene.fog.near = Math.max(dist * 1.5, 400);
+      this.scene.fog.far = Math.max(dist * 4.5, 2000);
+    }
+
     const dir = this.camera.position.clone().sub(this.controls.target);
     if (dir.lengthSq() < 1e-6) dir.set(1, -1, 0.8);
     dir.normalize().multiplyScalar(Math.max(dist, 20));
