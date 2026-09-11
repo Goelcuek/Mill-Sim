@@ -169,9 +169,13 @@ export class MachinePanel {
       parent: parent ? parent.id : null,
       limits: { min: -360, max: 360 },
     });
-    // Anything the parent used to carry now rides on the new axis, which is
-    // what inserting a joint into a chain means.
-    for (const child of k.children(node.parent)) child.parent = node.id;
+    // Where the parent carries exactly one thing, the new axis goes between
+    // them — that is what "a W axis between the ram and the spindle" means,
+    // and it is the usual reason to add one. Where the parent forks, as the
+    // base does between the head and the table, there is no unambiguous
+    // link to insert into, so the new axis is simply carried alongside.
+    const siblings = k.children(node.parent);
+    if (siblings.length === 1) siblings[0].parent = node.id;
     k.nodes.push(node);
     this.selectedId = node.id;
     this.commit();
@@ -236,11 +240,19 @@ export class MachinePanel {
         field('Max', node.limits.max, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, max: Number(v) } }) }),
       ]));
       body.push(row([
-        select('Slaved to', masterOptions, node.slaveTo || '', (v) => set({ slaveTo: v || null })),
+        select('Slaved to', masterOptions, node.slaveTo || '', (v) => {
+          // Slaving an axis also moves it into its master's folder, unless
+          // it already rides on it further down the chain. That keeps one
+          // meaning for the indentation: what carries what.
+          const patch = { slaveTo: v || null };
+          if (v && !k.pathTo(node.id).some((n) => n.id === v)) patch.parent = v;
+          set(patch);
+        }),
         field('Ratio', node.slaveRatio, { type: 'number', step: 0.001, onChange: (v) => set({ slaveRatio: Number(v) || 1 }) }),
       ]));
       if (node.slaveTo) {
-        body.push(el('div.hint', {}, 'A slaved axis ignores its own word and follows its master, so it is drawn inside the master’s folder.'));
+        const master = k.byId.get(node.slaveTo);
+        body.push(el('div.hint', {}, `This axis ignores its own word and follows ${master ? master.name : 'its master'}${node.slaveRatio !== 1 ? ` at ${fmt(node.slaveRatio, 3)}×` : ''}, which is why it sits in that folder.`));
       }
     }
 
