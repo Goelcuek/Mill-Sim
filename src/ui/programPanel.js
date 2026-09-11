@@ -1,31 +1,39 @@
-// Program panel: the G-code editor, what the interpreter made of it, and
-// everything it wants to warn you about before you press play.
+// Program panel: the G-code, and what the interpreter made of it.
+//
+// Two pages. The editor keeps its own DOM across redraws — a textarea that
+// is thrown away loses the caret, the scroll position and the undo stack —
+// so switching pages detaches it rather than rebuilding it.
 
 import { el, button, row, section, clear, select, download, pickFile } from './dom.js';
+import { Panel, actionRow } from './panel.js';
 import { GcodeEditor } from './editor.js';
 import { fmt, fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
 
-export class ProgramPanel {
+export class ProgramPanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel.panel-program');
+    super(app, [
+      { id: 'editor', label: 'G-code', icon: 'open', hint: 'Open, edit and re-read the program', render: ProgramPanel.prototype.editorPage },
+      { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
+    ]);
+    this.root.classList.add('panel-program');
     this.editorHost = el('div.editor-host');
     this.summaryHost = el('div.summary-host');
     this.editor = null;
     this.render();
   }
 
-  render() {
-    clear(this.root);
+  // ---- pages -------------------------------------------------------------
+
+  editorPage() {
     const app = this.app;
-
-    this.root.appendChild(el('div.toolbar', {}, [
-      el('span.hint', {}, 'Open, save and load examples from the ribbon above.'),
-    ]));
-
-    this.root.appendChild(this.editorHost);
-    this.root.appendChild(this.summaryHost);
+    const bar = el('div.toolbar', {}, [
+      button('Open…', () => this.openFile(), { variant: 'primary' }),
+      button('Save', () => this.saveFile(), { disabled: !this.editor || !this.editor.value }),
+      button('Re-read', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName), { title: 'Interpret the text as it stands now' }),
+      select('Examples', [{ value: '', label: 'Load an example…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '',
+        (v, e) => { if (v === '') return; e.target.value = ''; this.loadExampleAt(Number(v)); }),
+    ]);
 
     if (!this.editor) {
       this.editor = new GcodeEditor(this.editorHost, {
@@ -36,11 +44,17 @@ export class ProgramPanel {
         onSeekLine: (line) => this.app.seekToLine(line),
       });
       if (this.app.state.source) this.editor.setValue(this.app.state.source);
-    } else {
+    } else if (this.editor.wrap.parentNode !== this.editorHost) {
       this.editorHost.appendChild(this.editor.wrap);
     }
+    if (this.app.state.program) this.editor.setMarkers(this.app.state.program.warnings);
 
+    return [bar, this.editorHost];
+  }
+
+  summaryPage() {
     this.refreshSummary();
+    return [this.summaryHost];
   }
 
   setText(text) {
@@ -51,17 +65,13 @@ export class ProgramPanel {
     if (this.editor) this.editor.setActiveLine(line);
   }
 
-  refresh() {
-    this.refreshSummary();
-  }
-
   async openFile() {
     const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.mpf,.eia');
     if (!file) return;
     const text = await file.text();
     this.setText(text);
     this.app.loadProgram(text, file.name);
-    this.app.setTab('program');
+    this.app.setPage('program', 'editor');
   }
 
   saveFile() {
@@ -79,11 +89,17 @@ export class ProgramPanel {
       this.setText(code);
       if (ex.setup) app.applyExampleSetup(ex.setup);
       app.loadProgram(code, `${ex.name}.nc`);
-      app.setTab('program');
+      app.setPage('program', 'editor');
       app.notify(ex.description, 'ok');
     } catch (err) {
       app.notify(err.message, 'error');
     }
+  }
+
+  /** Called by the app on every re-interpret; harmless when off-screen. */
+  refresh() {
+    if (this.page === 'summary') this.render();
+    else if (this.editor && this.app.state.program) this.editor.setMarkers(this.app.state.program.warnings);
   }
 
   refreshSummary() {
@@ -94,8 +110,6 @@ export class ProgramPanel {
       this.summaryHost.appendChild(el('div.hint', {}, 'Open a program or pick an example to begin.'));
       return;
     }
-
-    if (this.editor) this.editor.setMarkers(program.warnings);
 
     const s = program.stats;
     const b = s.bounds;
@@ -118,9 +132,9 @@ export class ProgramPanel {
       ])),
     ]);
 
-    this.summaryHost.appendChild(section('Program', [grid, extents, row([
-      button('Fit view to path', () => this.app.fitToProgram()),
-      button('Fit stock to path', () => this.app.fitStockToProgram()),
+    this.summaryHost.appendChild(section('Program', [grid, extents, actionRow([
+      { label: 'Fit the view to the path', onClick: () => this.app.fitToProgram() },
+      { label: 'Fit the stock to the path', onClick: () => this.app.fitStockToProgram() },
     ])]));
 
     const errors = program.warnings.filter((w) => w.severity === 'error');
@@ -129,8 +143,9 @@ export class ProgramPanel {
       this.summaryHost.appendChild(section(`Interpreter notes (${errors.length} error${errors.length === 1 ? '' : 's'}, ${warns.length} warning${warns.length === 1 ? '' : 's'})`, [
         el('ul.issues', {}, program.warnings.slice(0, 120).map((w) => el(`li.issue-${w.severity}`, {
           onclick: () => {
-            this.editor.focusLine(w.line);
             this.app.seekToLine(w.line);
+            this.app.setPage('program', 'editor');
+            if (this.editor) this.editor.focusLine(w.line);
           },
           title: 'Jump to this line',
         }, [el('span.issue-line', {}, `L${w.line}`), w.message]))),

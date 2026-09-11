@@ -1,10 +1,13 @@
-// Setup: the job. Stock, where zero is, what is clamped around it, and the
-// machine it all sits in.
+// Setup: the job. The block, where zero is, and what is clamped around it.
 //
-// Models used to live in their own tab, which was wrong — a vice and a set
-// of parallels are part of setting up a job, not a separate activity.
+// Three pages, and everything that acts on them lives here rather than in
+// the ribbon: the ribbon says which page you are on, this says what is on
+// it. Fixtures are the one thing on these pages that gets created from
+// nothing, so that is the one thing behind an Add button and a window.
 
-import { el, field, select, checkbox, button, row, section, clear, pickFile } from './dom.js';
+import { el, field, select, button, row, section } from './dom.js';
+import { Panel, addBar, actionRow } from './panel.js';
+import { openFixtureDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
 import { fmt } from '../core/util.js';
 import { RESOLUTIONS } from '../app.js';
@@ -12,33 +15,32 @@ import { RESOLUTIONS } from '../app.js';
 const AXES = ['X', 'Y', 'Z'];
 const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']];
 
-export class SetupPanel {
+export class SetupPanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel');
+    super(app, [
+      { id: 'stock', label: 'Stock', icon: 'cube', hint: 'The block, where it sits and how finely it is simulated', render: SetupPanel.prototype.stockPage },
+      { id: 'origin', label: 'Work offsets', icon: 'target', hint: 'Where X0 Y0 Z0 is for each offset', render: SetupPanel.prototype.originPage },
+      { id: 'fixtures', label: 'Fixtures', icon: 'vice', hint: 'Vices, clamps, parallels and reference parts', badge: () => app.models.models.length || null, render: SetupPanel.prototype.fixturesPage },
+    ]);
     this.gizmoMode = 'translate';
     this.importOpts = { units: 'mm', role: 'fixture', recentre: true };
     app.models.onChange = () => this.refresh();
     this.render();
   }
 
-  refresh() { this.render(); }
+  // ---- pages -------------------------------------------------------------
 
-  render() {
-    if (this.rendering) { this.queued = true; return; }
-    this.rendering = true;
-    const scrollTop = this.root.scrollTop;
-    clear(this.root);
-    this.root.appendChild(this.stockSection());
-    this.root.appendChild(this.originSection());
-    this.root.appendChild(this.modelsSection());
+  stockPage() {
+    return [this.stockSection()];
+  }
+
+  originPage() {
+    return [this.originSection()];
+  }
+
+  fixturesPage() {
     const sel = this.app.models.selected;
-    if (sel) this.root.appendChild(this.placementSection(sel));
-    this.root.appendChild(this.machineSection());
-    this.root.appendChild(this.displaySection());
-    this.root.scrollTop = scrollTop;
-    this.rendering = false;
-    if (this.queued) { this.queued = false; this.render(); }
+    return [this.modelsSection(), sel ? this.placementSection(sel) : null];
   }
 
   // ---- stock -------------------------------------------------------------
@@ -91,20 +93,25 @@ export class SetupPanel {
           this.refresh();
         },
       }))),
-      row([button('Move by two points…', () => app.moveStockByPoints(), { title: 'Click a point on the stock, then click its destination' })]),
+      actionRow([
+        { label: 'Move by two points…', onClick: () => app.moveStockByPoints(), hint: 'Click a point on the stock, then click its destination' },
+        { label: 'Centre on zero', onClick: () => { const sz = app.state.stock.size; app.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.refresh(); } },
+      ]),
+      actionRow([
+        {
+          label: 'Fit to the program',
+          disabled: !app.state.program,
+          hint: app.state.program ? 'Size the block around the toolpath' : 'Load a program first',
+          onClick: () => { app.fitStockToProgram(); this.refresh(); },
+        },
+        { label: 'Reset the cut', onClick: () => app.resetStock(), hint: 'Put the material back and start the run over' },
+      ]),
       el('label.field', {}, [
         el('span.field-label', {}, ['Simulation resolution ', resLabel]),
         res,
       ]),
       info,
       el('div.hint', {}, 'Finer cells give sharper corners and scallops but cost memory. 0.2–0.4 mm suits most parts; 0.025 mm is for inspecting a finish.'),
-      row([
-        el('label.field', {}, [
-          el('span.field-label', {}, 'Material colour'),
-          el('input', { type: 'color', value: app.state.display.stockColor, oninput: (e) => app.setDisplay({ stockColor: e.target.value }) }),
-        ]),
-        checkbox('Colour cuts by tool', app.state.display.toolColors, (v) => app.setDisplay({ toolColors: v })),
-      ]),
     ]);
   }
 
@@ -146,21 +153,22 @@ export class SetupPanel {
       el('div.hint', { html: `Scene position of each work origin. <b>${editing}</b> is the one the placement tools act on — click another name to switch.` }),
       header,
       ...rows,
-      row([
-        button(`Set ${editing} by clicking…`, () => app.setOriginByPoint(), { variant: 'primary', title: 'Click the point that should read X0 Y0 Z0' }),
-        button('Move by two points…', () => app.moveOriginByPoints()),
+      actionRow([
+        { label: `Set ${editing} by clicking…`, variant: 'primary', hint: 'Click the point that should read X0 Y0 Z0', onClick: () => app.setOriginByPoint() },
+        { label: 'Move by two points…', onClick: () => app.moveOriginByPoints() },
       ]),
-      row([
-        button('Zero to stock corner', () => {
-          const st = app.stock;
-          app.applyWcs(editing, [st.origin[0], st.origin[1], st.top]);
-        }, { title: 'Minimum X/Y corner of the top face' }),
-        button('Zero to stock centre', () => {
-          const st = app.stock;
-          app.applyWcs(editing, [st.origin[0] + st.size[0] / 2, st.origin[1] + st.size[1] / 2, st.top]);
-        }, { title: 'Centre of the top face' }),
+      actionRow([
+        {
+          label: 'Zero to stock corner',
+          hint: 'Minimum X/Y corner of the top face',
+          onClick: () => { const st = app.stock; app.applyWcs(editing, [st.origin[0], st.origin[1], st.top]); },
+        },
+        {
+          label: 'Zero to stock centre',
+          hint: 'Centre of the top face',
+          onClick: () => { const st = app.stock; app.applyWcs(editing, [st.origin[0] + st.size[0] / 2, st.origin[1] + st.size[1] / 2, st.top]); },
+        },
       ]),
-      checkbox('Show origin markers', app.state.display.origins, (v) => app.setDisplay({ origins: v })),
       row([
         field('Home / G28 Z', app.state.machineZero[2], {
           step: 10, unit: 'mm',
@@ -172,8 +180,9 @@ export class SetupPanel {
 
   // ---- fixtures and models -----------------------------------------------
 
-  async importFiles(files) {
+  async importFiles(files, opts = null) {
     const app = this.app;
+    if (opts) Object.assign(this.importOpts, opts);
     for (const file of files || []) {
       try {
         const model = await app.models.addFromFile(file, this.importOpts);
@@ -187,30 +196,20 @@ export class SetupPanel {
     app.fitToScene();
   }
 
-  /** Open the file picker and import whatever comes back. */
-  async importDialog() {
-    this.app.setTab('setup');
-    await this.importFiles(await pickFile('.stl', true));
+  /** Reached from elsewhere in the app: show the page that owns fixtures. */
+  openFixtures() {
+    this.app.setPage('setup', 'fixtures');
   }
 
   modelsSection() {
     const app = this.app;
-    const opts = this.importOpts;
-
-    const drop = el('div.dropzone', {
-      ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); },
-      ondragleave: () => drop.classList.remove('over'),
-      ondrop: (e) => {
-        e.preventDefault();
-        drop.classList.remove('over');
-        this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
-      },
-      onclick: async () => this.importFiles(await pickFile('.stl', true)),
-    }, 'Drop STL files here, or click to browse');
 
     const list = el('div.list');
     if (!app.models.models.length) {
-      list.appendChild(el('div.hint', {}, 'Nothing in the fixture list yet. Add a vice, some parallels or a clamp from the ribbon.'));
+      list.appendChild(el('div.empty', {}, [
+        el('div.empty-title', {}, 'Nothing clamped yet'),
+        el('div.hint', {}, 'Add a vice, some parallels or a toe clamp, or bring in your own STL. Fixtures are collision-checked against the whole tool assembly; a reference part is the shape the job is meant to produce, and cutting past it is reported as a gouge.'),
+      ]));
     }
     for (const m of app.models.models) {
       list.appendChild(el(`div.list-item${app.models.selected === m ? '.selected' : ''}`, {
@@ -237,14 +236,21 @@ export class SetupPanel {
       ]));
     }
 
+    // Dropping a file is the same act as pressing Add, so it stays on the
+    // page rather than hiding inside the window.
+    const drop = el('div.dropzone', {
+      ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); },
+      ondragleave: () => drop.classList.remove('over'),
+      ondrop: (e) => {
+        e.preventDefault();
+        drop.classList.remove('over');
+        this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
+      },
+    }, 'or drop STL files here');
+
     return section(`Fixtures & models (${app.models.models.length})`, [
+      addBar('Add fixture…', () => openFixtureDialog(this.app, this), { hint: 'A vice, parallels, a clamp, or an STL of your own' }),
       drop,
-      row([
-        select('Units in file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }], opts.units, (v) => { opts.units = v; }),
-        select('Role', Object.entries(MODEL_ROLES).map(([k, v]) => ({ value: k, label: v.label })), opts.role, (v) => { opts.role = v; }),
-      ]),
-      checkbox('Sit on Z0 and centre in XY', opts.recentre, (v) => { opts.recentre = v; }),
-      el('div.hint', {}, 'STL carries no units, so pick the right one here. Fixtures and clamps are collision-checked against the whole tool assembly; reference parts are not.'),
       list,
     ]);
   }
@@ -317,106 +323,4 @@ export class SetupPanel {
     ]);
   }
 
-  // ---- machine -----------------------------------------------------------
-
-  machineSection() {
-    const app = this.app;
-    const m = app.state.machine;
-
-    return section('Machine', [
-      row([
-        select('View', [
-          { value: 'part', label: 'Part only' },
-          { value: 'machine', label: 'Full machine' },
-        ], m.mode, (v) => {
-          app.setMachine({ mode: v });
-          this.refresh();
-        }, { title: 'In full-machine view the table carries the work in X and Y, as it does on a real VMC.' }),
-        field('Table top Z', m.tableZ, {
-          step: 5, unit: 'mm',
-          onChange: (v) => app.setMachine({ tableZ: v || 0, table: { ...m.table, z: v || 0 } }),
-        }),
-      ]),
-      row([
-        field('Spindle nose Ø', m.spindleDiameter, { min: 0, step: 5, unit: 'mm', onChange: (v) => app.setMachine({ spindleDiameter: Math.max(0, v || 0) }) }),
-        field('Nose length', m.spindleLength, { min: 0, step: 5, unit: 'mm', onChange: (v) => app.setMachine({ spindleLength: Math.max(0, v || 0) }) }),
-      ]),
-      el('div.hint', {}, 'The spindle nose is part of the crash model, so a plunge that buries the spindle is caught even when the holder clears.'),
-      row([field('Rapid rate', m.rapidRate, { min: 100, step: 500, unit: 'mm/min', onChange: (v) => app.setMachine({ rapidRate: Math.max(100, v || 1000) }) })]),
-      checkbox('Check the table surface', m.table.enabled, (v) => app.setMachine({ table: { ...m.table, enabled: v } })),
-      checkbox('Check travel limits', m.limits.enabled, (v) => {
-        app.setMachine({ limits: { ...m.limits, enabled: v } });
-        this.refresh();
-      }),
-      m.limits.enabled ? row(AXES.map((a, i) => field(`${a} min`, m.limits.min[i], {
-        step: 10, unit: 'mm',
-        onChange: (v) => {
-          const min = [...m.limits.min];
-          min[i] = v || 0;
-          app.setMachine({ limits: { ...m.limits, min } });
-        },
-      }))) : null,
-      m.limits.enabled ? row(AXES.map((a, i) => field(`${a} max`, m.limits.max[i], {
-        step: 10, unit: 'mm',
-        onChange: (v) => {
-          const max = [...m.limits.max];
-          max[i] = v || 0;
-          app.setMachine({ limits: { ...m.limits, max } });
-        },
-      }))) : null,
-      m.limits.enabled ? checkbox('Show travel envelope', app.state.display.showLimits, (v) => app.setDisplay({ showLimits: v })) : null,
-    ], { collapsed: true });
-  }
-
-  // ---- display -----------------------------------------------------------
-
-  displaySection() {
-    const app = this.app;
-    const d = app.state.display;
-
-    const sectionSlider = el('input', {
-      type: 'range', min: 0, max: 100, step: 0.5, value: d.sectionPct,
-      oninput: (e) => {
-        const pct = parseFloat(e.target.value);
-        app.setDisplay({ sectionPct: pct });
-        secLabel.textContent = pct >= 100 ? 'off' : `${pct.toFixed(0)}%`;
-      },
-    });
-    const secLabel = el('span.value', {}, d.sectionPct >= 100 ? 'off' : `${d.sectionPct.toFixed(0)}%`);
-
-    return section('Display', [
-      row([
-        checkbox('Grid', d.grid, (v) => app.setDisplay({ grid: v })),
-        checkbox('Axes', d.axes, (v) => app.setDisplay({ axes: v })),
-      ]),
-      row([
-        checkbox('Stock', d.stock, (v) => app.setDisplay({ stock: v })),
-        checkbox('Tool', d.tool, (v) => app.setDisplay({ tool: v })),
-      ]),
-      row([
-        checkbox('Holder', d.holder, (v) => app.setDisplay({ holder: v })),
-        checkbox('Toolpath', d.toolpath, (v) => app.setDisplay({ toolpath: v })),
-      ]),
-      row([
-        checkbox('Rapids', d.rapids, (v) => app.setDisplay({ rapids: v })),
-        select('Backplot', [
-          { value: 'all', label: 'Whole program' },
-          { value: 'remaining', label: 'Still to cut' },
-          { value: 'done', label: 'Already cut' },
-        ], d.backplot, (v) => app.setDisplay({ backplot: v })),
-      ]),
-      el('label.field', {}, [
-        el('span.field-label', {}, 'Tool opacity'),
-        el('input', {
-          type: 'range', min: 0.1, max: 1, step: 0.05, value: d.toolOpacity,
-          oninput: (e) => app.setDisplay({ toolOpacity: parseFloat(e.target.value) }),
-        }),
-      ]),
-      el('label.field', {}, [
-        el('span.field-label', {}, ['Section view ', secLabel]),
-        sectionSlider,
-      ]),
-      el('div.hint', {}, 'Section view clips the stock above a height so you can see into deep pockets.'),
-    ], { collapsed: true });
-  }
 }

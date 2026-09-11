@@ -2,12 +2,13 @@
 //
 // A slaved axis lives inside its master's folder, so the indentation *is*
 // the chain: what moves what, read top to bottom. Selecting a node opens
-// its properties and lets an imported STL be dropped onto it, which is how
-// a real machine gets built up here — start from the preset closest to it,
-// then replace each casting and correct each pivot.
+// its properties here, where they can be changed. Adding an axis or a
+// casting starts from nothing, so each gets a window.
 
-import { el, field, select, checkbox, button, row, section, clear, pickFile } from './dom.js';
+import { el, field, select, checkbox, button, row, section, clear } from './dom.js';
+import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
+import { openAxisDialog, openCastingDialog } from './machineDialogs.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
 import { fmt } from '../core/util.js';
@@ -34,18 +35,21 @@ const DIRECTIONS = [
   { value: '0,0,-1', label: '−Z' },
 ];
 
+const TRAVEL_AXES = ['X', 'Y', 'Z'];
+
 const dirKey = (v) => `${v[0]},${v[1]},${v[2]}`;
 
-export class MachinePanel {
+export class MachinePanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel');
+    super(app, [
+      { id: 'layout', label: 'Layout', icon: 'machine', hint: 'Which machine this is, and how it is drawn', render: MachinePanel.prototype.layoutPage },
+      { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
+      { id: 'castings', label: 'Castings', icon: 'import', hint: 'Your own STLs, hung on the axes that carry them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.castingsPage },
+      { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
+    ]);
     this.selectedId = null;
-    this.importOpts = { units: 'mm', origin: 'as-is' };
     this.render();
   }
-
-  refresh() { this.render(); }
 
   get kin() { return this.app.machineView.kinematics; }
 
@@ -54,26 +58,23 @@ export class MachinePanel {
     return (this.selectedId && k.byId.get(this.selectedId)) || null;
   }
 
-  render() {
-    if (this.rendering) { this.queued = true; return; }
-    this.rendering = true;
-    const scrollTop = this.root.scrollTop;
-    clear(this.root);
-    this.root.appendChild(this.presetSection());
-    this.root.appendChild(this.treeSection());
-    const sel = this.selected;
-    if (sel) this.root.appendChild(this.axisSection(sel));
-    this.root.appendChild(this.partsSection());
-    this.root.scrollTop = scrollTop;
-    this.rendering = false;
-    if (this.queued) { this.queued = false; this.render(); }
+  // ---- pages -------------------------------------------------------------
+
+  layoutPage() {
+    return [this.presetSection()];
   }
 
-  /** Push the edited chain back into the scene and the simulator. */
-  commit() {
-    this.kin.rebuild();
-    this.app.applyKinematics();
-    this.render();
+  axesPage() {
+    const sel = this.selected;
+    return [this.treeSection(), sel ? this.axisSection(sel) : null];
+  }
+
+  castingsPage() {
+    return [this.partsSection()];
+  }
+
+  limitsPage() {
+    return [this.travelSection()];
   }
 
   // ---- preset ------------------------------------------------------------
@@ -98,10 +99,15 @@ export class MachinePanel {
         }),
       info,
       row([
-        select('View', [{ value: 'part', label: 'Part only' }, { value: 'machine', label: 'Full machine' }],
-          app.state.machine.mode, (v) => { app.setMachine({ mode: v }); this.render(); }),
+        select('Draw', [{ value: 'part', label: 'Part only' }, { value: 'machine', label: 'Full machine' }],
+          app.state.machine.mode, (v) => { app.setMachine({ mode: v }); this.render(); },
+          { title: 'In full-machine view every casting moves the way the real machine does.' }),
       ]),
-      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign or hang your own castings on the axes below and the simulation follows.'),
+      el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign or hang your own castings on the axes and the simulation follows.'),
+      actionRow([
+        { label: 'Save machine…', onClick: () => app.exportKinematics(), hint: 'Write the chain out as JSON' },
+        { label: 'Load machine…', onClick: () => app.importKinematics(), hint: 'Read a chain saved earlier' },
+      ]),
     ]);
   }
 
@@ -148,26 +154,34 @@ export class MachinePanel {
     for (const root of k.roots()) renderNode(root, 0);
     if (!k.nodes.length) tree.appendChild(el('div.hint', {}, 'This machine has no axes.'));
 
+    const sel = this.selected;
     return section('Axes', [
+      addBar('Add axis…', () => openAxisDialog(this.app, this), { hint: 'Insert a joint into the chain' }),
       tree,
-      row([
-        button('Add axis', () => this.addAxis()),
-        button('Delete', () => this.deleteAxis(), { disabled: !this.selected, variant: 'warn' }),
-      ]),
       el('div.hint', {}, 'Indentation is the chain: everything nested under an axis is carried by it.'),
+      actionRow([
+        { label: 'Tool hangs here', disabled: !sel || sel.id === k.toolNode, onClick: () => { k.toolNode = sel.id; this.commit(); } },
+        { label: 'Part clamps here', disabled: !sel || sel.id === k.workNode, onClick: () => { k.workNode = sel.id; this.commit(); } },
+        { label: 'Delete axis', disabled: !sel, variant: 'warn', onClick: () => this.deleteAxis() },
+      ]),
     ]);
   }
 
-  addAxis() {
+  /**
+   * @param {object} [spec] what the Add window collected; omitted, a
+   *   sensible new joint is made under whatever is selected.
+   */
+  addAxis(spec = null) {
     const k = this.kin;
-    const parent = this.selected || k.byId.get(k.toolNode);
+    const parent = (spec && spec.parent && k.byId.get(spec.parent)) || this.selected || k.byId.get(k.toolNode);
     const used = new Set(k.axes().map((n) => n.letter));
-    const letter = ['A', 'B', 'C', 'X', 'Y', 'Z'].find((L) => !used.has(L)) || null;
+    const letter = (spec && spec.letter) || ['A', 'B', 'C', 'X', 'Y', 'Z'].find((L) => !used.has(L)) || null;
     const node = makeAxis({
+      ...(spec || {}),
       letter,
-      name: letter ? `${letter} axis` : 'New carrier',
+      name: (spec && spec.name) || (letter ? `${letter} axis` : 'New carrier'),
       parent: parent ? parent.id : null,
-      limits: { min: -360, max: 360 },
+      limits: (spec && spec.limits) || { min: -360, max: 360 },
     });
     // Where the parent carries exactly one thing, the new axis goes between
     // them — that is what "a W axis between the ram and the spindle" means,
@@ -281,12 +295,19 @@ export class MachinePanel {
 
   // ---- imported castings -------------------------------------------------
 
-  async importFiles(files) {
+  /**
+   * @param {File[]} files
+   * @param {{units?:string, origin?:string, nodeId?:string}} [opts]
+   *   What the Add window collected; a drop onto the page falls back to the
+   *   selected axis, which is the one the user is looking at.
+   */
+  async importFiles(files, opts = {}) {
     const app = this.app;
+    const target = opts.nodeId || (this.selected && this.selected.id) || null;
     for (const file of files || []) {
       try {
-        const part = await app.machineParts.addFromFile(file, this.importOpts);
-        if (this.selected) app.machineParts.assign(part, this.selected.id);
+        const part = await app.machineParts.addFromFile(file, { units: opts.units || 'mm', origin: opts.origin || 'as-is' });
+        if (target) app.machineParts.assign(part, target);
         app.notify(`Imported ${part.name} — ${part.triangles.toLocaleString()} triangles.`, 'ok');
       } catch (err) {
         app.notify(err.message, 'error');
@@ -298,8 +319,35 @@ export class MachinePanel {
 
   partsSection() {
     const app = this.app;
-    const opts = this.importOpts;
 
+    const list = el('div.list');
+    if (!app.machineParts.parts.length) {
+      list.appendChild(el('div.empty', {}, [
+        el('div.empty-title', {}, 'No castings imported'),
+        el('div.hint', {}, 'Until one is, each axis draws a plain proxy that says where it is and which way it moves. Export each casting about its own joint and leave the origin as exported; that way the pivot numbers stay at zero.'),
+      ]));
+    }
+    for (const part of app.machineParts.parts) {
+      const node = part.nodeId ? this.kin.byId.get(part.nodeId) : null;
+      list.appendChild(el(`div.list-item${node && node.id === this.selectedId ? '.selected' : ''}`, {
+        onclick: () => { if (node) { this.selectedId = node.id; this.setPage('axes'); } },
+      }, [
+        el('div.list-main', {}, [
+          el('div.list-title', {}, part.name),
+          el('div.list-sub', {}, `${node ? node.name : 'not on an axis'} · ${part.triangles.toLocaleString()} tris · ${part.size.map((v) => fmt(v, 0)).join(' × ')} mm`),
+        ]),
+        el('div.list-actions', {}, [
+          button('✕', (e) => {
+            e.stopPropagation();
+            app.machineParts.remove(part);
+            app.applyMachineParts();
+            this.render();
+          }, { title: 'Remove', variant: 'warn' }),
+        ]),
+      ]));
+    }
+
+    // Dropping a file is the same act as pressing Add, so it stays here.
     const drop = el('div.dropzone', {
       ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); },
       ondragleave: () => drop.classList.remove('over'),
@@ -308,46 +356,69 @@ export class MachinePanel {
         drop.classList.remove('over');
         this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
       },
-      onclick: async () => this.importFiles(await pickFile('.stl', true)),
-    }, this.selected
-      ? `Drop an STL here to hang it on ${this.selected.name}`
-      : 'Drop STL castings here, or click to browse');
-
-    const list = el('div.list');
-    if (!app.machineParts.parts.length) {
-      list.appendChild(el('div.hint', {}, 'No castings imported. Until then each axis draws a plain proxy that shows where it is and which way it moves.'));
-    }
-    for (const p of app.machineParts.parts) {
-      const node = p.nodeId ? this.kin.byId.get(p.nodeId) : null;
-      list.appendChild(el(`div.list-item${node && node.id === this.selectedId ? '.selected' : ''}`, {
-        onclick: () => { if (node) { this.selectedId = node.id; this.render(); } },
-      }, [
-        el('div.list-main', {}, [
-          el('div.list-title', {}, p.name),
-          el('div.list-sub', {}, `${node ? node.name : 'unassigned'} · ${p.triangles.toLocaleString()} tris · ${p.size.map((v) => fmt(v, 0)).join(' × ')} mm`),
-        ]),
-        el('div.list-actions', {}, [
-          button('✕', (e) => {
-            e.stopPropagation();
-            app.machineParts.remove(p);
-            app.applyMachineParts();
-            this.render();
-          }, { title: 'Remove', variant: 'warn' }),
-        ]),
-      ]));
-    }
+    }, 'or drop STL castings here');
 
     return section('Castings', [
+      addBar('Add casting…', () => openCastingDialog(this.app, this), { hint: 'Import an STL and hang it on an axis' }),
       drop,
-      row([
-        select('Units', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
-          opts.units, (v) => { opts.units = v; }),
-        select('Origin', [{ value: 'as-is', label: 'As exported' }, { value: 'base', label: 'Centre on its base' }],
-          opts.origin, (v) => { opts.origin = v; }),
-      ]),
       list,
-      el('div.hint', {}, 'Export each casting about its own joint and leave the origin as exported; that way the pivot numbers above stay at zero.'),
+      actionRow([
+        { label: 'Remove all', disabled: !app.machineParts.parts.length, variant: 'warn', onClick: () => { app.machineParts.clear(); app.applyMachineParts(); this.render(); } },
+      ]),
     ]);
+  }
+
+  // ---- travels -----------------------------------------------------------
+
+  /**
+   * The machine's own envelope: what the crash model checks the assembly
+   * against, as opposed to the joint travels on the Axes page, which are
+   * what the chain itself can reach.
+   */
+  travelSection() {
+    const app = this.app;
+    const m = app.state.machine;
+
+    return [
+      section('Travel limits', [
+        checkbox('Check travel limits', m.limits.enabled, (v) => {
+          app.setMachine({ limits: { ...m.limits, enabled: v } });
+          this.render();
+        }),
+        m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} min`, m.limits.min[i], {
+          step: 10, unit: 'mm',
+          onChange: (v) => {
+            const min = [...m.limits.min];
+            min[i] = v || 0;
+            app.setMachine({ limits: { ...m.limits, min } });
+          },
+        }))) : null,
+        m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} max`, m.limits.max[i], {
+          step: 10, unit: 'mm',
+          onChange: (v) => {
+            const max = [...m.limits.max];
+            max[i] = v || 0;
+            app.setMachine({ limits: { ...m.limits, max } });
+          },
+        }))) : null,
+        el('div.hint', {}, 'These are the tool tip\u2019s limits in work coordinates. Each rotary has its own travel on the Axes page, and both are checked. View \u203a Show draws the envelope in the viewport.'),
+      ]),
+      section('Table and spindle', [
+        checkbox('Check the table surface', m.table.enabled, (v) => app.setMachine({ table: { ...m.table, enabled: v } })),
+        row([
+          field('Table top Z', m.tableZ, {
+            step: 5, unit: 'mm',
+            onChange: (v) => app.setMachine({ tableZ: v || 0, table: { ...m.table, z: v || 0 } }),
+          }),
+          field('Rapid rate', m.rapidRate, { min: 100, step: 500, unit: 'mm/min', onChange: (v) => app.setMachine({ rapidRate: Math.max(100, v || 1000) }) }),
+        ]),
+        row([
+          field('Spindle nose \u00d8', m.spindleDiameter, { min: 0, step: 5, unit: 'mm', onChange: (v) => app.setMachine({ spindleDiameter: Math.max(0, v || 0) }) }),
+          field('Nose length', m.spindleLength, { min: 0, step: 5, unit: 'mm', onChange: (v) => app.setMachine({ spindleLength: Math.max(0, v || 0) }) }),
+        ]),
+        el('div.hint', {}, 'The spindle nose is part of the crash model, so a plunge that buries the spindle is caught even when the holder clears.'),
+      ]),
+    ];
   }
 }
 

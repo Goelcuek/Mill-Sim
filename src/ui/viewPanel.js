@@ -1,48 +1,94 @@
 // What the viewport draws.
 //
-// The ribbon's View tab carries the toggles you flip constantly; this panel
-// holds the continuous controls — the section plane, opacities, colours —
-// which want a slider rather than a button.
+// Every display setting lives here and only here. A toggle that also
+// appeared beside the thing it affects would be the same control in two
+// places, which is the one thing this layout is built to avoid — so Setup
+// talks about the stock and View decides what colour it is.
 
 import { el, select, checkbox, row, section, clear } from './dom.js';
+import { Panel, actionRow } from './panel.js';
 import { fmt } from '../core/util.js';
 
-export class ViewPanel {
+export class ViewPanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel');
+    super(app, [
+      { id: 'camera', label: 'Camera', icon: 'view', hint: 'Where you are looking from', render: ViewPanel.prototype.cameraPage },
+      { id: 'show', label: 'Show', icon: 'eye', hint: 'What is drawn', render: ViewPanel.prototype.showPage },
+      { id: 'inspect', label: 'Inspect', icon: 'ruler', hint: 'Section plane, opacity, backplot', render: ViewPanel.prototype.inspectPage },
+    ]);
     this.render();
   }
 
-  refresh() { this.render(); }
+  /** A labelled range whose readout follows the thumb as it drags. */
+  slider(label, value, opts, onInput) {
+    const out = el('span.value', {}, opts.format(value));
+    return el('label.field', {}, [
+      el('span.field-label', {}, [label, ' ', out]),
+      el('input', {
+        type: 'range', min: opts.min, max: opts.max, step: opts.step, value,
+        oninput: (e) => {
+          const v = parseFloat(e.target.value);
+          out.textContent = opts.format(v);
+          onInput(v);
+        },
+      }),
+    ]);
+  }
 
-  render() {
-    const scrollTop = this.root.scrollTop;
-    clear(this.root);
+  cameraPage() {
+    const app = this.app;
+    return section('Camera', [
+      el('div.hint', {}, 'Drag to orbit, right-drag or two fingers to pan, wheel to zoom.'),
+      actionRow([
+        { label: 'Isometric', variant: 'primary', onClick: () => app.viewer.setView('iso') },
+        { label: 'Fit the job', onClick: () => app.fitToScene(), hint: 'F' },
+      ]),
+      actionRow([
+        { label: 'Top', onClick: () => app.viewer.setView('top') },
+        { label: 'Front', onClick: () => app.viewer.setView('front') },
+        { label: 'Right', onClick: () => app.viewer.setView('right') },
+      ]),
+      actionRow([
+        { label: 'Fit the view to the path', disabled: !app.state.program, onClick: () => app.fitToProgram() },
+      ]),
+    ]);
+  }
+
+  showPage() {
     const app = this.app;
     const d = app.state.display;
+    const t = (label, key) => checkbox(label, d[key], (v) => app.setDisplay({ [key]: v }));
 
-    const slider = (label, value, opts, onInput) => {
-      const out = el('span.value', {}, opts.format(value));
-      return el('label.field', {}, [
-        el('span.field-label', {}, [label, ' ', out]),
-        el('input', {
-          type: 'range', min: opts.min, max: opts.max, step: opts.step, value,
-          oninput: (e) => {
-            const v = parseFloat(e.target.value);
-            out.textContent = opts.format(v);
-            onInput(v);
-          },
-        }),
-      ]);
-    };
+    return [
+      section('Show', [
+        row([t('Stock', 'stock'), t('Tool', 'tool')]),
+        row([t('Holder', 'holder'), t('Toolpath', 'toolpath')]),
+        row([t('Rapid moves', 'rapids'), t('Work origins', 'origins')]),
+        row([t('Grid', 'grid'), t('Axes', 'axes')]),
+        row([t('Travel envelope', 'showLimits')]),
+      ]),
+      section('Colour', [
+        row([
+          el('label.field', {}, [
+            el('span.field-label', {}, 'Raw stock'),
+            el('input', { type: 'color', value: d.stockColor, oninput: (e) => app.setDisplay({ stockColor: e.target.value }) }),
+          ]),
+          checkbox('Cuts by tool', d.toolColors, (v) => app.setDisplay({ toolColors: v })),
+        ]),
+        el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own shade so you can see which one made which face.'),
+      ]),
+    ];
+  }
 
-    this.root.appendChild(section('Inspect', [
-      slider('Section view', d.sectionPct, {
+  inspectPage() {
+    const app = this.app;
+    const d = app.state.display;
+    const out = [section('Inspect', [
+      this.slider('Section view', d.sectionPct, {
         min: 0, max: 100, step: 0.5, format: (v) => (v >= 100 ? 'off' : `${v.toFixed(0)}%`),
       }, (v) => app.setDisplay({ sectionPct: v })),
       el('div.hint', {}, 'Clips the stock above a height so you can see into deep pockets.'),
-      slider('Tool opacity', d.toolOpacity, {
+      this.slider('Tool opacity', d.toolOpacity, {
         min: 0.1, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%`,
       }, (v) => app.setDisplay({ toolOpacity: v })),
       row([
@@ -52,46 +98,16 @@ export class ViewPanel {
           { value: 'done', label: 'Already cut' },
         ], d.backplot, (v) => app.setDisplay({ backplot: v })),
       ]),
-    ]));
-
-    this.root.appendChild(section('Show', [
-      row([
-        checkbox('Stock', d.stock, (v) => { app.setDisplay({ stock: v }); app.buildRibbon(); }),
-        checkbox('Tool', d.tool, (v) => { app.setDisplay({ tool: v }); app.buildRibbon(); }),
-      ]),
-      row([
-        checkbox('Holder', d.holder, (v) => { app.setDisplay({ holder: v }); app.buildRibbon(); }),
-        checkbox('Toolpath', d.toolpath, (v) => { app.setDisplay({ toolpath: v }); app.buildRibbon(); }),
-      ]),
-      row([
-        checkbox('Rapid moves', d.rapids, (v) => { app.setDisplay({ rapids: v }); app.buildRibbon(); }),
-        checkbox('Work origins', d.origins, (v) => { app.setDisplay({ origins: v }); app.buildRibbon(); }),
-      ]),
-      row([
-        checkbox('Grid', d.grid, (v) => { app.setDisplay({ grid: v }); app.buildRibbon(); }),
-        checkbox('Axes', d.axes, (v) => { app.setDisplay({ axes: v }); app.buildRibbon(); }),
-      ]),
-    ]));
-
-    this.root.appendChild(section('Colour', [
-      row([
-        el('label.field', {}, [
-          el('span.field-label', {}, 'Raw stock'),
-          el('input', { type: 'color', value: d.stockColor, oninput: (e) => app.setDisplay({ stockColor: e.target.value }) }),
-        ]),
-        checkbox('Cuts by tool', d.toolColors, (v) => { app.setDisplay({ toolColors: v }); app.buildRibbon(); }),
-      ]),
-      el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own shade so you can see which one made which face.'),
-    ]));
+    ])];
 
     const st = app.stock;
     if (st) {
-      this.root.appendChild(section('Simulation grid', [
+      out.push(section('Simulation grid', [
         el('div.hint', { html: `<b>${st.nx} × ${st.ny}</b> = ${(st.cellCount / 1e6).toFixed(2)} M columns · cell ${fmt(st.dx, 3)} mm` }),
         el('div.hint', { html: `Display mesh reduced ${app.stockView.renderStep}× to ${app.stockView.gridSize ? app.stockView.gridSize.join(' × ') : '–'} texels.` }),
-      ], { collapsed: true }));
+        el('div.hint', {}, 'Resolution is set on Setup › Stock, because it is a property of the block rather than of the view.'),
+      ]));
     }
-
-    this.root.scrollTop = scrollTop;
+    return out;
   }
 }

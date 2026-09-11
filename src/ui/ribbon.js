@@ -1,19 +1,14 @@
-// An Office-style ribbon.
+// The ribbon: navigation, and nothing else.
 //
-// Tabs across the top, and under the active tab a band of groups: each
-// group is a cluster of controls with its name printed underneath, big
-// buttons for the things you reach for most and stacked small ones for the
-// rest. Everything the app can do is visible and one click away rather than
-// hidden behind a menu.
+// Tabs across the top, and under the active tab a row of pages. Clicking a
+// page changes what the side panel shows — it never *does* anything. That
+// is the whole rule, and it is what makes the window easy to read: the top
+// says where you are, the side panel says what is there and lets you change
+// it, and anything that has to be created from scratch opens its own
+// window. A control that acts belongs in the panel next to the thing it
+// acts on, so nothing is ever in two places.
 //
-// A group is `{ label, items }`. An item is one of:
-//   { kind:'big',    icon, label, onClick, disabled, hint, active }
-//   { kind:'small',  icon, label, onClick, disabled, hint, active }
-//   { kind:'toggle', icon, label, checked, onChange, hint }
-//   { kind:'select', label, options, value, onChange, width }
-//   { kind:'number', label, value, onChange, unit, step, min, max, width }
-//   { kind:'stack',  items }   up to three smalls in a column
-//   { kind:'text',   label, value }
+// A tab is `{ id, label, pages }`; a page is `{ id, label, icon, hint }`.
 
 import { el, clear } from './dom.js';
 import { icon } from './icons.js';
@@ -21,14 +16,15 @@ import { icon } from './icons.js';
 export class Ribbon {
   constructor() {
     this.tabsRow = el('div.ribbon-tabs', { role: 'tablist' });
-    this.band = el('div.ribbon-band');
+    this.band = el('div.ribbon-band', { role: 'tablist' });
     this.root = el('div.ribbon-root', {}, [this.tabsRow, this.band]);
     this.tabs = [];
     this.active = null;
+    this.activePage = null;
     this.collapsed = false;
   }
 
-  /** @param {Array<{id:string, label:string, groups:() => Array}>} tabs */
+  /** @param {Array<{id:string, label:string, pages:Array}>} tabs */
   setTabs(tabs) {
     this.tabs = tabs;
     if (!this.active || !tabs.some((t) => t.id === this.active)) {
@@ -38,128 +34,106 @@ export class Ribbon {
     this.renderBand();
   }
 
-  onSelect(fn) { this.selectHandler = fn; }
+  /** @param {(tabId:string, pageId:string) => void} fn */
+  onNavigate(fn) { this.navigateHandler = fn; }
 
-  renderTabs() {
-    clear(this.tabsRow);
-    for (const tab of this.tabs) {
-      const node = el(`button.ribbon-tab${tab.id === this.active ? '.active' : ''}`, {
-        type: 'button',
-        role: 'tab',
-        dataset: { tab: tab.id },
-        onclick: () => this.select(tab.id),
-        ondblclick: () => this.setCollapsed(!this.collapsed),
-      }, tab.label);
-      this.tabsRow.appendChild(node);
-    }
-    this.tabsRow.appendChild(el('div.spacer'));
-    this.tabsRow.appendChild(el('button.ribbon-collapse', {
-      type: 'button',
-      title: this.collapsed ? 'Show the ribbon' : 'Collapse the ribbon',
-      onclick: () => this.setCollapsed(!this.collapsed),
-    }, this.collapsed ? '⌄' : '⌃'));
-  }
-
-  select(id) {
-    if (this.active === id && !this.collapsed) {
-      this.renderBand();
-      return;
-    }
-    this.active = id;
-    if (this.collapsed) this.setCollapsed(false);
+  /** Show a tab and one of its pages as current. */
+  setActive(tabId, pageId) {
+    this.active = tabId;
+    this.activePage = pageId;
     this.renderTabs();
     this.renderBand();
-    if (this.selectHandler) this.selectHandler(id);
+  }
+
+  currentTab() {
+    return this.tabs.find((t) => t.id === this.active) || null;
+  }
+
+  /**
+   * Tabs are built once and then only re-marked. Rebuilding them on every
+   * click destroys the button the click landed on, which loses focus, makes
+   * the row flicker, and leaves anything driving the UI chasing a node that
+   * no longer exists.
+   */
+  renderTabs() {
+    const ids = this.tabs.map((t) => t.id).join('|');
+    if (this.tabIds !== ids) {
+      this.tabIds = ids;
+      clear(this.tabsRow);
+      this.tabNodes = new Map();
+      for (const tab of this.tabs) {
+        const node = el('button.ribbon-tab', {
+          type: 'button',
+          role: 'tab',
+          dataset: { tab: tab.id },
+          onclick: () => this.go(tab.id, null),
+          ondblclick: () => this.setCollapsed(!this.collapsed),
+        }, tab.label);
+        this.tabNodes.set(tab.id, node);
+        this.tabsRow.appendChild(node);
+      }
+      this.tabsRow.appendChild(el('div.spacer'));
+      this.collapseBtn = el('button.ribbon-collapse', {
+        type: 'button',
+        onclick: () => this.setCollapsed(!this.collapsed),
+      });
+      this.tabsRow.appendChild(this.collapseBtn);
+    }
+
+    for (const [id, node] of this.tabNodes) {
+      const on = id === this.active;
+      node.classList.toggle('active', on);
+      node.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    if (this.collapseBtn) {
+      this.collapseBtn.textContent = this.collapsed ? '⌄' : '⌃';
+      this.collapseBtn.title = this.collapsed ? 'Show the pages' : 'Collapse the pages';
+    }
+  }
+
+  /** The same, for the page row: rebuilt only when the pages themselves change. */
+  renderBand() {
+    const tab = this.currentTab();
+    const pages = (tab && tab.pages) || [];
+    const key = `${this.active}#${pages.map((p) => `${p.id}:${p.badge ?? ''}`).join('|')}`;
+    if (this.bandKey !== key) {
+      this.bandKey = key;
+      clear(this.band);
+      this.pageNodes = new Map();
+      for (const page of pages) {
+        const node = el('button.ribbon-page', {
+          type: 'button',
+          role: 'tab',
+          dataset: { page: page.id },
+          title: page.hint || page.label,
+          onclick: () => this.go(tab.id, page.id),
+        }, [
+          icon(page.icon || 'point', 22),
+          el('span.ribbon-page-label', {}, page.label),
+          // A count belongs on the page that holds the things it counts, so
+          // the ribbon can say how many without offering to change anything.
+          page.badge ? el('span.ribbon-page-badge', {}, String(page.badge)) : null,
+        ]);
+        this.pageNodes.set(page.id, node);
+        this.band.appendChild(node);
+      }
+    }
+
+    for (const [id, node] of this.pageNodes || []) {
+      const on = id === this.activePage;
+      node.classList.toggle('active', on);
+      node.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+  }
+
+  go(tabId, pageId) {
+    if (this.collapsed) this.setCollapsed(false);
+    if (this.navigateHandler) this.navigateHandler(tabId, pageId);
   }
 
   setCollapsed(on) {
     this.collapsed = on;
     this.band.classList.toggle('collapsed', on);
     this.renderTabs();
-  }
-
-  /** Rebuild the band from the active tab's group factory. */
-  renderBand() {
-    clear(this.band);
-    const tab = this.tabs.find((t) => t.id === this.active);
-    if (!tab) return;
-    const groups = tab.groups();
-    groups.forEach((group, i) => {
-      if (i > 0) this.band.appendChild(el('div.ribbon-divider'));
-      this.band.appendChild(this.renderGroup(group));
-    });
-  }
-
-  renderGroup(group) {
-    const items = el('div.ribbon-items');
-    for (const item of group.items) items.appendChild(this.renderItem(item));
-    return el('div.ribbon-group', {}, [items, el('div.ribbon-group-label', {}, group.label)]);
-  }
-
-  renderItem(item) {
-    switch (item.kind) {
-      case 'stack':
-        return el('div.ribbon-stack', {}, item.items.map((i) => this.renderItem({ ...i, kind: 'small' })));
-
-      case 'small':
-        return el(`button.ribbon-small${item.active ? '.active' : ''}`, {
-          type: 'button',
-          title: item.hint || item.label,
-          disabled: !!item.disabled,
-          onclick: item.onClick,
-        }, [icon(item.icon || 'point', 16), el('span', {}, item.label)]);
-
-      case 'toggle': {
-        const node = el(`button.ribbon-small.toggle${item.checked ? '.on' : ''}`, {
-          type: 'button',
-          title: item.hint || item.label,
-          'aria-pressed': item.checked ? 'true' : 'false',
-          onclick: () => item.onChange(!item.checked),
-        }, [icon(item.icon || 'eye', 16), el('span', {}, item.label)]);
-        return node;
-      }
-
-      case 'select': {
-        const sel = el('select', {
-          style: item.width ? { width: `${item.width}px` } : null,
-          onchange: (e) => item.onChange(e.target.value, e),
-        }, item.options.map((o) => el('option', { value: o.value, selected: String(o.value) === String(item.value) }, o.label)));
-        return el('label.ribbon-field', { title: item.hint || '' }, [
-          el('span', {}, item.label),
-          sel,
-        ]);
-      }
-
-      case 'number': {
-        const input = el('input', {
-          type: 'number',
-          value: item.value,
-          step: item.step ?? 'any',
-          min: item.min,
-          max: item.max,
-          style: { width: `${item.width || 68}px` },
-          onchange: (e) => item.onChange(parseFloat(e.target.value), e),
-        });
-        return el('label.ribbon-field', { title: item.hint || '' }, [
-          el('span', {}, item.label + (item.unit ? ` (${item.unit})` : '')),
-          input,
-        ]);
-      }
-
-      case 'text':
-        return el('div.ribbon-readout', {}, [
-          el('span.ribbon-readout-label', {}, item.label),
-          el('span.ribbon-readout-value', {}, item.value),
-        ]);
-
-      case 'big':
-      default:
-        return el(`button.ribbon-big${item.active ? '.active' : ''}`, {
-          type: 'button',
-          title: item.hint || item.label,
-          disabled: !!item.disabled,
-          onclick: item.onClick,
-        }, [icon(item.icon || 'point', 24), el('span', {}, item.label)]);
-    }
   }
 }

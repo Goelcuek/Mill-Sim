@@ -80,29 +80,38 @@ part as STL or OBJ when the run finishes.
 
 ## Getting around
 
-An Office-style ribbon: six tabs, each holding a band of grouped controls
-with the group's name printed underneath. Everything the app can do is
-visible and one click away rather than behind a menu. Double-click a tab, or
-use the chevron on the right, to collapse the band and give the viewport the
-space back.
+One rule decides where everything lives:
 
-| Tab | |
+> **The ribbon navigates. The side panel acts.**
+
+The tabs across the top say which part of the job you are working on, and
+the row under them says which page of it. Neither ever *does* anything —
+clicking a page changes what the side panel shows, and that is all. Every
+control that changes something lives in the panel, next to the thing it
+changes, so no button is ever in two places and there is only one place to
+look for it. Double-click a tab, or use the chevron on the right, to
+collapse the page row and give the viewport the space back.
+
+| Tab | Pages |
 | --- | --- |
-| **Setup** | Stock, the click-to-place tools, which work offset is active, and fixtures. |
-| **Machine** | The kinematic chain: pick a layout, edit axes, hang castings on them. |
-| **Tools** | Create and edit cutters, holders and assemblies; import and export the library. |
-| **Program** | Open, save, re-parse, load an example, and frame the toolpath. |
-| **Results** | Playback, exports, and the running count of findings. |
-| **View** | Camera presets, what is drawn, the section plane and the backplot mode. |
+| **Setup** | Stock · Work offsets · Fixtures |
+| **Machine** | Layout · Axes · Castings · Travels |
+| **Tools** | Tool table · Cutters · Holders · Library |
+| **Program** | G-code · Summary |
+| **Results** | Findings · Compare · Export |
+| **View** | Camera · Show · Inspect |
 
-Beside the title sit the four verbs you reach for constantly — play, step,
-back to start, fit — and below the ribbon a side panel shows the detail for
-the active tab: lists, fields, the G-code editor, the collision report.
+Anything that has to be created from nothing is behind an **Add** button at
+the top of the page that lists it, and Add always opens a window: a cutter,
+a holder, an assembly, a fixture, an axis, a casting. A window is a task
+with a beginning and an end — fill it in, watch the preview redraw as you
+type, then commit or cancel. Nothing changes until you commit, so Escape is
+always safe. Everything else is editing something that already exists, and
+that happens in the panel directly.
 
-Editing a library item opens a **window**, not a panel section. Creating an
-end mill is a task with a beginning and an end: pick the shape, fill in the
-dimensions, watch the preview redraw as you type, then Create or Cancel.
-Nothing touches the library until you commit, so Escape is always safe.
+Playback is the one thing that is neither: the bar under the viewport is
+always visible and owns ⏮ ▶ ⏭ ⏭⏭, the scrubber and the speed, so it is
+never repeated in a panel.
 
 Keyboard: `Space` play/pause, `R` reset, `→` step one move, `F` fit view.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
@@ -410,9 +419,13 @@ src/
     stl.js            STL read/write, OBJ write
     mesh.js           heightmap and lathe triangulation
   ui/
-    ribbon.js         the tabbed command surface
-    dialog.js         modal windows
-    toolDialogs.js    cutter, holder, assembly, stock and machine editors
+    ribbon.js         tabs and pages — navigation only, no actions
+    panel.js          the shape every side panel has: pages, Add bars,
+                      action rows
+    dialog.js         the windows Add opens
+    toolDialogs.js    cutter, holder and assembly editors
+    setupDialogs.js   the Add-a-fixture window
+    machineDialogs.js the Add-an-axis and Add-a-casting windows
     icons.js          the stroked icon set
     ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
@@ -441,7 +454,7 @@ frame instead of a geometry rebuild.
 ## Testing
 
 ```bash
-npm test           # 103 unit tests: geometry, G-code, kinematics, cutting, I/O
+npm test           # 104 unit tests: geometry, G-code, kinematics, cutting, I/O
 npm run smoke      # optional: boots the app in headless Chromium
 ```
 

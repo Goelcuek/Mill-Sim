@@ -33,12 +33,6 @@ import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
-import { confirmDialog } from './ui/dialog.js';
-import {
-  openToolDialog, openHolderDialog, openAssemblyDialog,
-  openStockDialog, openMachineDialog,
-} from './ui/toolDialogs.js';
-import { EXAMPLES } from './examples.js';
 import { fmt, fmtDuration, clamp } from './core/util.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
@@ -114,7 +108,7 @@ export class App {
     clear(this.root);
 
     this.ribbon = new Ribbon();
-    this.ribbon.onSelect((id) => this.setTab(id));
+    this.ribbon.onNavigate((tabId, pageId) => this.setPage(tabId, pageId));
     this.panelHost = el('div.panel-host');
     this.sidebar = el('aside.sidebar', {}, [this.panelHost]);
 
@@ -131,7 +125,6 @@ export class App {
 
     this.root.appendChild(el('header.titlebar', {}, [
       el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
-      this.quickAccess(),
       el('div.spacer'),
       this.statusStrip = el('div.title-status'),
     ]));
@@ -143,380 +136,21 @@ export class App {
     this.root.appendChild(this.toast);
   }
 
-  /** The always-visible strip beside the title: the few verbs used constantly. */
-  quickAccess() {
-    const mk = (label, title, fn) => button(label, fn, { title });
-    this.quickPlay = mk('▶', 'Play / pause (Space)', () => this.togglePlay());
-    this.quickPlay.classList.add('icon');
-    return el('div.quick-access', {}, [
-      this.quickPlay,
-      Object.assign(mk('⏭', 'Step one move (→)', () => this.stepMove()), { className: 'btn icon' }),
-      Object.assign(mk('⏮', 'Back to the start (R)', () => this.reset()), { className: 'btn icon' }),
-      el('div.actions-sep'),
-      Object.assign(mk('⤢', 'Fit the job (F)', () => this.fitToScene()), { className: 'btn icon' }),
-    ]);
-  }
-
   /**
-   * The ribbon. Groups are rebuilt each time a tab is drawn, so pressed
-   * states and disabled reasons always reflect what is actually loaded.
+   * The ribbon is navigation and nothing else: the tabs say which part of
+   * the job you are working on, the row under them says which page of it.
+   * Every page is a panel's own, and so is everything that acts on it —
+   * that is what keeps one control from growing two homes.
    */
   buildRibbon() {
-    const d = () => this.state.display;
-    const show = (label, key, ic) => ({
-      kind: 'toggle', icon: ic, label, checked: d()[key],
-      onChange: (v) => { this.setDisplay({ [key]: v }); this.buildRibbon(); },
-    });
-    const picking = () => (this.pick && this.pick.active ? this.pick.request.title : '');
-    const selected = () => this.models.selected;
-    const toolsPanel = () => this.panels.tools;
-
-    this.ribbon.setTabs([
-      {
-        id: 'setup',
-        label: 'Setup',
-        groups: () => [
-          {
-            label: 'Stock',
-            items: [
-              { kind: 'big', icon: 'cube', label: 'Stock…', hint: 'Size, position and simulation resolution', onClick: () => openStockDialog(this, RESOLUTIONS) },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'fit', label: 'Fit to program', disabled: !this.state.program, hint: this.state.program ? 'Size the block around the toolpath' : 'Load a program first', onClick: () => { this.fitStockToProgram(); this.panels.setup.refresh(); } },
-                  { icon: 'target', label: 'Centre on zero', onClick: () => { const sz = this.state.stock.size; this.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.panels.setup.refresh(); } },
-                  { icon: 'reset', label: 'Reset the cut', onClick: () => this.resetStock() },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Place by clicking',
-            items: [
-              { kind: 'big', icon: 'move', label: 'Move stock', active: picking() === 'Move stock', onClick: () => this.moveStockByPoints() },
-              { kind: 'big', icon: 'target', label: `Set ${this.state.wcsEdit}`, hint: 'Click the point that should read X0 Y0 Z0', active: picking().startsWith('Set '), onClick: () => this.setOriginByPoint() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'move', label: `Move ${this.state.wcsEdit}`, active: picking() === `Move ${this.state.wcsEdit}`, onClick: () => this.moveOriginByPoints() },
-                  { icon: 'move', label: 'Move model', disabled: !selected(), hint: selected() ? 'Two-point move of the selected model' : 'Select a model first', onClick: () => this.moveModelByPoints() },
-                  { icon: 'point', label: 'Zero to corner', hint: 'Minimum X/Y corner of the top face', onClick: () => { const st = this.stock; this.applyWcs(this.state.wcsEdit, [st.origin[0], st.origin[1], st.top]); } },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Work offset',
-            items: [
-              {
-                kind: 'select', label: 'Active', width: 84, value: this.state.wcsEdit,
-                options: Object.keys(this.state.wcs).map((k) => ({ value: k, label: k })),
-                onChange: (v) => this.setWcsEdit(v),
-              },
-              { kind: 'toggle', icon: 'eye', label: 'Markers', checked: d().origins, onChange: (v) => { this.setDisplay({ origins: v }); this.buildRibbon(); } },
-            ],
-          },
-          {
-            label: 'Fixtures',
-            items: [
-              { kind: 'big', icon: 'import', label: 'Import…', hint: 'Bring in an STL fixture, clamp or reference part', onClick: () => this.panels.setup.importDialog() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'vice', label: 'Vice jaws', onClick: () => { this.addPrimitiveFixture('vice'); this.refreshFixtures(); } },
-                  { icon: 'ruler', label: 'Parallels', onClick: () => { this.addPrimitiveFixture('parallels'); this.refreshFixtures(); } },
-                  { icon: 'clamp', label: 'Toe clamp', onClick: () => { this.addPrimitiveFixture('clamp'); this.refreshFixtures(); } },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Machine',
-            items: [
-              { kind: 'big', icon: 'machine', label: 'Machine…', onClick: () => openMachineDialog(this) },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'view', label: this.state.machine.mode === 'machine' ? 'Show part only' : 'Show full machine', onClick: () => { this.setMachine({ mode: this.state.machine.mode === 'machine' ? 'part' : 'machine' }); this.buildRibbon(); } },
-                  { icon: 'gauge', label: 'Travel envelope', active: d().showLimits, onClick: () => { this.setDisplay({ showLimits: !d().showLimits }); this.buildRibbon(); } },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'machine',
-        label: 'Machine',
-        groups: () => {
-          const kin = this.machineView.kinematics;
-          const panel = () => this.panels.machine;
-          const sel = () => panel().selected;
-          return [
-            {
-              label: 'Configuration',
-              items: [
-                {
-                  kind: 'select', label: 'Machine', width: 220, value: this.state.machine.preset,
-                  options: Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
-                  onChange: (v) => { this.setMachine({ preset: v }); this.setTab('machine'); },
-                },
-                { kind: 'text', label: 'Layout', value: kin.configuration },
-                { kind: 'text', label: 'Axes', value: kin.axes().map((n) => n.letter).join(' ') || '–' },
-              ],
-            },
-            {
-              label: 'Axes',
-              items: [
-                { kind: 'big', icon: 'machine', label: 'Add axis', hint: 'Insert a joint under the selected one', onClick: () => { this.setTab('machine'); panel().addAxis(); } },
-                {
-                  kind: 'stack',
-                  items: [
-                    { icon: 'cutter', label: 'Tool hangs here', disabled: !sel() || (sel() && sel().id === kin.toolNode), onClick: () => { kin.toolNode = sel().id; panel().commit(); } },
-                    { icon: 'cube', label: 'Part clamps here', disabled: !sel() || (sel() && sel().id === kin.workNode), onClick: () => { kin.workNode = sel().id; panel().commit(); } },
-                    { icon: 'trash', label: 'Delete axis', disabled: !sel(), onClick: () => panel().deleteAxis() },
-                  ],
-                },
-              ],
-            },
-            {
-              label: 'Castings',
-              items: [
-                { kind: 'big', icon: 'import', label: 'Import STL…', hint: 'Bring in a casting and hang it on an axis', onClick: async () => { this.setTab('machine'); await panel().importFiles(await pickFile('.stl', true)); } },
-                {
-                  kind: 'stack',
-                  items: [
-                    { icon: 'reset', label: 'Remove all', disabled: !this.machineParts.parts.length, onClick: () => { this.machineParts.clear(); this.applyMachineParts(); panel().refresh(); } },
-                    { icon: 'export', label: 'Export machine', hint: 'Save the chain as JSON', onClick: () => download(`${kin.name.replace(/\s+/g, '-').toLowerCase()}.json`, JSON.stringify(kin.toJSON(), null, 2), 'application/json') },
-                    { icon: 'import', label: 'Import machine', hint: 'Load a chain saved earlier', onClick: () => this.importKinematics() },
-                  ],
-                },
-              ],
-            },
-            {
-              label: 'View',
-              items: [
-                { kind: 'big', icon: 'view', label: this.state.machine.mode === 'machine' ? 'Part only' : 'Full machine', onClick: () => { this.setMachine({ mode: this.state.machine.mode === 'machine' ? 'part' : 'machine' }); this.buildRibbon(); } },
-                {
-                  kind: 'stack',
-                  items: [
-                    { icon: 'gauge', label: 'Travel envelope', active: d().showLimits, onClick: () => { this.setDisplay({ showLimits: !d().showLimits }); this.buildRibbon(); } },
-                    { icon: 'machine', label: 'Machine…', hint: 'Travels, table and rates', onClick: () => openMachineDialog(this) },
-                  ],
-                },
-              ],
-            },
-          ];
-        },
-      },
-      {
-        id: 'tools',
-        label: 'Tools',
-        groups: () => [
-          {
-            label: 'Create',
-            items: [
-              { kind: 'big', icon: 'cutter', label: 'New cutter', hint: 'End mill, ball nose, drill, chamfer…', onClick: () => openToolDialog(this, null) },
-              { kind: 'big', icon: 'holder', label: 'New holder', onClick: () => openHolderDialog(this, null) },
-              { kind: 'big', icon: 'assembly', label: 'New assembly', hint: 'Pair a cutter with a holder and a stickout', onClick: () => openAssemblyDialog(this, null) },
-            ],
-          },
-          {
-            label: 'Selected',
-            items: [
-              { kind: 'big', icon: 'edit', label: 'Edit…', disabled: !toolsPanel().hasSelection(), hint: 'Open the editor for the selected item', onClick: () => toolsPanel().editSelected() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'copy', label: 'Duplicate', disabled: !toolsPanel().hasSelection(), onClick: () => toolsPanel().duplicateSelected() },
-                  { icon: 'trash', label: 'Delete', disabled: !toolsPanel().hasSelection(), onClick: () => toolsPanel().deleteSelected() },
-                  { icon: 'export', label: 'Export STL', disabled: !toolsPanel().currentBuilt(), onClick: () => this.exportAssemblyStl(toolsPanel().currentBuilt()) },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Library',
-            items: [
-              { kind: 'big', icon: 'library', label: 'Library', hint: `${this.library.assemblies.length} assemblies, ${this.library.tools.length} cutters, ${this.library.holders.length} holders`, onClick: () => toolsPanel().showAll() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'export', label: 'Export JSON', onClick: () => download('mill-sim-library.json', JSON.stringify(this.library.toJSON(), null, 2), 'application/json') },
-                  { icon: 'import', label: 'Import JSON', onClick: () => toolsPanel().importLibrary() },
-                  { icon: 'reset', label: 'Restore built-in', onClick: () => confirmDialog({
-                    title: 'Restore the built-in tools?',
-                    message: 'Your cutters, holders and assemblies will be replaced by the ones Mill-Sim ships with. This cannot be undone.',
-                    confirm: 'Restore', danger: true,
-                    onConfirm: () => { this.library.loadDefaults(); this.refreshSlots(); this.notify('Library reset to the built-in tools.', 'ok'); },
-                  }) },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'program',
-        label: 'Program',
-        groups: () => [
-          {
-            label: 'File',
-            items: [
-              { kind: 'big', icon: 'open', label: 'Open…', onClick: () => this.panels.program.openFile() },
-              { kind: 'big', icon: 'save', label: 'Save', onClick: () => this.panels.program.saveFile() },
-              {
-                kind: 'select', label: 'Examples', width: 210, value: '',
-                options: [{ value: '', label: 'Load an example…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))],
-                onChange: (v, e) => { if (v === '') return; e.target.value = ''; this.panels.program.loadExampleAt(Number(v)); },
-              },
-            ],
-          },
-          {
-            label: 'Interpret',
-            items: [
-              { kind: 'big', icon: 'reset', label: 'Re-parse', onClick: () => this.loadProgram(this.panels.program.editor ? this.panels.program.editor.value : '', this.state.programName) },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'fit', label: 'Fit view to path', onClick: () => this.fitToProgram() },
-                  { icon: 'cube', label: 'Fit stock to path', disabled: !this.state.program, onClick: () => { this.fitStockToProgram(); this.panels.setup.refresh(); } },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Program',
-            items: [
-              { kind: 'text', label: 'Moves', value: this.state.program ? String(this.state.program.stats.moveCount) : '–' },
-              { kind: 'text', label: 'Cycle time', value: this.state.program ? fmtDuration(this.state.program.stats.cycleTime) : '–' },
-              { kind: 'text', label: 'Notes', value: this.state.program ? String(this.state.program.warnings.length) : '–' },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'results',
-        label: 'Results',
-        groups: () => [
-          {
-            label: 'Run',
-            items: [
-              { kind: 'big', icon: this.state.playing ? 'pause' : 'play', label: this.state.playing ? 'Pause' : 'Play', onClick: () => this.togglePlay() },
-              { kind: 'big', icon: 'end', label: 'Run to end', onClick: () => this.runToEnd() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'step', label: 'Step one move', onClick: () => this.stepMove() },
-                  { icon: 'rewind', label: 'Back to start', onClick: () => this.reset() },
-                ],
-              },
-              {
-                kind: 'select', label: 'Speed', width: 86, value: this.state.speed,
-                options: SPEEDS.map((sp) => ({ value: sp.value, label: sp.label })),
-                onChange: (v) => { this.state.speed = v; this.speedSelect.value = v; },
-              },
-            ],
-          },
-          {
-            label: 'Export',
-            items: [
-              { kind: 'big', icon: 'export', label: 'Part as STL', onClick: () => this.exportStockStl() },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'export', label: 'Part as OBJ', onClick: () => this.exportStockObj() },
-                  { icon: 'report', label: 'Collision report', onClick: () => download('mill-sim-report.md', this.buildReport(), 'text/markdown') },
-                  { icon: 'camera', label: 'Screenshot', onClick: () => this.saveScreenshot() },
-                ],
-              },
-            ],
-          },
-          {
-            label: 'Findings',
-            items: [
-              { kind: 'text', label: 'Collisions', value: String(this.simulator.collisions.filter((c) => c.severity === 'error').length) },
-              { kind: 'text', label: 'Removed', value: `${fmt(this.simulator.removedVolume / 1000, 2)} cm³` },
-              {
-                kind: 'number', label: 'Gouge tol.', unit: 'mm', width: 76,
-                value: this.state.gougeTolerance, step: 0.005, min: 0,
-                hint: 'How far a cut may pass the reference surface before it counts as a gouge',
-                onChange: (v) => { this.setGougeTolerance(v); this.buildRibbon(); },
-              },
-            ],
-          },
-        ],
-      },
-      {
-        id: 'view',
-        label: 'View',
-        groups: () => [
-          {
-            label: 'Camera',
-            items: [
-              { kind: 'big', icon: 'view', label: 'Isometric', onClick: () => this.viewer.setView('iso') },
-              {
-                kind: 'stack',
-                items: [
-                  { icon: 'point', label: 'Top', onClick: () => this.viewer.setView('top') },
-                  { icon: 'point', label: 'Front', onClick: () => this.viewer.setView('front') },
-                  { icon: 'point', label: 'Right', onClick: () => this.viewer.setView('right') },
-                ],
-              },
-              { kind: 'big', icon: 'fit', label: 'Fit', onClick: () => this.fitToScene() },
-            ],
-          },
-          {
-            label: 'Show',
-            items: [
-              {
-                kind: 'stack',
-                items: [show('Stock', 'stock', 'cube'), show('Tool', 'tool', 'cutter'), show('Holder', 'holder', 'holder')],
-              },
-              {
-                kind: 'stack',
-                items: [show('Toolpath', 'toolpath', 'point'), show('Rapid moves', 'rapids', 'move'), show('Work origins', 'origins', 'target')],
-              },
-              {
-                kind: 'stack',
-                items: [show('Grid', 'grid', 'grid'), show('Axes', 'axes', 'axes'), {
-                  kind: 'toggle', icon: 'cutter', label: 'Colour by tool', checked: d().toolColors,
-                  onChange: (v) => { this.setDisplay({ toolColors: v }); this.buildRibbon(); },
-                }],
-              },
-            ],
-          },
-          {
-            label: 'Inspect',
-            items: [
-              {
-                kind: 'number', label: 'Section', unit: '%', width: 76,
-                value: Math.round(d().sectionPct), step: 5, min: 0, max: 100,
-                hint: 'Clip the stock above this height to see into a pocket',
-                onChange: (v) => this.setDisplay({ sectionPct: clamp(v, 0, 100) }),
-              },
-              {
-                kind: 'number', label: 'Tool opacity', unit: '%', width: 86,
-                value: Math.round(d().toolOpacity * 100), step: 10, min: 10, max: 100,
-                onChange: (v) => this.setDisplay({ toolOpacity: clamp(v, 10, 100) / 100 }),
-              },
-              {
-                kind: 'select', label: 'Backplot', width: 130, value: d().backplot,
-                options: [
-                  { value: 'all', label: 'Whole program' },
-                  { value: 'remaining', label: 'Still to cut' },
-                  { value: 'done', label: 'Already cut' },
-                ],
-                onChange: (v) => this.setDisplay({ backplot: v }),
-              },
-            ],
-          },
-        ],
-      },
-    ]);
-    this.ribbon.active = this.activeTab || this.ribbon.active;
-    this.ribbon.renderTabs();
-    this.ribbon.renderBand();
+    if (!this.panels) return;
+    this.ribbon.setTabs(this.tabOrder.map(([id, label]) => ({
+      id,
+      label,
+      pages: this.panels[id] ? this.panels[id].pages : [],
+    })));
+    const panel = this.panels[this.activeTab];
+    this.ribbon.setActive(this.activeTab, panel ? panel.page : null);
   }
 
   // ---- scene -------------------------------------------------------------
@@ -622,17 +256,23 @@ export class App {
   }
 
   setTab(id) {
+    this.setPage(id, null);
+  }
+
+  /**
+   * Show one page of one tab. Passing a null page keeps whichever page that
+   * tab was last on, so coming back to a tab lands where you left it.
+   */
+  setPage(tabId, pageId) {
     if (this.pick && this.pick.active) this.pick.cancel();
-    this.activeTab = id;
-    if (this.ribbon.active !== id) {
-      this.ribbon.active = id;
-      this.ribbon.renderTabs();
-    }
-    clear(this.panelHost);
-    const panel = this.panels[id];
-    if (panel) {
+    const panel = this.panels[tabId];
+    if (!panel) return;
+    this.activeTab = tabId;
+    if (pageId) panel.setPage(pageId);
+    if (this.panelHost.firstChild !== panel.root) {
+      clear(this.panelHost);
       this.panelHost.appendChild(panel.root);
-      if (panel.refresh) panel.refresh();
+      panel.render();
     }
     this.buildRibbon();
   }
@@ -662,6 +302,7 @@ export class App {
       this.playBtn,
       button('⏭', () => this.stepMove(), { title: 'Advance one move (→)' }),
       button('⏭⏭', () => this.runToEnd(), { title: 'Simulate the whole program now' }),
+      button('⤢', () => this.fitToScene(), { title: 'Fit the job in the view (F)' }),
       this.scrub,
       this.timeLabel,
       this.lineLabel,
@@ -738,7 +379,14 @@ export class App {
     this.viewer.invalidate();
   }
 
-  /** Load a chain saved with "Export machine". */
+  /** Write the current chain out so it can be shared or kept. */
+  exportKinematics() {
+    const kin = this.machineView.kinematics;
+    download(`${kin.name.replace(/\s+/g, '-').toLowerCase()}.json`,
+      JSON.stringify(kin.toJSON(), null, 2), 'application/json');
+  }
+
+  /** Load a chain saved with "Save machine…". */
   async importKinematics() {
     const [file] = await pickFile('.json');
     if (!file) return;
@@ -750,7 +398,7 @@ export class App {
         if (!this.machineView.nodeGroups.has(p.nodeId)) p.nodeId = null;
       }
       this.applyKinematics();
-      this.setTab('machine');
+      this.setPage('machine', 'layout');
       this.notify(`Loaded ${this.machineView.kinematics.name}.`, 'ok');
     } catch (err) {
       this.notify(`Could not read that machine: ${err.message}`, 'error');
@@ -974,15 +622,11 @@ export class App {
     if (this.simulator.finished) this.simulator.reset();
     this.state.playing = true;
     this.playBtn.textContent = '⏸';
-    if (this.quickPlay) this.quickPlay.textContent = '⏸';
-    if (this.activeTab === 'results') this.buildRibbon();
   }
 
   pause() {
     this.state.playing = false;
     if (this.playBtn) this.playBtn.textContent = '▶';
-    if (this.quickPlay) this.quickPlay.textContent = '▶';
-    if (this.ribbon && this.activeTab === 'results') this.buildRibbon();
   }
 
   reset() {
@@ -1132,14 +776,17 @@ export class App {
     if (errors.length) {
       this.badge.style.display = '';
       this.badge.textContent = `${errors.length} collision${errors.length === 1 ? '' : 's'}`;
-      this.badge.onclick = () => this.setTab('results');
+      this.badge.onclick = () => this.setPage('results', 'findings');
     } else {
       this.badge.style.display = 'none';
     }
   }
 
   refreshResults() {
-    if (this.panels && this.activeTab === 'results') this.panels.results.refresh();
+    if (!this.panels) return;
+    if (this.activeTab === 'results') this.panels.results.refresh();
+    // The ribbon carries the finding count, so it follows the run.
+    if (this.ribbon) this.buildRibbon();
   }
 
   // ---- helpers used by the panels ----------------------------------------

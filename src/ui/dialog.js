@@ -30,7 +30,7 @@ export class Dialog {
       el('div.spacer'),
       button(opts.cancel || 'Cancel', () => this.close()),
       opts.confirm
-        ? button(opts.confirm, () => this.confirm(), { variant: 'primary' })
+        ? (this.confirmBtn = button(opts.confirm, () => this.confirm(), { variant: 'primary' }))
         : null,
     ]);
 
@@ -80,8 +80,14 @@ export class Dialog {
   }
 
   confirm() {
+    if (this.confirmBtn && this.confirmBtn.disabled) return;
     if (this.opts.onConfirm && this.opts.onConfirm() === false) return;
     this.close(true);
+  }
+
+  /** Grey out Commit while the window is not yet answerable. */
+  setConfirmEnabled(on) {
+    if (this.confirmBtn) this.confirmBtn.disabled = !on;
   }
 
   close(committed = false) {

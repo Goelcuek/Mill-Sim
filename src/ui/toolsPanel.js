@@ -1,10 +1,14 @@
 // The tool library, as a browser.
 //
-// Editing moved into modal windows, so this panel's job is to show what is
-// in the library and what is wrong with it. Selecting an item arms the
-// ribbon's Edit / Duplicate / Delete; double-clicking opens the editor.
+// Four pages: the tool table, the cutters and holders that feed it, and the
+// library as a whole. Editing happens in a window, so this panel's job is to
+// show what is in the library, what is wrong with it, and to act on whatever
+// is selected — Edit, Duplicate, Delete and Export sit under the list they
+// apply to rather than in the ribbon, where they would be a second copy of
+// the same three buttons.
 
-import { el, button, row, section, clear, pickFile } from './dom.js';
+import { el, button, row, section, clear, checkbox, pickFile, download } from './dom.js';
+import { Panel, addBar, actionRow } from './panel.js';
 import { TOOL_TYPES } from '../tools/toolDefs.js';
 import { TAPERS, HOLDER_TYPES } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
@@ -12,19 +16,23 @@ import { openToolDialog, openHolderDialog, openAssemblyDialog } from './toolDial
 import { confirmDialog } from './dialog.js';
 import { fmt } from '../core/util.js';
 
-export class ToolsPanel {
+export class ToolsPanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel');
-    this.mode = 'assemblies';
+    super(app, [
+      { id: 'assemblies', label: 'Tool table', icon: 'assembly', hint: 'What each T number loads', badge: () => app.library.assemblies.length, render: ToolsPanel.prototype.renderAssemblies },
+      { id: 'tools', label: 'Cutters', icon: 'cutter', badge: () => app.library.tools.length, render: ToolsPanel.prototype.renderTools },
+      { id: 'holders', label: 'Holders', icon: 'holder', badge: () => app.library.holders.length, render: ToolsPanel.prototype.renderHolders },
+      { id: 'library', label: 'Library', icon: 'library', hint: 'Import, export and reset the whole library', render: ToolsPanel.prototype.renderLibrary },
+    ]);
     this.selected = { assembly: null, tool: null, holder: null };
     this.render();
     app.library.onChange(() => this.render());
   }
 
-  refresh() { this.render(); }
+  /** The page id doubles as the kind of thing the page lists. */
+  get mode() { return this.page; }
 
-  // ---- what the ribbon asks about -----------------------------------------
+  // ---- what acts on the selection -----------------------------------------
 
   hasSelection() {
     return !!this.selectedId();
@@ -103,9 +111,7 @@ export class ToolsPanel {
   }
 
   showAll() {
-    this.mode = 'assemblies';
-    this.app.setTab('tools');
-    this.render();
+    this.app.setPage('tools', 'assemblies');
   }
 
   async importLibrary() {
@@ -123,37 +129,6 @@ export class ToolsPanel {
 
   // ---- rendering ----------------------------------------------------------
 
-  render() {
-    if (this.rendering) { this.queued = true; return; }
-    this.rendering = true;
-    const scrollTop = this.root.scrollTop;
-    clear(this.root);
-
-    this.root.appendChild(el('div.seg-row', {}, [
-      el('div.segmented', {}, [
-        this.subTab('assemblies', `Assemblies (${this.app.library.assemblies.length})`),
-        this.subTab('tools', `Cutters (${this.app.library.tools.length})`),
-        this.subTab('holders', `Holders (${this.app.library.holders.length})`),
-      ]),
-    ]));
-
-    if (this.mode === 'assemblies') this.renderAssemblies();
-    else if (this.mode === 'tools') this.renderTools();
-    else this.renderHolders();
-
-    this.root.scrollTop = scrollTop;
-    this.rendering = false;
-    if (this.queued) { this.queued = false; this.render(); }
-    else if (this.app.ribbon) this.app.buildRibbon();
-  }
-
-  subTab(id, label) {
-    return el(`button${this.mode === id ? '.active' : ''}`, {
-      type: 'button',
-      onclick: () => { this.mode = id; this.render(); },
-    }, label);
-  }
-
   listItem({ selected, onSelect, onOpen, swatch, title, sub, extra }) {
     return el(`div.list-item${selected ? '.selected' : ''}`, {
       onclick: onSelect,
@@ -169,6 +144,17 @@ export class ToolsPanel {
         button('Edit', (e) => { e.stopPropagation(); onSelect(); onOpen(); }),
         ...(extra || []),
       ]),
+    ]);
+  }
+
+  /** The Edit / Duplicate / Delete row every list on this panel carries. */
+  selectionRow(extra = []) {
+    const has = this.hasSelection();
+    return actionRow([
+      { label: 'Edit…', disabled: !has, variant: 'primary', onClick: () => this.editSelected() },
+      { label: 'Duplicate', disabled: !has, onClick: () => this.duplicateSelected() },
+      { label: 'Delete', disabled: !has, variant: 'warn', onClick: () => this.deleteSelected() },
+      ...extra,
     ]);
   }
 
@@ -189,18 +175,22 @@ export class ToolsPanel {
       }));
     }
 
-    this.root.appendChild(section('Tool table', [
+    const out = [section('Tool table', [
+      addBar('Add assembly…', () => openAssemblyDialog(app, null), { hint: 'Pair a cutter with a holder and a stickout' }),
       el('div.hint', {}, 'An assembly pairs a cutter with a holder and a stickout. The T number is what an M06 tool change selects.'),
       list,
-      row([button('+ New assembly', () => openAssemblyDialog(app, null), { variant: 'primary' })]),
-    ]));
+      this.selectionRow([
+        { label: 'Export STL', disabled: !this.currentBuilt(), onClick: () => app.exportAssemblyStl(this.currentBuilt()) },
+      ]),
+    ])];
 
     const issues = lib.audit(app.state.machine);
     if (issues.length) {
-      this.root.appendChild(section(`Library check (${issues.length})`, [
+      out.push(section(`Library check (${issues.length})`, [
         el('ul.issues', {}, issues.map((i) => el(`li.issue-${i.level}`, {}, i.text))),
       ]));
     }
+    return out;
   }
 
   renderTools() {
@@ -216,10 +206,11 @@ export class ToolsPanel {
         sub: `${TOOL_TYPES[t.type] ? TOOL_TYPES[t.type].label : t.type} · Ø${fmt(t.diameter, 2)} · ${t.fluteCount}F`,
       }));
     }
-    this.root.appendChild(section('Cutters', [
+    return section('Cutters', [
+      addBar('Add cutter…', () => openToolDialog(app, null), { hint: 'End mill, ball nose, drill, chamfer…' }),
       list,
-      row([button('+ New cutter', () => openToolDialog(app, null), { variant: 'primary' })]),
-    ]));
+      this.selectionRow(),
+    ]);
   }
 
   renderHolders() {
@@ -235,9 +226,41 @@ export class ToolsPanel {
         sub: `${HOLDER_TYPES[h.type] || h.type} · ${(TAPERS[h.taper] || TAPERS.none).label}`,
       }));
     }
-    this.root.appendChild(section('Holders', [
+    return section('Holders', [
+      addBar('Add holder…', () => openHolderDialog(app, null), { hint: 'Shrink fit, collet chuck, end mill holder…' }),
       list,
-      row([button('+ New holder', () => openHolderDialog(app, null), { variant: 'primary' })]),
-    ]));
+      this.selectionRow(),
+    ]);
+  }
+
+  renderLibrary() {
+    const app = this.app;
+    const lib = app.library;
+    return section('Library', [
+      el('div.hint', { html: `<b>${lib.assemblies.length}</b> assemblies · <b>${lib.tools.length}</b> cutters · <b>${lib.holders.length}</b> holders` }),
+      checkbox('Keep the library in this browser', app.state.persistLibrary, (v) => app.setPersistLibrary(v)),
+      el('div.hint', {}, 'Saved to local storage, so it survives a reload on this machine only. Export the JSON to move it somewhere else.'),
+      actionRow([
+        { label: 'Export JSON', onClick: () => download('mill-sim-library.json', JSON.stringify(lib.toJSON(), null, 2), 'application/json') },
+        { label: 'Import JSON…', onClick: () => this.importLibrary() },
+      ]),
+      actionRow([
+        {
+          label: 'Restore the built-in library',
+          variant: 'warn',
+          onClick: () => confirmDialog({
+            title: 'Restore the built-in tools?',
+            message: 'Your cutters, holders and assemblies will be replaced by the ones Mill-Sim ships with. This cannot be undone.',
+            confirm: 'Restore',
+            danger: true,
+            onConfirm: () => {
+              lib.loadDefaults();
+              app.refreshSlots();
+              app.notify('Library reset to the built-in tools.', 'ok');
+            },
+          }),
+        },
+      ]),
+    ]);
   }
 }

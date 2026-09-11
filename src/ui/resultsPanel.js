@@ -1,27 +1,42 @@
 // Results panel: what the run found, and how to get the part out.
+//
+// Three pages. Playback is not one of them: the transport bar under the
+// viewport is always visible and already owns play, step, run-to-end and
+// the scrubber, so putting the same buttons here would be the duplication
+// this layout exists to avoid.
 
-import { el, button, row, section, clear, download } from './dom.js';
+import { el, section, field, download } from './dom.js';
+import { Panel, actionRow } from './panel.js';
 import { COLLISION_TYPES } from '../sim/simulator.js';
 import { fmt, fmtDuration } from '../core/util.js';
 
-export class ResultsPanel {
+export class ResultsPanel extends Panel {
   constructor(app) {
-    this.app = app;
-    this.root = el('div.panel');
+    super(app, [
+      { id: 'findings', label: 'Findings', icon: 'report', hint: 'Collisions and gouges the run turned up', badge: () => app.simulator.collisions.length || null, render: ResultsPanel.prototype.findingsPage },
+      { id: 'compare', label: 'Compare', icon: 'target', hint: 'The cut against the reference part', render: ResultsPanel.prototype.comparePage },
+      { id: 'export', label: 'Export', icon: 'export', hint: 'The machined part, the report, a screenshot', render: ResultsPanel.prototype.exportPage },
+    ]);
     this.render();
   }
 
-  refresh() { this.render(); }
+  findingsPage() {
+    return [this.statsSection(), this.collisionSection()];
+  }
 
-  render() {
-    const scrollTop = this.root.scrollTop;
-    clear(this.root);
-    this.root.appendChild(this.statsSection());
+  comparePage() {
     const compare = this.compareSection();
-    if (compare) this.root.appendChild(compare);
-    this.root.appendChild(this.collisionSection());
-    this.root.appendChild(this.exportSection());
-    this.root.scrollTop = scrollTop;
+    return [compare || section('Compare against a reference part', [
+      el('div.empty', {}, [
+        el('div.empty-title', {}, 'No reference part loaded'),
+        el('div.hint', {}, 'Import a model on Setup › Fixtures and give it the reference-part role. It is rasterised onto the stock grid, so the comparison costs nothing during the run: cutting past that surface by more than the tolerance is reported as a gouge.'),
+      ]),
+      actionRow([{ label: 'Go to fixtures', variant: 'primary', onClick: () => this.app.setPage('setup', 'fixtures') }]),
+    ])];
+  }
+
+  exportPage() {
+    return [this.exportSection()];
   }
 
   statsSection() {
@@ -49,11 +64,12 @@ export class ResultsPanel {
         el('div.stat-label', {}, k),
         el('div.stat-value', {}, v),
       ]))),
-      el('div.hint', {}, sim.finished ? 'Program finished.' : 'Run the program to the end for the final part.'),
-      row([
-        button('Run to end', () => app.runToEnd(), { variant: 'primary' }),
-        button('Reset', () => app.reset()),
-      ]),
+      // Playback lives in the transport bar under the viewport, where it is
+      // always reachable; repeating it here would be the same two buttons
+      // twice on one screen.
+      el('div.hint', {}, sim.finished
+        ? 'Program finished.'
+        : 'Press ⏭⏭ in the bar under the viewport to run it to the end.'),
     ]);
   }
 
@@ -122,6 +138,13 @@ export class ResultsPanel {
       body.push(el('div.collision-list', {}, items));
     }
 
+    body.push(field('Gouge tolerance', app.state.gougeTolerance, {
+      unit: 'mm', step: 0.005, min: 0,
+      title: 'How far a cut may pass the reference surface before it counts as a gouge',
+      onChange: (v) => { app.setGougeTolerance(v); this.render(); },
+    }));
+    body.push(el('div.hint', {}, 'Changing this takes effect on the next run.'));
+
     return section(`Collisions (${list.length})`, body);
   }
 
@@ -129,21 +152,22 @@ export class ResultsPanel {
     const app = this.app;
     return section('Export', [
       el('div.hint', {}, 'The machined stock is written as a closed solid built from the simulation heightmap.'),
-      row([
-        button('Part as STL', () => app.exportStockStl(), { variant: 'primary' }),
-        button('Part as OBJ', () => app.exportStockObj()),
+      actionRow([
+        { label: 'Part as STL', variant: 'primary', onClick: () => app.exportStockStl() },
+        { label: 'Part as OBJ', onClick: () => app.exportStockObj() },
       ]),
-      row([
-        button('Collision report', () => {
-          download('mill-sim-report.md', app.buildReport(), 'text/markdown');
-        }),
-        button('Screenshot', () => {
-          const url = app.viewer.screenshot();
-          const a = el('a', { href: url, download: 'mill-sim.png' });
-          document.body.appendChild(a);
-          a.click();
-          a.remove();
-        }),
+      actionRow([
+        { label: 'Collision report', onClick: () => download('mill-sim-report.md', app.buildReport(), 'text/markdown') },
+        {
+          label: 'Screenshot',
+          onClick: () => {
+            const url = app.viewer.screenshot();
+            const a = el('a', { href: url, download: 'mill-sim.png' });
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          },
+        },
       ]),
       el('label.field', {}, [
         el('span.field-label', {}, 'Export detail'),
