@@ -74,9 +74,9 @@ export function buildCasting(spec, mat) {
     case 'plinth': {
       const [w, d, h] = s;
       push(box(w, d, h * 0.62, mat(tone || 'base'), x, y, z));
-      push(box(w * 0.78, d * 0.8, h * 0.4, mat(tone || 'base'), x, y, z + h * 0.6));
+      push(box(w * 0.78, d * 0.8, h * 0.4, mat(tone || 'base'), x, y, z + h * 0.58));
       // A pale sill where the casting meets the floor reads as a machined face.
-      push(box(w * 1.02, d * 1.02, 26, mat('body'), x, y, z - 4));
+      push(box(w * 1.02, d * 1.02, 26, mat('body'), x, y, z - 6));
       break;
     }
 
@@ -86,15 +86,16 @@ export function buildCasting(spec, mat) {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'body'), x, y, z));
       push(box(w * 1.06, d * 0.42, h * 0.16, mat(tone || 'body'), x, y + d * 0.24, z + h * 0.86));
-      // Front face plate: where the head actually rides.
-      push(box(w * 0.62, 26, h * 0.82, mat('slide'), x, y - d / 2 - 13, z + h * 0.08));
+      // Front face plate: where the head actually rides. Sunk a millimetre
+      // into the column so the two faces never land on the same plane.
+      push(box(w * 0.62, 26, h * 0.82, mat('slide'), x, y - d / 2 - 12, z + h * 0.08));
       break;
     }
 
     case 'saddle': {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'slide'), x, y, z));
-      push(box(w * 0.86, d * 1.04, h * 0.34, mat('body'), x, y, z + h * 0.66));
+      push(box(w * 0.86, d * 1.04, h * 0.36, mat('body'), x, y, z + h * 0.64));
       break;
     }
 
@@ -108,9 +109,10 @@ export function buildCasting(spec, mat) {
         const sy = y - d / 2 + (d * (i + 0.5)) / n;
         push(box(w * 0.98, Math.max(d * 0.028, 12), 14, mat('way'), x, sy, z + h - 12));
       }
-      // Machined edge strips along the long sides.
-      push(box(w, 18, h * 0.3, mat('steel'), x, y - d / 2 + 9, z + h * 0.7));
-      push(box(w, 18, h * 0.3, mat('steel'), x, y + d / 2 - 9, z + h * 0.7));
+      // Machined edge rails along the long sides, standing a little proud
+      // of the face so they are not coplanar with it.
+      push(box(w, 20, h * 0.34, mat('steel'), x, y - d / 2 + 9, z + h * 0.7));
+      push(box(w, 20, h * 0.34, mat('steel'), x, y + d / 2 - 9, z + h * 0.7));
       break;
     }
 
@@ -171,8 +173,9 @@ export function buildCasting(spec, mat) {
       const axis = spec.axis || [0, 0, 1];
       const face = push(cyl(r, r, h, axis, mat(tone || 'rotary')));
       face.position.set(x, y, z);
-      // The housing sits behind the face, on the far side from the work.
-      const housing = push(cyl(r * 0.8, r * 0.9, h * 1.4, axis, mat('body')));
+      // The housing sits behind the face, on the far side from the work,
+      // overlapping it rather than butting against it.
+      const housing = push(cyl(r * 0.8, r * 0.9, h * 1.5, axis, mat('body')));
       housing.position.set(
         x - axis[0] * h * 1.1,
         y - axis[1] * h * 1.1,
@@ -209,7 +212,7 @@ export function buildCasting(spec, mat) {
     case 'cradle': {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'slide'), x, y, z));
-      push(box(w * 0.92, d * 0.88, h * 0.4, mat('body'), x, y, z + h));
+      push(box(w * 0.92, d * 0.88, h * 0.4, mat('body'), x, y, z + h - 4));
       break;
     }
 
@@ -227,21 +230,21 @@ export function buildCasting(spec, mat) {
     case 'ram': {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'slide'), x, y, z));
-      push(box(w * 0.62, d * 0.62, h * 1.02, mat('steel'), x, y, z));
+      push(box(w * 0.62, d * 0.62, h * 1.02, mat('steel'), x, y, z - 6));
       break;
     }
 
     case 'bridge': {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'body'), x, y, z));
-      push(box(w, d * 0.28, h * 1.15, mat('slide'), x, y - d * 0.36, z));
+      push(box(w * 0.99, d * 0.3, h * 1.15, mat('slide'), x, y - d * 0.34, z - 4));
       break;
     }
 
     case 'leg': {
       const [w, d, h] = s;
       push(box(w, d, h, mat(tone || 'body'), x, y, z));
-      push(box(w * 1.25, d * 1.25, h * 0.1, mat('base'), x, y, z));
+      push(box(w * 1.25, d * 1.25, h * 0.1, mat('base'), x, y, z - 8));
       break;
     }
 

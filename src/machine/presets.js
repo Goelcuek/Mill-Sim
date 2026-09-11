@@ -18,6 +18,16 @@ import { Kinematics } from './kinematics.js';
  */
 const NOSE_AT_HOME = 290;
 
+/**
+ * How far the part's zero sits above the table face.
+ *
+ * A job is not clamped flat to the cast iron — it stands on parallels, in a
+ * vice, on a fixture plate. This is that stack. Left at zero the stock's top
+ * face lands exactly on the table and the block disappears inside the
+ * casting, which is what it did.
+ */
+const FIXTURE_HEIGHT = 80;
+
 /** The 3-axis VMC: table carries the work in X and Y, head moves in Z. */
 export function vmc3Axis() {
   return {
@@ -65,7 +75,7 @@ export function vmc3Axis() {
     toolNode: 'spindle',
     workNode: 'table',
     spindleOffset: [0, 0, 0],
-    tableOffset: [0, 0, 0],
+    tableOffset: [0, 0, FIXTURE_HEIGHT],
     accent: 0x1f6fb4,
   };
 }
@@ -136,7 +146,7 @@ export function headHead() {
     toolNode: 'spindle',
     workNode: 'table',
     spindleOffset: [0, 0, 0],
-    tableOffset: [0, 0, 0],
+    tableOffset: [0, 0, FIXTURE_HEIGHT],
     accent: 0x6b4fbf,
   };
 }
@@ -204,7 +214,7 @@ export function headTable() {
     toolNode: 'spindle',
     workNode: 'table',
     spindleOffset: [0, 0, 0],
-    tableOffset: [0, 0, 0],
+    tableOffset: [0, 0, FIXTURE_HEIGHT],
     accent: 0x18867a,
   };
 }
@@ -276,7 +286,7 @@ export function tableTable() {
     toolNode: 'spindle',
     workNode: 'table',
     spindleOffset: [0, 0, 0],
-    tableOffset: [0, 0, 0],
+    tableOffset: [0, 0, FIXTURE_HEIGHT],
     accent: 0xc05a26,
   };
 }

@@ -104,6 +104,19 @@ export class Simulator {
     this.reset();
   }
 
+  /**
+   * Update settings that do not change what has already been cut.
+   *
+   * `load()` resets the run, which is right when the program, the stock or
+   * the machine's geometry changes and wrong when all that changed is a
+   * collision threshold or which fixtures are in the way.
+   */
+  retune(opts) {
+    if (opts.machine !== undefined) this.machine = opts.machine;
+    if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
+    if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
+  }
+
   reset() {
     this.moveIndex = 0;
     this.segIndex = 0;

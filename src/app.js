@@ -175,6 +175,8 @@ export class App {
 
     this.originView = new OriginView();
     this.machineView.workGroup.add(this.originView.group);
+    // The grid and the origin axes mark work zero, so they ride the table.
+    this.viewer.setHelperFrame(this.machineView.workGroup);
 
     this.toolView = new ToolView();
     this.viewer.add(this.toolView.group);
@@ -184,6 +186,9 @@ export class App {
       models: () => this.models,
       machine: () => this.state.machine,
       origins: () => Object.entries(this.state.wcs).map(([name, point]) => ({ name, point })),
+      // Work coordinates are whatever the table is carrying, which in
+      // full-machine view is somewhere else entirely.
+      workFrame: () => this.machineView.workGroup,
     });
     this.pick.onUpdate = (s) => this.renderPickBar(s);
     this.refreshOrigins();
@@ -336,6 +341,7 @@ export class App {
     const s = this.state.stock;
     this.stock = new Stock({ origin: s.origin, size: s.size, resolution: s.resolution });
     this.stockView.setStock(this.stock, { renderer: this.viewer.renderer });
+    this.viewer.setGridExtent(Math.max(s.size[0], s.size[1]));
     this.applyDisplay();
     this.simulator.load({ stock: this.stock });
     this.refreshTarget();
@@ -352,8 +358,19 @@ export class App {
     this.viewer.invalidate();
   }
 
+  /**
+   * Change something about the machine.
+   *
+   * Only a change to the chain itself re-reads the program, because that is
+   * what resets the run. Switching between part and full-machine view is a
+   * question about the picture, and it used to throw away the cut — you
+   * looked at the machine and your finished part went back to a solid
+   * block.
+   */
   setMachine(patch) {
     const presetChanged = patch.preset && patch.preset !== this.state.machine.preset;
+    const chainChanged = presetChanged
+      || patch.spindleDiameter !== undefined || patch.spindleLength !== undefined;
     Object.assign(this.state.machine, patch);
     this.machineView.setConfig(this.state.machine);
     this.machineView.setLimitsVisible(this.state.display.showLimits);
@@ -362,8 +379,14 @@ export class App {
       // axes belongs on the new ones.
       for (const p of this.machineParts.parts) p.nodeId = null;
     }
-    this.applyKinematics();
-    this.scheduleSlotRefresh();
+    if (chainChanged) {
+      this.applyKinematics();
+      this.scheduleSlotRefresh();
+    } else {
+      this.applyMachineParts();
+      this.simulator.retune({ machine: this.state.machine });
+      if (this.panels && this.panels.machine) this.panels.machine.refresh();
+    }
     this.viewer.invalidate();
   }
 

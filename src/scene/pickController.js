@@ -32,7 +32,16 @@ export class PickController {
   /**
    * @param {import('./viewer.js').Viewer} viewer
    * @param {{stock:() => object, models:() => object, machine:() => object,
-   *          origins:() => Array<{name:string, point:number[]}>}} ctx
+   *          origins:() => Array<{name:string, point:number[]}>,
+   *          workFrame?:() => object}} ctx
+   *
+   * Everything this controller produces is in **work coordinates**, because
+   * that is what a work offset, a stock origin and a model position are all
+   * measured in. In part-only view the work frame is the scene, so the two
+   * are the same; in full-machine view the work frame rides the table and
+   * they are not. Hence `workFrame`: the ray is carried into it before
+   * anything is tested, and the markers are parented to it so a point drawn
+   * at (0,0,0) lands on the part's zero rather than the floor of the shop.
    */
   constructor(viewer, ctx) {
     this.viewer = viewer;
@@ -45,9 +54,14 @@ export class PickController {
 
     this.raycaster = new THREE.Raycaster();
     this.pointer = new THREE.Vector2();
+    /** Work ray: the pointer ray carried into work coordinates. */
+    this.workRay = new THREE.Ray();
+    this.invWork = new THREE.Matrix4();
+    this.tmpVec = new THREE.Vector3();
     this.group = new THREE.Group();
     this.group.name = 'pick';
-    viewer.scene.add(this.group);
+    const frame = ctx.workFrame && ctx.workFrame();
+    (frame || viewer.scene).add(this.group);
 
     this.buildMarkers();
     this.bind();
@@ -203,13 +217,43 @@ export class PickController {
     this.viewer.invalidate();
   }
 
-  /** World ray for a pointer event. */
+  /**
+   * The pointer ray, in both frames.
+   *
+   * `raycaster` stays in world coordinates because that is what three.js
+   * intersection tests expect; `workRay` is the same ray carried into work
+   * coordinates, which is where the stock heightmap lives.
+   */
   rayFor(event) {
     const rect = this.dom.getBoundingClientRect();
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.viewer.camera);
+
+    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    if (frame) {
+      frame.updateWorldMatrix(true, false);
+      this.invWork.copy(frame.matrixWorld).invert();
+    } else {
+      this.invWork.identity();
+    }
+    this.workRay.copy(this.raycaster.ray).applyMatrix4(this.invWork);
+    this.workRay.direction.normalize();
     return { rect, screen: { x: event.clientX - rect.left, y: event.clientY - rect.top } };
+  }
+
+  /** A world point brought into work coordinates. */
+  toWork(point) {
+    this.tmpVec.set(point[0], point[1], point[2]).applyMatrix4(this.invWork);
+    return [this.tmpVec.x, this.tmpVec.y, this.tmpVec.z];
+  }
+
+  /** A work point projected to the screen, for snap ranking. */
+  projectWork(point, out) {
+    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    out.set(point[0], point[1], point[2]);
+    if (frame) out.applyMatrix4(frame.matrixWorld);
+    return out.project(this.viewer.camera);
   }
 
   updateHover(event) {
@@ -255,7 +299,10 @@ export class PickController {
 
   /** Keep the marker a constant size on screen. */
   markerScale(point) {
-    const d = this.viewer.camera.position.distanceTo(new THREE.Vector3(...point));
+    const v = new THREE.Vector3(...point);
+    const frame = this.ctx.workFrame && this.ctx.workFrame();
+    if (frame) v.applyMatrix4(frame.matrixWorld);
+    const d = this.viewer.camera.position.distanceTo(v);
     return Math.max(d * 0.005, 0.15);
   }
 
@@ -270,7 +317,7 @@ export class PickController {
     let best = null;
     const v = new THREE.Vector3();
     for (const c of candidates) {
-      v.set(c.point[0], c.point[1], c.point[2]).project(this.viewer.camera);
+      this.projectWork(c.point, v);
       if (v.z > 1) continue;                       // behind the camera
       const sx = ((v.x + 1) / 2) * rect.width;
       const sy = ((1 - v.y) / 2) * rect.height;
@@ -287,7 +334,7 @@ export class PickController {
 
   /** The unsnapped point under the cursor. */
   freeHit() {
-    const r = this.raycaster.ray;
+    const r = this.workRay;
     const origin = [r.origin.x, r.origin.y, r.origin.z];
     const dir = [r.direction.x, r.direction.y, r.direction.z];
     let best = null;
@@ -307,7 +354,7 @@ export class PickController {
       if (hits.length && (!best || hits[0].distance < best.distance)) {
         const h = hits[0];
         best = {
-          point: [h.point.x, h.point.y, h.point.z],
+          point: this.toWork([h.point.x, h.point.y, h.point.z]),
           kind: 'surface',
           label: h.object.name || 'model',
           distance: h.distance,
@@ -326,6 +373,7 @@ export class PickController {
     if (this.points.length) {
       const a = this.points[0];
       const n = this.viewer.camera.getWorldDirection(new THREE.Vector3());
+      n.transformDirection(this.invWork);
       const denom = n.x * dir[0] + n.y * dir[1] + n.z * dir[2];
       if (Math.abs(denom) > 1e-9) {
         const t = (n.x * (a[0] - origin[0]) + n.y * (a[1] - origin[1]) + n.z * (a[2] - origin[2])) / denom;
@@ -370,13 +418,13 @@ export class PickController {
     if (models) {
       for (const m of models.models) {
         if (!m.visible) continue;
-        for (const s of modelBoxSnaps(m)) out.push({ ...s, label: m.name });
+        for (const s of modelBoxSnaps(m, this.invWork)) out.push({ ...s, label: m.name });
       }
     }
 
     // Vertices of the triangle actually under the cursor.
     if (free && free.intersection && free.intersection.face) {
-      for (const s of triangleSnaps(free.intersection)) out.push({ ...s, label: free.label });
+      for (const s of triangleSnaps(free.intersection, this.invWork)) out.push({ ...s, label: free.label });
     }
 
     for (const o of this.ctx.origins()) {
@@ -403,7 +451,7 @@ export class PickController {
 }
 
 /** Corners, edge midpoints and face centres of a model's bounding box. */
-function modelBoxSnaps(model) {
+function modelBoxSnaps(model, inv) {
   const bb = model.mesh.geometry.boundingBox;
   if (!bb) return [];
   model.object.updateMatrixWorld(true);
@@ -421,6 +469,7 @@ function modelBoxSnaps(model) {
         if (mids === 3) continue;
         const kind = mids === 0 ? 'corner' : mids === 1 ? 'edge' : 'face';
         v.set(axis[0][i], axis[1][j], axis[2][k]).applyMatrix4(model.object.matrixWorld);
+        if (inv) v.applyMatrix4(inv);
         out.push({ point: [v.x, v.y, v.z], kind });
       }
     }
@@ -429,16 +478,17 @@ function modelBoxSnaps(model) {
 }
 
 /** Vertices, edge midpoints and centroid of one picked triangle. */
-function triangleSnaps(intersection) {
+function triangleSnaps(intersection, inv) {
   const geom = intersection.object.geometry;
   const pos = geom.attributes.position;
   const face = intersection.face;
   if (!pos || !face) return [];
 
   const m = intersection.object.matrixWorld;
-  const a = new THREE.Vector3().fromBufferAttribute(pos, face.a).applyMatrix4(m);
-  const b = new THREE.Vector3().fromBufferAttribute(pos, face.b).applyMatrix4(m);
-  const c = new THREE.Vector3().fromBufferAttribute(pos, face.c).applyMatrix4(m);
+  const bring = (v) => (inv ? v.applyMatrix4(m).applyMatrix4(inv) : v.applyMatrix4(m));
+  const a = bring(new THREE.Vector3().fromBufferAttribute(pos, face.a));
+  const b = bring(new THREE.Vector3().fromBufferAttribute(pos, face.b));
+  const c = bring(new THREE.Vector3().fromBufferAttribute(pos, face.c));
 
   const mid = (p, q) => [(p.x + q.x) / 2, (p.y + q.y) / 2, (p.z + q.z) / 2];
   return [

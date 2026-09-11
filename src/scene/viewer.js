@@ -87,7 +87,11 @@ export class Viewer {
     this.scene.background = null;
     this.scene.fog = new THREE.Fog(0xdfe3ea, 2200, 5200);
 
-    this.camera = new THREE.PerspectiveCamera(42, 1, 1, 8000);
+    // A 1 mm near plane against a 8 km far plane spends almost all of the
+    // depth buffer on the first few centimetres, which is what makes two
+    // touching castings flicker against each other. Nothing is ever this
+    // close to the camera anyway — the orbit controls stop at 5.
+    this.camera = new THREE.PerspectiveCamera(42, 1, 4, 6000);
     this.camera.position.set(240, -300, 220);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -153,16 +157,59 @@ export class Viewer {
     this.helpers.name = 'helpers';
 
     this.scene.add(this.helpers);
-    this.helpers.add(this.makeGrid());
+    this.gridSpan = 1000;
+    this.helpers.add(this.makeGrid(this.gridSpan));
     this.helpers.add(this.makeAxes());
   }
 
-  makeGrid() {
-    const grid = new THREE.GridHelper(1000, 50, 0xa8b0be, 0xd2d7e0);
+  /**
+   * Hang the grid and the origin axes off a frame.
+   *
+   * They mark the *work* origin, so on a machine whose table moves they
+   * belong to the table, not to the floor. Left in the scene they sat at a
+   * fixed height and sliced through the castings.
+   */
+  setHelperFrame(object) {
+    (object || this.scene).add(this.helpers);
+    this.invalidate();
+  }
+
+  /**
+   * Size the reference grid to the job.
+   *
+   * A fixed metre square is either lost under a big fixture or spread far
+   * past a small part and over the machine behind it. Sized to the work it
+   * reads as what it is — a scale next to the part.
+   *
+   * @param {number} span the work area's largest dimension, mm
+   */
+  setGridExtent(span) {
+    const size = Math.max(100, Math.min(Math.ceil((span * 1.8) / 50) * 50, 2000));
+    if (size === this.gridSpan) return;
+    this.gridSpan = size;
+    if (this.grid) {
+      this.grid.geometry.dispose();
+      this.helpers.remove(this.grid);
+    }
+    this.helpers.add(this.makeGrid(size));
+    if (this.background) this.setBackground(this.background);
+    this.invalidate();
+  }
+
+  makeGrid(span = 1000) {
+    const step = span > 900 ? 50 : span > 400 ? 20 : 10;
+    const grid = new THREE.GridHelper(span, Math.max(4, Math.round(span / step)), 0xa8b0be, 0xd2d7e0);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -0.02;
     grid.material.transparent = true;
     grid.material.opacity = 0.6;
+    // A transparent material still writes depth unless told not to, and a
+    // grid that writes depth erases whatever is behind it — which is how a
+    // reference plane ends up looking like a rendering fault across the
+    // middle of the machine.
+    grid.material.depthWrite = false;
+    grid.renderOrder = -1;
+    if (this.gridVisible === false) grid.visible = false;
     this.grid = grid;
     return grid;
   }
@@ -306,7 +353,7 @@ export class Viewer {
     this.invalidate();
   }
 
-  setGridVisible(v) { if (this.grid) this.grid.visible = v; this.invalidate(); }
+  setGridVisible(v) { this.gridVisible = v; if (this.grid) this.grid.visible = v; this.invalidate(); }
   setAxesVisible(v) { if (this.axes) this.axes.visible = v; this.invalidate(); }
 
   screenshot(type = 'image/png') {
