@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 
 import { interpret } from '../src/gcode/interpreter.js';
 import { makeMacro, normaliseCode, expandMacro, macroReferences, defaultMacros } from '../src/machine/macros.js';
+import { DEFAULT_MACHINE, MACHINE_SETTINGS } from '../src/machine/config.js';
 
 const run = (src, cfg = {}) => interpret(Array.isArray(src) ? src.join('\n') : src, cfg);
 const errs = (p) => p.warnings.filter((w) => w.severity === 'error');
@@ -157,4 +158,31 @@ test('two files claiming the same number is said out loud', () => {
   // And the first one — the job's own — is the one that runs.
   assert.equal(p.moves[1].source, 'mine.nc');
   assert.equal(Math.round(p.moves[1].to[0]), 5);
+});
+
+test('everything a machine is gets saved with it, or is deliberately not', () => {
+  // Saving a machine and loading one have to agree about what a machine is.
+  // Anything added to the machine from now on lands in one of these two
+  // lists, and this test is what makes that a decision rather than an
+  // oversight.
+  const CARRIED_ELSEWHERE = {
+    name: 'the chain carries it',
+    controller: 'its own block in machine.json',
+    macros: 'its own block, one file each',
+    parameters: 'its own block',
+    subprograms: 'its own block, one file each',
+  };
+  const NOT_THE_MACHINE = {
+    preset: 'which preset it started from; a saved machine is its own thing',
+    mode: 'whether the full machine is drawn — about the window, not the machine',
+    visible: 'the same',
+  };
+
+  for (const key of Object.keys(DEFAULT_MACHINE)) {
+    const known = MACHINE_SETTINGS.includes(key) || key in CARRIED_ELSEWHERE || key in NOT_THE_MACHINE;
+    assert.ok(known, `machine setting "${key}" is neither saved nor deliberately left out`);
+  }
+  for (const key of MACHINE_SETTINGS) {
+    assert.ok(key in DEFAULT_MACHINE, `"${key}" is saved but no longer part of a machine`);
+  }
 });

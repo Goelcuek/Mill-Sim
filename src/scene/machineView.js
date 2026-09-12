@@ -21,50 +21,10 @@ import * as m4 from '../core/mat4.js';
 import { Kinematics } from '../machine/kinematics.js';
 import { buildPreset, PRESETS } from '../machine/presets.js';
 import { TONES, buildCasting } from './castings.js';
-import { defaultMacros, DEFAULT_PARAMETERS } from '../machine/macros.js';
+import { DEFAULT_PARAMETERS, defaultMacros } from '../machine/macros.js';
+import { DEFAULT_MACHINE, MACHINE_SETTINGS } from '../machine/config.js';
 
-export const DEFAULT_MACHINE = {
-  name: '3-axis VMC',
-  preset: 'vmc3',
-  travel: [760, 430, 510],
-  tableSize: [900, 460],
-  /** Scene Z of the table top; the stock normally sits on fixtures above it. */
-  tableZ: -80,
-  spindleDiameter: 110,
-  spindleLength: 130,
-  /** Tool-tip travel limits in scene coordinates. */
-  limits: { enabled: true, min: [-380, -215, -120], max: [380, 215, 330] },
-  table: { enabled: true, z: -80, xMin: -450, xMax: 450, yMin: -230, yMax: 230 },
-  rapidRate: 15000,
-  maxFeed: 10000,
-  /**
-   * The control, not the iron. Which flavour of G-code this machine reads
-   * and what modal state it powers up in — see DEFAULT_CONFIG.controller
-   * in the interpreter.
-   */
-  controller: {
-    flavour: 'fanuc',
-    plane: 17,
-    metric: true,
-    absolute: true,
-    arcCentreAbsolute: false,
-    feedMode: 94,
-  },
-  /**
-   * What this machine does at an M code, and the numbers those macros
-   * read. Both belong to the machine, so both travel with it.
-   */
-  macros: defaultMacros('fanuc'),
-  parameters: { ...DEFAULT_PARAMETERS },
-  /**
-   * Subprograms that live in the control between jobs — probing cycles,
-   * pallet routines, the builder's own O9000 programs. Any program loaded
-   * on this machine can call them.
-   */
-  subprograms: [],
-  mode: 'part',
-  visible: true,
-};
+export { DEFAULT_MACHINE, MACHINE_SETTINGS };
 
 // Darker than the part and the stock on purpose: the machine is scenery,
 // and at full-machine zoom a white casting against a white background

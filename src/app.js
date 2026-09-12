@@ -7,7 +7,7 @@ import { Viewer } from './scene/viewer.js';
 import { StockView } from './scene/stockView.js';
 import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
-import { MachineView, DEFAULT_MACHINE } from './scene/machineView.js';
+import { MachineView, DEFAULT_MACHINE, MACHINE_SETTINGS } from './scene/machineView.js';
 import { defaultMacros, DEFAULT_PARAMETERS, makeMacro, normaliseCode } from './machine/macros.js';
 import { MachineParts } from './machine/parts.js';
 import { PRESETS } from './machine/presets.js';
@@ -36,7 +36,7 @@ import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
-import { fmt, fmtDuration, clamp, uid } from './core/util.js';
+import { fmt, fmtDuration, clamp, uid, clone } from './core/util.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
 export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
@@ -572,6 +572,12 @@ export class App {
       ...kin.toJSON(),
       controller: { ...machine.controller },
       parameters: { ...machine.parameters },
+      // Everything else the Machine tab holds: the envelope, the table, the
+      // spindle nose, the rates. Not the two display switches — whether the
+      // full machine is drawn is about the window, not the machine.
+      settings: Object.fromEntries(MACHINE_SETTINGS.map((k) => [k, clone(machine[k])])),
+      /** Where the home switches are, which is what G28 and G53 mean. */
+      machineZero: [...this.state.machineZero],
       macros,
       subprograms,
       bodies,
@@ -644,6 +650,20 @@ export class App {
     this.state.machine.preset = 'custom';
     if (def.controller) Object.assign(this.state.machine.controller, def.controller);
     if (def.parameters) this.state.machine.parameters = { ...DEFAULT_PARAMETERS, ...def.parameters };
+
+    // The travels, the table and the spindle nose: the crash model's idea
+    // of the machine, which is no use if it stays behind when the machine
+    // moves to another computer.
+    if (def.settings) {
+      for (const key of MACHINE_SETTINGS) {
+        if (def.settings[key] !== undefined) this.state.machine[key] = clone(def.settings[key]);
+      }
+    }
+    if (Array.isArray(def.machineZero) && def.machineZero.length === 3) {
+      this.state.machineZero = def.machineZero.map(Number);
+    }
+    this.machineView.setConfig(this.state.machine);
+    this.machineView.setLimitsVisible(this.state.display.showLimits);
 
     // Macro bodies live in their own files so they can be read and edited
     // outside this program; a machine.json on its own still carries the

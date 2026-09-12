@@ -137,8 +137,10 @@ folder anyway:
 
 ```
 fidia-kr199.zip
-├── machine.json     the chain, the controller, the parameters, and which
-│                    axis carries each body, and where
+├── machine.json     the chain; the controller's power-up state; the
+│                    travels, table, spindle nose and rates; where home is;
+│                    the macro and subprogram list; and which axis carries
+│                    each body, and where
 ├── macros/M6.nc     one file per macro, plain G-code
 ├── macros/M30.nc
 ├── subprograms/     the files that live in this control between jobs
@@ -146,7 +148,11 @@ fidia-kr199.zip
 └── README.txt
 ```
 
-Everything needed to rebuild the machine is in there, geometry included.
+Everything on the Machine tab is in there, geometry included: load the
+folder on another computer and you have the same machine, with the same
+envelope, the same crash model and the same idea of what M06 does. The two
+exceptions are deliberate — whether the full machine is *drawn*, and which
+preset it started life as, are about the window rather than the machine.
 `examples/machines/fidia-kr199.json` is a worked example of the JSON on its
 own — a bridge machine with a fixed table and an A/C birotary head, X Y Z C
 A all in series, with its tool-change macro — to copy and edit; loading a
