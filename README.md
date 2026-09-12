@@ -90,15 +90,59 @@ another is the classic way to crash — the second one starts in inches, or
 reads I/J as absolute, or comes up in G18. The Controller page holds those
 defaults and changing one re-reads the program.
 
-Your own machine goes in as JSON: **Machine › Layout › Load machine…**.
-`examples/machines/fidia-kr199.json` is a worked example — a bridge machine
-with a fixed table and an A/C birotary head, X Y Z C A all in series — to
-copy and edit. The chain is the part that has to be right; travels and
-pivot distances are numbers off your machine. **Save machine…** writes the
-chain, the controller settings and where every body sits. It does not carry
-the geometry — a set of castings is tens of megabytes and has no business
-inside a text file — so loading one restores the arrangement and asks for
-the STLs again.
+**Macros: what the machine does at an M code.** A control does not really
+*do* M06. It runs a program the machine builder wrote, which retracts the
+head, crosses to the change position, unclamps and indexes the carousel —
+which is why two machines reading the same G-code visibly do different
+things at the same code. The Macros page (under **Program**) holds those
+programs, as G-code:
+
+```gcode
+(KR199 tool change: square the head, cross to the changer)
+M5
+G91 G28 Z0
+G90 G53 G0 C0 A0
+G53 G0 X#toolChangeX Y#toolChangeY
+G4 P3.0            (arm swings)
+```
+
+`#toolChangeX` is a machine parameter, set on the same page; `#T`, `#S`,
+`#P`, `#Q`, `#R`, `#H` and `#D` are the words of the block that called the
+macro, so the body can say which tool it is loading. Everything else is
+ordinary G-code read by the ordinary interpreter, so G28, G53, dwells and
+canned cycles all work inside one. Macros belong to the machine, not to the
+part program, and they travel with it. They ship switched off: a macro that
+runs changes what every program does at that code, and that should be a
+decision rather than a surprise.
+
+**Subprograms.** A post that writes `M98 P1000` expects a file called
+O1000 to be on the control. The Subprograms page holds those files beside
+the main program, so the call resolves and the moves inside them are
+simulated, carved and collision-checked like any others — the toolpath and
+every warning say which file they came from. A program that carries its own
+O-numbered sections still works exactly as it did.
+
+Your own machine goes in through **Machine › Layout › Load machine…**, and
+comes out through **Save machine…** as a folder — a `.zip`, because a web
+page cannot hand you a directory, and every operating system opens one as a
+folder anyway:
+
+```
+fidia-kr199.zip
+├── machine.json     the chain, the controller, the parameters, and which
+│                    axis carries each body, and where
+├── macros/M6.nc     one file per macro, plain G-code
+├── macros/M30.nc
+├── bodies/*.stl     the castings themselves, in millimetres
+└── README.txt
+```
+
+Everything needed to rebuild the machine is in there, geometry included.
+`examples/machines/fidia-kr199.json` is a worked example of the JSON on its
+own — a bridge machine with a fixed table and an A/C birotary head, X Y Z C
+A all in series, with its tool-change macro — to copy and edit; loading a
+bare `.json` like that restores the arrangement and asks for the STLs
+separately.
 
 Until you import castings, each preset draws itself: a plinth with a chip
 skirt, a column with ways down its front face, a T-slotted table on a
@@ -134,7 +178,7 @@ collapse the page row and give the viewport the space back.
 | **Setup** | Stock · Work offsets · Fixtures |
 | **Machine** | Layout · Axes · Assembly · Controller · Travels |
 | **Tools** | Tool table · Cutters · Holders · Library |
-| **Program** | G-code · Summary |
+| **Program** | Main · Subprograms · Macros · Summary |
 | **Results** | Findings · Compare · Export |
 | **View** | Camera · Show · Inspect |
 

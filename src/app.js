@@ -8,6 +8,7 @@ import { StockView } from './scene/stockView.js';
 import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE } from './scene/machineView.js';
+import { defaultMacros, DEFAULT_PARAMETERS, makeMacro, normaliseCode } from './machine/macros.js';
 import { MachineParts } from './machine/parts.js';
 import { PRESETS } from './machine/presets.js';
 import { Kinematics } from './machine/kinematics.js';
@@ -23,7 +24,8 @@ import { interpret } from './gcode/interpreter.js';
 
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
 import { buildTargetMap, compareToTarget } from './sim/target.js';
-import { writeSTL, writeOBJ } from './io/stl.js';
+import { writeSTL, writeOBJ, parseSTL } from './io/stl.js';
+import { writeZip, readZip } from './io/zip.js';
 
 import { el, clear, button, download, pickFile } from './ui/dom.js';
 import { SetupPanel } from './ui/setupPanel.js';
@@ -53,7 +55,14 @@ export class App {
     this.root = root;
     this.state = {
       stock: { size: [120, 80, 25], origin: [-60, -40, -25], resolution: 0.28 },
-      machine: { ...DEFAULT_MACHINE, controller: { ...DEFAULT_MACHINE.controller } },
+      machine: {
+        ...DEFAULT_MACHINE,
+        controller: { ...DEFAULT_MACHINE.controller },
+        // Fresh copies: editing this machine's macros must not edit the
+        // defaults every other machine starts from.
+        macros: defaultMacros(DEFAULT_MACHINE.controller.flavour),
+        parameters: { ...DEFAULT_PARAMETERS },
+      },
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
       machineZero: [0, 0, 250],
       /** Which work offset the Setup panel and the placement tools act on. */
@@ -67,6 +76,12 @@ export class App {
       program: null,
       source: '',
       programName: 'program.nc',
+      /**
+       * Subprogram files the main program may call with M98. Kept beside
+       * the main text rather than inside it, because that is how they
+       * arrive from the post and how they live on the control.
+       */
+      subprograms: [],
       playing: false,
       speed: '4',
       activeAssemblyId: null,
@@ -495,45 +510,168 @@ export class App {
     this.notify('An empty machine: one base. Add axes with “Add axis…” — each says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps.', 'ok');
   }
 
-  /** Write the current chain out so it can be shared or kept. */
-  exportKinematics() {
+  /**
+   * Write the machine out as a folder.
+   *
+   * A machine is not one file. It is a chain, a control, the macros that
+   * control runs, and however many castings somebody imported and mated —
+   * and the chain is worth nothing without them, because "the saddle is on
+   * Y" names a body that has to exist. A page cannot hand out a folder, so
+   * it hands out a zip, which every operating system opens as one:
+   *
+   *   machine.json      the chain, the controller, the parameters, and
+   *                     where every body sits on it
+   *   macros/M6.nc      one file per macro, plain G-code, editable in any
+   *                     editor and readable without this program
+   *   bodies/*.stl      the castings themselves
+   *   README.txt        what the above is, for whoever opens it in a year
+   */
+  async exportMachine() {
     const kin = this.machineView.kinematics;
+    const machine = this.state.machine;
+    const stem = (kin.name || 'machine').replace(/\s+/g, '-').toLowerCase();
+    const used = new Set();
+    const unique = (name, ext) => {
+      let base = String(name || 'part').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'part';
+      let out = `${base}${ext}`;
+      let n = 2;
+      while (used.has(out)) out = `${base}-${n++}${ext}`;
+      used.add(out);
+      return out;
+    };
+
+    const files = [];
+    const macros = (machine.macros || []).map((m) => {
+      const file = `macros/${unique(m.code, '.nc')}`;
+      files.push({ name: file, data: `${m.body || ''}\n` });
+      return { id: m.id, code: m.code, name: m.name, enabled: m.enabled, notes: m.notes, file };
+    });
+
+    const bodies = [];
+    for (const part of this.machineParts.parts) {
+      const pos = part.object.geometry.getAttribute('position');
+      const file = `bodies/${unique(part.name, '.stl')}`;
+      files.push({ name: file, data: writeSTL(pos.array, { name: part.name }) });
+      bodies.push({
+        name: part.name,
+        file,
+        nodeId: part.nodeId,
+        position: [...part.position],
+        rotation: [...part.rotation],
+      });
+    }
+
     const def = {
       ...kin.toJSON(),
-      controller: { ...this.state.machine.controller },
-      // Where each body sits, but not the body itself: a set of castings is
-      // tens of megabytes and has no business inside a text file. Loading
-      // this back restores the arrangement and asks for the STLs again.
-      bodies: this.machineParts.placements(),
+      controller: { ...machine.controller },
+      parameters: { ...machine.parameters },
+      macros,
+      bodies,
+      savedBy: 'Mill-Sim',
+      saved: new Date().toISOString(),
     };
-    download(`${kin.name.replace(/\s+/g, '-').toLowerCase()}.json`,
-      JSON.stringify(def, null, 2), 'application/json');
+    files.unshift({ name: 'machine.json', data: JSON.stringify(def, null, 2) });
+    files.push({
+      name: 'README.txt',
+      data: [
+        `${kin.name} — a Mill-Sim machine.`,
+        '',
+        'machine.json  the kinematic chain, the controller settings, the',
+        '              macro list and where each body sits on which axis.',
+        'macros/       one G-code file per M code. Editing these edits what',
+        '              the machine does at that code.',
+        'bodies/       the castings, as STL, in millimetres, each in the',
+        '              coordinates of the axis that carries it.',
+        '',
+        'Load the whole folder back with Machine > Layout > Load machine.',
+        '',
+      ].join('\n'),
+    });
+
+    try {
+      download(`${stem}.zip`, await writeZip(files), 'application/zip');
+      this.notify(`Saved ${stem}.zip — the chain, ${macros.length} ${macros.length === 1 ? 'macro' : 'macros'} and ${bodies.length} ${bodies.length === 1 ? 'body' : 'bodies'}.`, 'ok');
+    } catch (err) {
+      this.notify(`Could not write the machine: ${err.message}`, 'error');
+    }
   }
 
-  /** Load a chain saved with "Save machine…". */
-  async importKinematics() {
-    const [file] = await pickFile('.json');
+  /** Load a machine: the whole folder, or a bare chain saved before. */
+  async importMachine() {
+    const [file] = await pickFile('.zip,.json');
     if (!file) return;
     try {
-      const def = JSON.parse(await file.text());
-      if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('That file has no axes in it.');
-      this.machineView.setKinematics(new Kinematics(def));
-      // It is no longer one of the presets, and the picker should say so.
-      this.state.machine.preset = 'custom';
-      if (def.controller) Object.assign(this.state.machine.controller, def.controller);
+      if (/\.json$/i.test(file.name)) {
+        await this.applyMachineDefinition(JSON.parse(await file.text()), null, file.name);
+        return;
+      }
+      const entries = await readZip(await file.arrayBuffer());
+      const jsonEntry = entries.get('machine.json')
+        || [...entries.keys()].filter((k) => k.endsWith('machine.json')).map((k) => entries.get(k))[0];
+      if (!jsonEntry) throw new Error('there is no machine.json in it.');
+      await this.applyMachineDefinition(JSON.parse(new TextDecoder().decode(jsonEntry)), entries, file.name);
+    } catch (err) {
+      this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
+    }
+  }
+
+  /**
+   * Put a machine definition in place.
+   *
+   * @param {object} def what machine.json held
+   * @param {Map<string, Uint8Array>|null} entries the rest of the folder,
+   *   when there was one: the macro bodies and the castings themselves.
+   * @param {string} filename
+   */
+  async applyMachineDefinition(def, entries, filename) {
+    if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('that file has no axes in it.');
+    this.machineView.setKinematics(new Kinematics(def));
+    this.state.machine.preset = 'custom';
+    if (def.controller) Object.assign(this.state.machine.controller, def.controller);
+    if (def.parameters) this.state.machine.parameters = { ...DEFAULT_PARAMETERS, ...def.parameters };
+
+    // Macro bodies live in their own files so they can be read and edited
+    // outside this program; a machine.json on its own still carries the
+    // list, and any body written inline.
+    if (Array.isArray(def.macros)) {
+      this.state.machine.macros = def.macros.map((m) => {
+        let body = m.body || '';
+        if (!body && entries && m.file && entries.has(m.file)) {
+          body = new TextDecoder().decode(entries.get(m.file)).replace(/\s+$/, '');
+        }
+        return makeMacro({ ...m, body });
+      });
+    }
+
+    // The castings, when the folder brought them.
+    let loaded = 0;
+    if (entries) {
+      this.machineParts.clear();
+      for (const body of def.bodies || []) {
+        const data = body.file && entries.get(body.file);
+        if (!data) continue;
+        try {
+          const stl = parseSTL(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
+          const part = this.machineParts.add({ name: body.name || body.file, positions: stl.positions });
+          part.source = { file: body.file, format: stl.format };
+          loaded++;
+        } catch (err) {
+          this.notify(`${body.file}: ${err.message}`, 'error');
+        }
+      }
+    } else {
       for (const p of this.machineParts.parts) {
         if (!this.machineView.nodeGroups.has(p.nodeId)) p.nodeId = null;
       }
-      const matched = def.bodies ? this.machineParts.restorePlacements(def.bodies) : 0;
-      this.applyKinematics();
-      this.setPage('machine', 'layout');
-      const missing = (def.bodies || []).length - matched;
-      this.notify(missing > 0
-        ? `Loaded ${this.machineView.kinematics.name}. ${missing} ${missing === 1 ? 'body is' : 'bodies are'} still to import — the file carries the arrangement, not the geometry.`
-        : `Loaded ${this.machineView.kinematics.name}.`, 'ok');
-    } catch (err) {
-      this.notify(`Could not read that machine: ${err.message}`, 'error');
     }
+    const matched = def.bodies ? this.machineParts.restorePlacements(def.bodies) : 0;
+
+    this.applyKinematics();
+    this.setPage('machine', 'layout');
+    const missing = (def.bodies || []).length - matched;
+    this.notify(missing > 0
+      ? `Loaded ${this.machineView.kinematics.name}. ${missing} ${missing === 1 ? 'body is' : 'bodies are'} still to import — that file carries the arrangement, not the geometry.`
+      : `Loaded ${this.machineView.kinematics.name}${loaded ? ` with ${loaded} ${loaded === 1 ? 'body' : 'bodies'}` : ''}.`, 'ok');
   }
 
   /** Hang each body on the axis it has been assembled onto. */
@@ -616,6 +754,14 @@ export class App {
     } catch (err) {
       this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
     }
+  }
+
+  /** Add a macro to the machine in the spindle, so to speak. */
+  addMacro(patch) {
+    const mac = makeMacro(patch);
+    if (!Array.isArray(this.state.machine.macros)) this.state.machine.macros = [];
+    this.state.machine.macros.push(mac);
+    return mac;
   }
 
   setPersistLibrary(on) {
@@ -731,6 +877,11 @@ export class App {
       kinematics: this.machineView ? this.machineView.kinematics : null,
       gaugeLength: this.fallbackSlot ? this.fallbackSlot.built.gaugeLength : 0,
       controller: this.state.machine.controller,
+      // The other two things a control reads: the shop's subprograms, and
+      // what this machine's builder made its M codes do.
+      subprograms: this.state.subprograms,
+      macros: this.state.machine.macros,
+      parameters: this.state.machine.parameters,
     });
     this.state.program = program;
     this.toolpathView.setProgram(program);

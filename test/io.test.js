@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parseSTL, writeSTL, writeOBJ, bounds } from '../src/io/stl.js';
+import { writeZip, readZip, folderOf } from '../src/io/zip.js';
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from '../src/io/mesh.js';
 import { Stock } from '../src/sim/stock.js';
 import { buildTool, makeTool } from '../src/tools/toolDefs.js';
@@ -114,4 +115,46 @@ test('OBJ export lists every vertex and face', () => {
 test('an empty buffer parses to nothing rather than throwing', () => {
   const stl = parseSTL(new ArrayBuffer(0));
   assert.equal(stl.triangles, 0);
+});
+
+test('a machine folder survives being zipped and read back', async () => {
+  const stl = writeSTL(boxToTriangles([0, 0, 0], [30, 20, 10]).positions, { name: 'saddle' });
+  const json = JSON.stringify({ name: 'KR199', nodes: [{ id: 'base' }] }, null, 2);
+  const macro = 'G91 G28 Z0\nG90 G53 G0 X#toolChangeX Y#toolChangeY\n';
+
+  const zip = await writeZip([
+    { name: 'machine.json', data: json },
+    { name: 'macros/M6.nc', data: macro },
+    { name: 'bodies/saddle.stl', data: stl },
+  ]);
+
+  // Readable by anything that reads zips: the signature is the giveaway.
+  assert.equal(zip[0], 0x50);
+  assert.equal(zip[1], 0x4b);
+
+  const back = await readZip(zip);
+  assert.deepEqual([...back.keys()], ['machine.json', 'macros/M6.nc', 'bodies/saddle.stl']);
+  assert.equal(new TextDecoder().decode(back.get('machine.json')), json);
+  assert.equal(new TextDecoder().decode(back.get('macros/M6.nc')), macro);
+
+  // The castings come back as bytes, so they parse as the STLs they were.
+  const body = back.get('bodies/saddle.stl');
+  const parsed = parseSTL(body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength));
+  assert.equal(parsed.triangles, 12);
+  assert.deepEqual(bounds(parsed.positions).size, [30, 20, 10]);
+
+  // And the folders inside are folders.
+  assert.deepEqual([...folderOf(back, 'bodies').keys()], ['saddle.stl']);
+});
+
+test('a zip that compressed well still reads back exactly', async () => {
+  const repetitive = 'G1 X1 Y2 Z3 F300\n'.repeat(2000);
+  const zip = await writeZip([{ name: 'programs/main.nc', data: repetitive }]);
+  assert.ok(zip.length < repetitive.length / 4, `compressed to ${zip.length} from ${repetitive.length}`);
+  const back = await readZip(zip);
+  assert.equal(new TextDecoder().decode(back.get('programs/main.nc')), repetitive);
+});
+
+test('something that is not a zip is refused, not misread', async () => {
+  await assert.rejects(() => readZip(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])), /not a zip/);
 });

@@ -298,6 +298,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .chain-preview b { color: var(--accent, #0a7cff); font-weight: 600; }
 
+/* A macro body, a subprogram, anything that is G-code inside a window. */
+.code-box {
+  width: 100%;
+  min-height: 150px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  resize: vertical;
+  background: var(--surface-2);
+}
+.section-label-row { padding: 8px 14px 0; }
+
 .inline-warning {
   font-size: 11.5px;
   line-height: 1.45;

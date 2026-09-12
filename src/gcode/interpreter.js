@@ -6,6 +6,7 @@
 // list; nothing downstream has to know about modal state.
 
 import { lex } from './lexer.js';
+import { normaliseCode, expandMacro } from '../machine/macros.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -52,6 +53,18 @@ export const DEFAULT_CONFIG = {
   arcTolerance: 0.008,
   /** Safety valve for runaway subprogram loops. */
   maxBlocks: 400000,
+  /**
+   * Subprograms the main program may call with M98, as separate files.
+   * Each is `{name, number, text}`; the number is the O number M98 asks
+   * for when the text itself does not carry one.
+   */
+  subprograms: [],
+  /**
+   * What this machine does at an M code, as G-code. See machine/macros.js.
+   */
+  macros: [],
+  /** Named numbers a macro body can substitute, such as toolChangeX. */
+  parameters: {},
   /**
    * The machine, when one is loaded. Only the 5-axis codes need it: G53.1
    * has to solve the rotaries against a real chain.
@@ -245,7 +258,27 @@ export function interpret(text, config = {}) {
     wcs: { ...DEFAULT_CONFIG.wcs, ...(config.wcs || {}) },
     controller: { ...DEFAULT_CONFIG.controller, ...(config.controller || {}) },
   };
-  const blocks = lex(text);
+  /**
+   * Every source concatenated into one block list.
+   *
+   * A subprogram is a separate file but the same machine reads it, so it is
+   * simplest to lay them end to end and let the program counter run through
+   * the lot. Each block remembers which source it came from, and each
+   * source ends in a sentinel that returns from the call that entered it —
+   * which is also the implicit M99 at the end of a subprogram file.
+   */
+  const blocks = [];
+  const appendSource = (src, body) => {
+    const start = blocks.length;
+    for (const b of lex(body)) {
+      b.src = src;
+      blocks.push(b);
+    }
+    blocks.push({ line: -1, raw: '', words: [], comments: [], src, endOfSource: true });
+    return start;
+  };
+  appendSource(null, text);
+
   const st = new State(cfg);
   /** Which of U, V and W this machine reads as an axis word. */
   const auxLinear = new Set(auxLinearLetters(cfg));
@@ -256,19 +289,39 @@ export function interpret(text, config = {}) {
   const events = [];
   let warnedMacro = false;
 
+  /** Which source the block being read came from; null is the main program. */
+  let curSrc = null;
+
   const warn = (line, message, severity = 'warning') => {
-    if (warnings.length < 500) warnings.push({ line, message, severity });
+    if (warnings.length >= 500) return;
+    const w = { line, message, severity };
+    if (curSrc) w.source = curSrc;
+    warnings.push(w);
   };
 
-  // Index O-numbers for M98 subprogram calls.
+  // Subprogram files come after the main program, in the order given.
+  const subStarts = new Map();
+  for (const sub of cfg.subprograms || []) {
+    if (!sub) continue;
+    const start = appendSource(sub.name || `O${sub.number}`, sub.text || '');
+    const n = Number(sub.number);
+    if (Number.isFinite(n) && n > 0) subStarts.set(n, start);
+  }
+
+  // Index O-numbers for M98 subprogram calls. The label is the block after
+  // the O word, so a call jumps straight into the body.
   const labels = new Map();
   blocks.forEach((b, idx) => {
     const o = b.words.find((w) => w.letter === 'O');
-    if (o) labels.set(o.value, idx);
+    if (o && !labels.has(o.value)) labels.set(o.value, idx + 1);
   });
+  // A file that declares its own number answers to it, unless the main
+  // program already has a label of its own with that number.
+  for (const [n, start] of subStarts) if (!labels.has(n)) labels.set(n, start);
 
   const push = (move) => {
     move.i = moves.length;
+    if (curSrc) move.source = curSrc;
     moves.push(move);
     // Every move ends where the rotaries now are, so the next one starts
     // there. Leaving this to the blocks that carry an A/B/C word would make
@@ -463,7 +516,79 @@ export function interpret(text, config = {}) {
   let executed = 0;
   let ended = false;
 
-  while (pc < blocks.length && !ended) {
+  // ---- macros ------------------------------------------------------------
+  //
+  // A macro is a scrap of G-code the machine runs when it meets its code. It
+  // is expanded at the call — the body can mention the T word of the block
+  // that called it — and the result is appended to the block list, so from
+  // there on it is read exactly like any other program.
+
+  const macroByCode = new Map();
+  for (const mac of cfg.macros || []) {
+    if (!mac || mac.enabled === false) continue;
+    if (!String(mac.body || '').trim()) continue;
+    const code = normaliseCode(mac.code);
+    if (code) macroByCode.set(code, mac);
+  }
+  /** Expanded bodies, so a hundred tool changes to the same pot cost one. */
+  const macroCache = new Map();
+  /** Queued by the block that asked for them, run before the next block. */
+  const pendingMacros = [];
+
+  const expandInto = (mac, code, vars, line) => {
+    const missing = [];
+    const body = expandMacro(mac.body, vars, (name) => {
+      if (!missing.includes(name)) missing.push(name);
+    });
+    if (missing.length) {
+      warn(line, `${code} macro: nothing is set for ${missing.map((n) => `#${n}`).join(', ')}, read as 0.`);
+    }
+    const key = `${mac.id}\u0000${body}`;
+    if (macroCache.has(key)) return macroCache.get(key);
+    const start = appendSource(`${code} macro`, body);
+    macroCache.set(key, start);
+    return start;
+  };
+
+  /** A macro that is already running does not call itself again. */
+  const macroRunning = (code) => callStack.some((f) => f.macro === code);
+
+  /** Pop one call frame, whether it came from M98, a macro or the file end. */
+  const returnFromCall = () => {
+    const frame = callStack.pop();
+    if (!frame) {
+      ended = true;
+      return;
+    }
+    if (frame.remaining > 0) {
+      frame.remaining--;
+      callStack.push(frame);
+      pc = frame.target;
+    } else {
+      pc = frame.ret;
+      if (frame.resumeEnded) ended = true;
+    }
+  };
+
+  while (pc < blocks.length) {
+    // A macro queued by the block just read runs before the next one — and
+    // before the program is allowed to end, so an M30 macro can park the
+    // machine on its way out.
+    if (pendingMacros.length) {
+      const call = pendingMacros.shift();
+      if (callStack.length > 16) {
+        warn(call.line, `${call.code} macro: nesting too deep.`, 'error');
+      } else {
+        // An M30 macro runs with the program already ended, so the end is
+        // held on the frame and restored when the macro returns.
+        callStack.push({ ret: pc, remaining: 0, target: call.start, macro: call.code, resumeEnded: ended });
+        ended = false;
+        pc = call.start;
+      }
+      continue;
+    }
+    if (ended) break;
+
     executed++;
     if (executed > cfg.maxBlocks) {
       warn(blocks[pc].line, 'Aborted: block limit reached (runaway subprogram loop?).', 'error');
@@ -472,6 +597,14 @@ export function interpret(text, config = {}) {
 
     const b = blocks[pc];
     pc++;
+    curSrc = b.src || null;
+
+    // The end of a subprogram or a macro returns to whatever called it; the
+    // end of the main program is the end of the run.
+    if (b.endOfSource) {
+      returnFromCall();
+      continue;
+    }
 
     if (b.blockDelete) {
       b.skipped = true;
@@ -645,6 +778,28 @@ export function interpret(text, config = {}) {
 
     // ---- M codes ---------------------------------------------------------
     for (const code of m) {
+      // What this machine does at this code, if its builder said. It runs
+      // after the block, so the control has already recorded the tool
+      // change or the spindle state the macro is there to carry out.
+      const mac = macroByCode.get(`M${code}`);
+      if (mac && !macroRunning(`M${code}`)) {
+        pendingMacros.push({
+          code: `M${code}`,
+          line: b.line,
+          start: expandInto(mac, `M${code}`, {
+            ...(cfg.parameters || {}),
+            M: code,
+            T: t !== undefined ? t : st.pendingTool || st.tool,
+            S: s !== undefined ? s : st.rpm,
+            P: p,
+            Q: q,
+            R: r,
+            H: h,
+            D: d,
+          }, b.line),
+        });
+      }
+
       switch (code) {
         case 0: case 1:
           events.push({ line: b.line, type: 'stop', moveIndex: moves.length, text: code === 0 ? 'Program stop (M00)' : 'Optional stop (M01)' });
@@ -670,31 +825,22 @@ export function interpret(text, config = {}) {
         case 98: {
           if (p === undefined) { warn(b.line, 'M98 without P.', 'error'); break; }
           const target = labels.get(p);
-          if (target === undefined) { warn(b.line, `Subprogram O${p} not found.`, 'error'); break; }
+          if (target === undefined) { warn(b.line, `Subprogram O${p} not found — no label in this program and no subprogram file with that number.`, 'error'); break; }
           const repeats = Math.max(1, Math.floor(l ?? 1));
           if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); break; }
           callStack.push({ ret: pc, remaining: repeats - 1, target });
-          pc = target + 1;
+          pc = target;
           break;
         }
-        case 99: {
-          const frame = callStack.pop();
-          if (!frame) { ended = true; break; }
-          if (frame.remaining > 0) {
-            frame.remaining--;
-            callStack.push(frame);
-            pc = frame.target + 1;
-          } else {
-            pc = frame.ret;
-          }
-          break;
-        }
+        case 99: returnFromCall(); break;
         default:
           events.push({ line: b.line, type: 'm', moveIndex: moves.length, text: `M${code}` });
       }
     }
 
-    if (ended) break;
+    // Round the loop rather than out of it: M30 ends the program, but a
+    // macro queued by that same block still has to park the machine.
+    if (ended) continue;
 
     // ---- G10 work offset programming ------------------------------------
     if (g10) {
@@ -738,7 +884,11 @@ export function interpret(text, config = {}) {
           axis.Y !== undefined ? resolveAxis(1, axis.Y, st.metric, false) : st.pos[1],
           axis.Z !== undefined ? resolveAxis(2, axis.Z, st.metric, false) : st.pos[2],
         ];
-        emitLinear(b.line, 'rapid', mid, cfg.rapidRate);
+        // "G91 G28 Z0" — the usual way of writing "retract" — names an
+        // intermediate point that is where the machine already is. A real
+        // control goes straight home; emitting a zero-length rapid for it
+        // only puts a move in the list that nothing can see.
+        if (dist3(st.pos, mid) > 1e-9) emitLinear(b.line, 'rapid', mid, cfg.rapidRate);
       }
       const target = [
         axis.X !== undefined ? home[0] : st.pos[0],

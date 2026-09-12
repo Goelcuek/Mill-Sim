@@ -21,6 +21,7 @@ import * as m4 from '../core/mat4.js';
 import { Kinematics } from '../machine/kinematics.js';
 import { buildPreset, PRESETS } from '../machine/presets.js';
 import { TONES, buildCasting } from './castings.js';
+import { defaultMacros, DEFAULT_PARAMETERS } from '../machine/macros.js';
 
 export const DEFAULT_MACHINE = {
   name: '3-axis VMC',
@@ -49,6 +50,12 @@ export const DEFAULT_MACHINE = {
     arcCentreAbsolute: false,
     feedMode: 94,
   },
+  /**
+   * What this machine does at an M code, and the numbers those macros
+   * read. Both belong to the machine, so both travel with it.
+   */
+  macros: defaultMacros('fanuc'),
+  parameters: { ...DEFAULT_PARAMETERS },
   mode: 'part',
   visible: true,
 };
@@ -126,6 +133,8 @@ export class MachineView {
       ...cfg,
       limits: { ...DEFAULT_MACHINE.limits, ...(cfg && cfg.limits) },
       table: { ...DEFAULT_MACHINE.table, ...(cfg && cfg.table) },
+      parameters: { ...DEFAULT_PARAMETERS, ...(cfg && cfg.parameters) },
+      macros: (cfg && Array.isArray(cfg.macros)) ? cfg.macros : defaultMacros((cfg && cfg.controller && cfg.controller.flavour) || 'fanuc'),
     };
     if (changedPreset) this.kinematics = buildPreset(this.config.preset);
     this.rebuild();

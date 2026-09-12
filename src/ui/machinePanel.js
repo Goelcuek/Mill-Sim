@@ -140,8 +140,8 @@ export class MachinePanel extends Panel {
         { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from a bare base and build the chain yourself' },
       ]),
       actionRow([
-        { label: 'Save machine…', onClick: () => app.exportKinematics(), hint: 'The chain, the controller and where every body sits' },
-        { label: 'Load machine…', onClick: () => app.importKinematics(), hint: 'Read a machine saved earlier' },
+        { label: 'Save machine…', onClick: () => app.exportMachine(), hint: 'A zip holding the chain, the controller, the macros and every body as STL' },
+        { label: 'Load machine…', onClick: () => app.importMachine(), hint: 'A machine folder saved earlier, or a bare chain as JSON' },
       ]),
     ]);
   }

@@ -3,8 +3,16 @@
   "notes": "A STARTING POINT, NOT A DATASHEET. The chain is right for a bridge machine with a fixed table and an A/C birotary head; every number marked below has to come from your machine before the simulation means anything. Travels are the ones the control reports; the two head distances are the ones TCP depends on.",
   "toolNode": "spindle",
   "workNode": "table",
-  "spindleOffset": [0, 0, 0],
-  "tableOffset": [0, 0, 80],
+  "spindleOffset": [
+    0,
+    0,
+    0
+  ],
+  "tableOffset": [
+    0,
+    0,
+    80
+  ],
   "accent": 1608383,
   "nodes": [
     {
@@ -12,38 +20,140 @@
       "name": "Bed and uprights",
       "kind": "carrier",
       "parent": null,
-      "origin": [0, 0, 0],
+      "origin": [
+        0,
+        0,
+        0
+      ],
       "proxy": [
-        { "part": "plinth", "size": [2600, 1500, 260], "at": [0, 0, -520] },
-        { "part": "leg", "size": [260, 420, 900], "at": [-1150, 520, -260] },
-        { "part": "leg", "size": [260, 420, 900], "at": [1150, 520, -260] },
-        { "part": "leg", "size": [260, 420, 900], "at": [-1150, -520, -260] },
-        { "part": "leg", "size": [260, 420, 900], "at": [1150, -520, -260] }
+        {
+          "part": "plinth",
+          "size": [
+            2600,
+            1500,
+            260
+          ],
+          "at": [
+            0,
+            0,
+            -520
+          ]
+        },
+        {
+          "part": "leg",
+          "size": [
+            260,
+            420,
+            900
+          ],
+          "at": [
+            -1150,
+            520,
+            -260
+          ]
+        },
+        {
+          "part": "leg",
+          "size": [
+            260,
+            420,
+            900
+          ],
+          "at": [
+            1150,
+            520,
+            -260
+          ]
+        },
+        {
+          "part": "leg",
+          "size": [
+            260,
+            420,
+            900
+          ],
+          "at": [
+            -1150,
+            -520,
+            -260
+          ]
+        },
+        {
+          "part": "leg",
+          "size": [
+            260,
+            420,
+            900
+          ],
+          "at": [
+            1150,
+            -520,
+            -260
+          ]
+        }
       ]
     },
-
     {
       "id": "table",
       "name": "Table (fixed)",
       "kind": "carrier",
       "parent": "base",
-      "origin": [0, 0, -80],
+      "origin": [
+        0,
+        0,
+        -80
+      ],
       "proxy": [
-        { "part": "table", "size": [2000, 1000, 150], "at": [0, 0, -150], "slots": 7 }
+        {
+          "part": "table",
+          "size": [
+            2000,
+            1000,
+            150
+          ],
+          "at": [
+            0,
+            0,
+            -150
+          ],
+          "slots": 7
+        }
       ]
     },
-
     {
       "id": "x",
       "name": "X axis (bridge)",
       "letter": "X",
       "kind": "linear",
-      "axis": [1, 0, 0],
+      "axis": [
+        1,
+        0,
+        0
+      ],
       "parent": "base",
-      "origin": [0, 0, 0],
-      "limits": { "min": -950, "max": 950 },
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "limits": {
+        "min": -950,
+        "max": 950
+      },
       "proxy": [
-        { "part": "bridge", "size": [2700, 460, 340], "at": [0, 0, 700] }
+        {
+          "part": "bridge",
+          "size": [
+            2700,
+            460,
+            340
+          ],
+          "at": [
+            0,
+            0,
+            700
+          ]
+        }
       ]
     },
     {
@@ -51,12 +161,35 @@
       "name": "Y axis (saddle)",
       "letter": "Y",
       "kind": "linear",
-      "axis": [0, 1, 0],
+      "axis": [
+        0,
+        1,
+        0
+      ],
       "parent": "x",
-      "origin": [0, 0, 0],
-      "limits": { "min": -500, "max": 500 },
+      "origin": [
+        0,
+        0,
+        0
+      ],
+      "limits": {
+        "min": -500,
+        "max": 500
+      },
       "proxy": [
-        { "part": "saddle", "size": [520, 520, 380], "at": [0, 0, 680] }
+        {
+          "part": "saddle",
+          "size": [
+            520,
+            520,
+            380
+          ],
+          "at": [
+            0,
+            0,
+            680
+          ]
+        }
       ]
     },
     {
@@ -64,26 +197,76 @@
       "name": "Z axis (ram)",
       "letter": "Z",
       "kind": "linear",
-      "axis": [0, 0, 1],
+      "axis": [
+        0,
+        0,
+        1
+      ],
       "parent": "y",
-      "origin": [0, 0, 830],
-      "limits": { "min": -200, "max": 500 },
+      "origin": [
+        0,
+        0,
+        830
+      ],
+      "limits": {
+        "min": -200,
+        "max": 500
+      },
       "proxy": [
-        { "part": "ram", "size": [300, 300, 700], "at": [0, 0, -60] }
+        {
+          "part": "ram",
+          "size": [
+            300,
+            300,
+            700
+          ],
+          "at": [
+            0,
+            0,
+            -60
+          ]
+        }
       ]
     },
-
     {
       "id": "c",
       "name": "C axis (head swivel)",
       "letter": "C",
       "kind": "rotary",
-      "axis": [0, 0, 1],
+      "axis": [
+        0,
+        0,
+        1
+      ],
       "parent": "z",
-      "origin": [0, 0, -170],
-      "limits": { "min": -360, "max": 360 },
+      "origin": [
+        0,
+        0,
+        -170
+      ],
+      "limits": {
+        "min": -360,
+        "max": 360
+      },
       "proxy": [
-        { "part": "rotary", "size": [170, 60], "at": [0, 0, -60], "axis": [0, 0, 1], "slots": 0 }
+        {
+          "part": "rotary",
+          "size": [
+            170,
+            60
+          ],
+          "at": [
+            0,
+            0,
+            -60
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "slots": 0
+        }
       ]
     },
     {
@@ -91,14 +274,72 @@
       "name": "A axis (fork tilt)",
       "letter": "A",
       "kind": "rotary",
-      "axis": [1, 0, 0],
+      "axis": [
+        1,
+        0,
+        0
+      ],
       "parent": "c",
-      "origin": [0, 0, -220],
-      "limits": { "min": -110, "max": 110 },
+      "origin": [
+        0,
+        0,
+        -220
+      ],
+      "limits": {
+        "min": -110,
+        "max": 110
+      },
       "proxy": [
-        { "part": "fork", "size": [170, 240, 240], "at": [0, 0, -80], "span": 340 },
-        { "part": "rotary", "size": [80, 46], "at": [-170, 0, 0], "axis": [1, 0, 0], "slots": 0 },
-        { "part": "rotary", "size": [80, 46], "at": [170, 0, 0], "axis": [1, 0, 0], "slots": 0 }
+        {
+          "part": "fork",
+          "size": [
+            170,
+            240,
+            240
+          ],
+          "at": [
+            0,
+            0,
+            -80
+          ],
+          "span": 340
+        },
+        {
+          "part": "rotary",
+          "size": [
+            80,
+            46
+          ],
+          "at": [
+            -170,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "slots": 0
+        },
+        {
+          "part": "rotary",
+          "size": [
+            80,
+            46
+          ],
+          "at": [
+            170,
+            0,
+            0
+          ],
+          "axis": [
+            1,
+            0,
+            0
+          ],
+          "slots": 0
+        }
       ]
     },
     {
@@ -106,10 +347,50 @@
       "name": "Spindle",
       "kind": "carrier",
       "parent": "a",
-      "origin": [0, 0, -180],
+      "origin": [
+        0,
+        0,
+        -180
+      ],
       "proxy": [
-        { "part": "spindle", "size": [85, 260], "at": [0, 0, 0] }
+        {
+          "part": "spindle",
+          "size": [
+            85,
+            260
+          ],
+          "at": [
+            0,
+            0,
+            0
+          ]
+        }
       ]
+    }
+  ],
+  "parameters": {
+    "toolChangeX": -1200,
+    "toolChangeY": 0,
+    "toolChangeZ": 0,
+    "parkX": -1200,
+    "parkY": -800,
+    "safeZ": 0
+  },
+  "macros": [
+    {
+      "id": "mac_m6",
+      "code": "M6",
+      "name": "Tool change",
+      "enabled": false,
+      "notes": "The head comes off the part, the C and A axes go to zero, and the machine crosses to the changer.",
+      "body": "(KR199 tool change: square the head, cross to the changer)\nM5\nG91 G28 Z0\nG90 G53 G0 C0 A0\nG53 G0 X#toolChangeX Y#toolChangeY\nG4 P3.0            (arm swings)\n(T#T is now in the spindle)"
+    },
+    {
+      "id": "mac_m30",
+      "code": "M30",
+      "name": "Program end",
+      "enabled": false,
+      "body": "(End of job: retract, square the head, park)\nM5\nM9\nG91 G28 Z0\nG90 G53 G0 C0 A0\nG53 G0 X#parkX Y#parkY"
     }
   ]
 }
