@@ -372,7 +372,11 @@ export class PickController {
     if (models && models.models.length) {
       for (const m of models.models) if (m.visible) meshes.push(m.mesh);
     }
-    if (this.request && this.request.bodies && this.ctx.bodies) {
+    // The machine itself is a surface like any other. In full-machine view
+    // the table, the trunnion and the castings are exactly what somebody
+    // means when they click "there" to put the stock down; leaving them out
+    // dropped the point through the machine onto a bare plane instead.
+    if (this.ctx.bodies) {
       for (const mesh of this.ctx.bodies()) meshes.push(mesh);
     }
     if (meshes.length) {

@@ -220,7 +220,14 @@ export class MachineView {
     }
 
     const parts = [];
-    const add = (mesh) => { g.add(mesh); parts.push(mesh); return mesh; };
+    // Named after the joint they belong to, so a click on one says "Table"
+    // rather than "model".
+    const add = (mesh) => {
+      mesh.name = mesh.name || node.name || node.id;
+      g.add(mesh);
+      parts.push(mesh);
+      return mesh;
+    };
 
     if (Array.isArray(node.proxy) && node.proxy.length) {
       for (const spec of node.proxy) {
@@ -399,6 +406,24 @@ export class MachineView {
   bodyMeshes() {
     const out = [];
     for (const list of this.models.values()) for (const obj of list) if (obj.visible) out.push(obj);
+    return out;
+  }
+
+  /**
+   * Everything of the machine a ray may hit: the user's bodies and the
+   * proxy castings alike.
+   *
+   * Both are machine, and which one an axis happens to be drawn with is not
+   * something a click should care about — putting the stock on the table of
+   * a preset machine has to work before anybody has imported an STL.
+   * Invisible parts are left out, which is what keeps part-only view from
+   * quietly catching clicks on a machine nobody can see.
+   */
+  pickMeshes() {
+    const out = this.bodyMeshes();
+    for (const parts of this.proxies.values()) {
+      for (const p of parts) if (p.visible && p.isMesh) out.push(p);
+    }
     return out;
   }
 

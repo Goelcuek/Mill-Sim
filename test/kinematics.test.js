@@ -199,3 +199,39 @@ test('the preset list and its builders agree', () => {
   assert.equal(new Kinematics(headHead()).rotaries().map((n) => n.letter).join(''), 'CB');
   assert.equal(new Kinematics(tableTable()).rotaries().map((n) => n.letter).join(''), 'AC');
 });
+
+test('a sixth axis is just another letter in the chain', () => {
+  // A boring-mill shape: the head rides Z, and a W quill hangs off it.
+  // Nothing about the solver knows that W is unusual — it is a linear axis
+  // parallel to Z, which is exactly what the letter means.
+  const kin = new Kinematics({
+    name: 'W quill',
+    toolNode: 'spindle',
+    workNode: 'table',
+    nodes: [
+      { id: 'base', name: 'Base', kind: 'carrier', parent: null },
+      { id: 'x', letter: 'X', parent: 'base', limits: { min: -500, max: 500 } },
+      { id: 'table', name: 'Table', kind: 'carrier', parent: 'x' },
+      { id: 'z', letter: 'Z', parent: 'base', origin: [0, 0, 600], limits: { min: -400, max: 0 } },
+      { id: 'w', letter: 'W', parent: 'z', limits: { min: -150, max: 0 } },
+      { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'w' },
+    ],
+  });
+
+  assert.equal(kin.configuration, '3-axis + W');
+  assert.deepEqual(kin.auxLinears().map((n) => n.letter), ['W']);
+  assert.deepEqual(kin.extras().map((n) => n.letter), ['W']);
+
+  const at = (v) => kin.toolInWork(v, 0).tip;
+  const home = at({ X: 0, Y: 0, Z: 0, W: 0 });
+  const quilled = at({ X: 0, Y: 0, Z: 0, W: -50 });
+  near(quilled[2] - home[2], -50, 1e-12, 'W drops the tool like Z does');
+
+  // Both slides act on the same line, so they add.
+  const both = at({ X: 0, Y: 0, Z: -100, W: -50 });
+  near(both[2] - home[2], -150, 1e-12, 'Z and W stack');
+
+  // And the travel of the sixth axis is checked like any other.
+  assert.deepEqual(kin.violations({ X: 0, Y: 0, Z: 0, W: -200 }).map((v) => v.axis), ['W']);
+  assert.deepEqual(kin.violations({ X: 0, Y: 0, Z: 0, W: -100 }), []);
+});

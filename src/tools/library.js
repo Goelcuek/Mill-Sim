@@ -6,6 +6,7 @@
 import { defaultTools, makeTool, buildTool } from './toolDefs.js';
 import { defaultHolders, makeHolder, buildHolder } from './holderDefs.js';
 import { buildAssembly, makeAssembly } from './assembly.js';
+import { fromFusion } from './fusionLibrary.js';
 import { uid } from '../core/util.js';
 
 const STORAGE_KEY = 'millsim.library.v1';
@@ -33,20 +34,58 @@ export class ToolLibrary {
   // ---- defaults & persistence -------------------------------------------
 
   loadDefaults() {
-    this.tools = defaultTools();
-    this.holders = defaultHolders();
-    this.assemblies = [
-      makeAssembly({ id: 'asm_face', name: 'T1 · 50 face mill', toolId: 'tool_face50', holderId: 'hld_shell', stickout: 40, number: 1 }),
-      makeAssembly({ id: 'asm_10flat', name: 'T2 · 10 flat', toolId: 'tool_flat10', holderId: 'hld_er32', stickout: 42, number: 2 }),
-      makeAssembly({ id: 'asm_6flat', name: 'T3 · 6 flat', toolId: 'tool_flat6', holderId: 'hld_shrink', stickout: 30, number: 3 }),
-      makeAssembly({ id: 'asm_6ball', name: 'T4 · 6 ball', toolId: 'tool_ball6', holderId: 'hld_shrink', stickout: 32, number: 4 }),
-      makeAssembly({ id: 'asm_8bull', name: 'T5 · 8 bull R1', toolId: 'tool_bull8', holderId: 'hld_er32', stickout: 34, number: 5 }),
-      makeAssembly({ id: 'asm_cham', name: 'T6 · 90° chamfer', toolId: 'tool_cham', holderId: 'hld_er32', stickout: 26, number: 6 }),
-      makeAssembly({ id: 'asm_drill', name: 'T7 · 5 drill', toolId: 'tool_drill5', holderId: 'hld_drill', stickout: 45, number: 7 }),
-      makeAssembly({ id: 'asm_taper', name: 'T8 · 3° taper ball', toolId: 'tool_taper', holderId: 'hld_slim', stickout: 30, number: 8 }),
-    ];
+    const d = builtIn();
+    this.tools = d.tools;
+    this.holders = d.holders;
+    this.assemblies = d.assemblies;
     this.emit('reset');
     return this;
+  }
+
+  /**
+   * Put back whichever built-ins are missing, without touching anything the
+   * user added.
+   *
+   * The destructive reset is the wrong tool for the usual case — a library
+   * that has lost its cutters but kept the tools someone spent an afternoon
+   * entering — so this one matches on id and adds only what is absent.
+   *
+   * @returns {number} how many things were put back
+   */
+  mergeDefaults() {
+    const d = builtIn();
+    let added = 0;
+    const fill = (mine, theirs) => {
+      const have = new Set(mine.map((x) => x.id));
+      for (const item of theirs) if (!have.has(item.id)) { mine.push(item); added++; }
+    };
+    fill(this.tools, d.tools);
+    fill(this.holders, d.holders);
+    fill(this.assemblies, d.assemblies);
+    if (added) this.emit('reset');
+    return added;
+  }
+
+  /**
+   * What a stored library is missing wholesale.
+   *
+   * A library that comes back with assemblies but no cutters is not a
+   * library the user built; it is one that lost a category somewhere, and
+   * booting into it silently leaves every T number pointing at nothing with
+   * no way out but the destructive reset. Filling an empty category from
+   * the built-ins is safe — nothing of theirs is overwritten — and it is
+   * what the reset would have done anyway.
+   *
+   * @returns {string[]} the categories that had to be refilled
+   */
+  repair() {
+    const d = builtIn();
+    const back = [];
+    if (!this.tools.length) { this.tools = d.tools; back.push('cutters'); }
+    if (!this.holders.length) { this.holders = d.holders; back.push('holders'); }
+    if (!this.assemblies.length) { this.assemblies = d.assemblies; back.push('the tool table'); }
+    if (back.length) this.emit('repair');
+    return back;
   }
 
   save() {
@@ -63,7 +102,11 @@ export class ToolLibrary {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return false;
       const data = JSON.parse(raw);
-      return this.fromJSON(data);
+      const stats = this.fromJSON(data);
+      if (!stats) return false;
+      /** Categories that were empty in storage and had to be put back. */
+      this.repaired = this.repair();
+      return stats;
     } catch (err) {
       return false;
     }
@@ -81,9 +124,17 @@ export class ToolLibrary {
 
   fromJSON(data, { merge = false } = {}) {
     if (!data || typeof data !== 'object') return false;
-    const tools = Array.isArray(data.tools) ? data.tools.map((t) => makeTool(t)) : [];
-    const holders = Array.isArray(data.holders) ? data.holders.map((h) => makeHolder(h)) : [];
-    const assemblies = Array.isArray(data.assemblies) ? data.assemblies.map((a) => makeAssembly(a)) : [];
+    let tools = Array.isArray(data.tools) ? data.tools.map((t) => makeTool(t)) : [];
+    let holders = Array.isArray(data.holders) ? data.holders.map((h) => makeHolder(h)) : [];
+    let assemblies = Array.isArray(data.assemblies) ? data.assemblies.map((a) => makeAssembly(a)) : [];
+
+    // Nothing of ours in the file: it may still be a library, just one
+    // written by somebody else. A shop's tools arrive as a Fusion export
+    // far more often than as one of ours, so that is read directly.
+    if (!tools.length && !holders.length && !assemblies.length) {
+      const foreign = fromFusion(data);
+      if (foreign) ({ tools, holders, assemblies } = foreign);
+    }
     if (!tools.length && !holders.length && !assemblies.length) return false;
 
     if (merge) {
@@ -91,16 +142,47 @@ export class ToolLibrary {
       const haveT = byId(this.tools);
       const haveH = byId(this.holders);
       const haveA = byId(this.assemblies);
-      this.tools.push(...tools.map((t) => (haveT.has(t.id) ? { ...t, id: uid('tool') } : t)));
-      this.holders.push(...holders.map((h) => (haveH.has(h.id) ? { ...h, id: uid('hld') } : h)));
-      this.assemblies.push(...assemblies.map((a) => (haveA.has(a.id) ? { ...a, id: uid('asm') } : a)));
+      const remap = new Map();
+      for (const t of tools) {
+        if (!haveT.has(t.id)) continue;
+        const fresh = uid('tool');
+        remap.set(t.id, fresh);
+        t.id = fresh;
+      }
+      const remapH = new Map();
+      for (const h of holders) {
+        if (!haveH.has(h.id)) continue;
+        const fresh = uid('hld');
+        remapH.set(h.id, fresh);
+        h.id = fresh;
+      }
+      // Two libraries both numbered from T1 is the normal case, and an
+      // ambiguous tool table is worse than a renumbered one: the incoming
+      // assemblies move up to the first free numbers rather than shadowing
+      // what is already there.
+      const used = new Set(this.assemblies.map((a) => Number(a.number)));
+      let next = 1;
+      for (const a of assemblies) {
+        if (haveA.has(a.id)) a.id = uid('asm');
+        if (remap.has(a.toolId)) a.toolId = remap.get(a.toolId);
+        if (remapH.has(a.holderId)) a.holderId = remapH.get(a.holderId);
+        if (used.has(Number(a.number))) {
+          while (used.has(next)) next++;
+          a.number = next;
+          a.name = a.name.replace(/^T\d+\s*\u00b7\s*/, `T${next} \u00b7 `);
+        }
+        used.add(Number(a.number));
+      }
+      this.tools.push(...tools);
+      this.holders.push(...holders);
+      this.assemblies.push(...assemblies);
     } else {
       this.tools = tools;
       this.holders = holders;
       this.assemblies = assemblies;
     }
     this.emit('load');
-    return true;
+    return { tools: tools.length, holders: holders.length, assemblies: assemblies.length };
   }
 
   // ---- lookups -----------------------------------------------------------
@@ -229,3 +311,30 @@ export class ToolLibrary {
 }
 
 export { buildTool, buildHolder, makeTool, makeHolder, makeAssembly };
+
+
+/**
+ * The library Mill-Sim ships with, freshly made each call.
+ *
+ * Handing out the same objects twice would let an edit to the restored
+ * copy reach back into the defaults, so this is a factory rather than a
+ * constant. The ids are fixed on purpose: that is what lets a library
+ * that has lost its cutters be refilled without the assemblies losing
+ * track of which cutter they meant.
+ */
+function builtIn() {
+  return {
+    tools: defaultTools(),
+    holders: defaultHolders(),
+    assemblies: [
+      makeAssembly({ id: 'asm_face', name: 'T1 \u00b7 50 face mill', toolId: 'tool_face50', holderId: 'hld_shell', stickout: 40, number: 1 }),
+      makeAssembly({ id: 'asm_10flat', name: 'T2 \u00b7 10 flat', toolId: 'tool_flat10', holderId: 'hld_er32', stickout: 42, number: 2 }),
+      makeAssembly({ id: 'asm_6flat', name: 'T3 \u00b7 6 flat', toolId: 'tool_flat6', holderId: 'hld_shrink', stickout: 30, number: 3 }),
+      makeAssembly({ id: 'asm_6ball', name: 'T4 \u00b7 6 ball', toolId: 'tool_ball6', holderId: 'hld_shrink', stickout: 32, number: 4 }),
+      makeAssembly({ id: 'asm_8bull', name: 'T5 \u00b7 8 bull R1', toolId: 'tool_bull8', holderId: 'hld_er32', stickout: 34, number: 5 }),
+      makeAssembly({ id: 'asm_cham', name: 'T6 \u00b7 90\u00b0 chamfer', toolId: 'tool_cham', holderId: 'hld_er32', stickout: 26, number: 6 }),
+      makeAssembly({ id: 'asm_drill', name: 'T7 \u00b7 5 drill', toolId: 'tool_drill5', holderId: 'hld_drill', stickout: 45, number: 7 }),
+      makeAssembly({ id: 'asm_taper', name: 'T8 \u00b7 3\u00b0 taper ball', toolId: 'tool_taper', holderId: 'hld_slim', stickout: 30, number: 8 }),
+    ],
+  };
+}

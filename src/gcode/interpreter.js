@@ -91,9 +91,15 @@ class State {
     this.lengthComp = false;
     this.hNumber = 0;
     this.cutterComp = 0;         // 40/41/42
-    /** Rotary axis positions in degrees, and where they were last block. */
+    /**
+     * Where every axis that is not the tool tip stands: the rotaries in
+     * degrees, and any extra linear slide (U, V, W) in millimetres. One
+     * dict, because a move has to carry all of them and the chain does not
+     * care which is which.
+     */
     this.rot = { A: 0, B: 0, C: 0 };
-    this.rotPrev = { A: 0, B: 0, C: 0 };
+    for (const L of auxLinearLetters(cfg)) this.rot[L] = 0;
+    this.rotPrev = { ...this.rot };
     /** Last programmed point in the tilted plane's own coordinates. */
     this.tiltLocal = [0, 0, 0];
     this.tiltLocalPrev = [0, 0, 0];
@@ -120,6 +126,20 @@ class State {
 }
 
 const toMM = (v, metric) => (metric ? v : v * MM_PER_INCH);
+
+/**
+ * The extra linear axis letters this machine has, if any.
+ *
+ * U, V and W are only read as axis words when the machine actually carries
+ * such a slide. A program written for a machine without one can use the
+ * letter for something else, and silently turning that into a 300 mm move
+ * is not a trade worth making.
+ */
+function auxLinearLetters(cfg) {
+  const kin = cfg && cfg.kinematics;
+  if (!kin || typeof kin.auxLinears !== 'function') return [];
+  return kin.auxLinears().map((n) => n.letter);
+}
 
 /**
  * Build the frame G68.2 defines.
@@ -227,6 +247,8 @@ export function interpret(text, config = {}) {
   };
   const blocks = lex(text);
   const st = new State(cfg);
+  /** Which of U, V and W this machine reads as an axis word. */
+  const auxLinear = new Set(auxLinearLetters(cfg));
 
   const moves = [];
   const warnings = [];
@@ -413,13 +435,24 @@ export function interpret(text, config = {}) {
     return st.pos[idx] + v;
   };
 
-  /** Apply A/B/C words to the rotary state. */
-  const applyRotaries = (axis) => {
+  /**
+   * Apply A/B/C and any U/V/W words to the axes that are not the tool tip.
+   *
+   * Rotaries are in degrees whatever G20/G21 says; an extra linear slide is
+   * in program units like any other length, so it goes through toMM.
+   */
+  const applyExtraAxes = (axis) => {
     st.rotPrev = { ...st.rot };
     let moved = false;
     for (const L of ['A', 'B', 'C']) {
       if (axis[L] === undefined) continue;
       st.rot[L] = st.absolute ? axis[L] : st.rot[L] + axis[L];
+      moved = true;
+    }
+    for (const L of auxLinear) {
+      if (axis[L] === undefined) continue;
+      const v = toMM(axis[L], st.metric);
+      st.rot[L] = st.absolute ? v : st.rot[L] + v;
       moved = true;
     }
     return moved;
@@ -463,6 +496,7 @@ export function interpret(text, config = {}) {
         case 'G': g.push(w.value); break;
         case 'M': m.push(w.value); break;
         case 'X': case 'Y': case 'Z': case 'A': case 'B': case 'C': axis[w.letter] = w.value; break;
+        case 'U': case 'V': case 'W': if (auxLinear.has(w.letter)) axis[w.letter] = w.value; break;
         case 'I': iArc = w.value; break;
         case 'J': jArc = w.value; break;
         case 'K': kArc = w.value; break;
@@ -748,8 +782,9 @@ export function interpret(text, config = {}) {
       continue;
     }
 
-    const hasRotaryWord = axis.A !== undefined || axis.B !== undefined || axis.C !== undefined;
-    if (hasRotaryWord) applyRotaries(axis);
+    const hasRotaryWord = axis.A !== undefined || axis.B !== undefined || axis.C !== undefined
+      || [...auxLinear].some((L) => axis[L] !== undefined);
+    if (hasRotaryWord) applyExtraAxes(axis);
 
     if (motion === 80 || (!hasAxisWord && !hasRotaryWord)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');

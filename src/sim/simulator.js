@@ -312,9 +312,15 @@ export class Simulator {
     }
   }
 
-  /** Does this machine have rotaries that could tilt the tool at all? */
+  /**
+   * Does the chain say anything a tool-tip coordinate does not?
+   *
+   * A rotary tilts the tool; an extra slide such as W moves it without ever
+   * appearing in X, Y or Z. Either way the pose has to come from the chain
+   * rather than straight from the programmed point.
+   */
   get fiveAxis() {
-    return !!(this.kinematics && this.kinematics.rotaries().length);
+    return !!(this.kinematics && this.kinematics.extras().length);
   }
 
   /** Gauge length of the assembly currently in the spindle. */
@@ -326,11 +332,12 @@ export class Simulator {
   rotaryAt(mv, u) {
     const a = mv.rotFrom || ZERO_ROT;
     const b = mv.rotTo || ZERO_ROT;
-    return {
-      A: a.A + (b.A - a.A) * u,
-      B: a.B + (b.B - a.B) * u,
-      C: a.C + (b.C - a.C) * u,
-    };
+    const out = {};
+    // Whatever the move carries: A/B/C on every machine, plus U, V or W on
+    // one that has them. A missing key is that axis sitting at zero.
+    for (const L in a) out[L] = a[L] + ((b[L] || 0) - a[L]) * u;
+    for (const L in b) if (!(L in out)) out[L] = (b[L] || 0) * u;
+    return out;
   }
 
   /**
@@ -467,8 +474,9 @@ export class Simulator {
     if (!this.fiveAxis) return false;
     const a = mv.rotFrom || ZERO_ROT;
     const b = mv.rotTo || ZERO_ROT;
-    return Math.abs(a.A - b.A) + Math.abs(a.B - b.B) + Math.abs(a.C - b.C) > 1e-9
-      || !this.isUpright(this.poseAt(mv, mv.to, 1).dir);
+    let moved = 0;
+    for (const L in { ...a, ...b }) moved += Math.abs((a[L] || 0) - (b[L] || 0));
+    return moved > 1e-9 || !this.isUpright(this.poseAt(mv, mv.to, 1).dir);
   }
 
   /**
@@ -601,14 +609,15 @@ export class Simulator {
     // nothing, so it is checked on every chunk.
     if (this.fiveAxis) {
       const rot = this.rotaryAt(mv, u1);
-      for (const n of this.kinematics.rotaries()) {
+      for (const n of this.kinematics.extras()) {
         const v = rot[n.letter];
         if (v === undefined) continue;
         const over = v < n.limits.min ? n.limits.min : v > n.limits.max ? n.limits.max : null;
         if (over === null) continue;
+        const unit = n.kind === 'rotary' ? '°' : ' mm';
         this.report('limit', {
           line: mv.line,
-          message: `${n.letter} axis travel limit exceeded: ${v.toFixed(2)}° vs ${over.toFixed(2)}°.`,
+          message: `${n.letter} axis travel limit exceeded: ${v.toFixed(2)}${unit} vs ${over.toFixed(2)}${unit}.`,
           position: poseB.tip.slice(),
           depth: Math.abs(v - over),
         });

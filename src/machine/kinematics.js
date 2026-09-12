@@ -22,7 +22,14 @@
 import * as m4 from '../core/mat4.js';
 import { uid, deg2rad } from '../core/util.js';
 
-/** Letters the interpreter can command, and what they mean by default. */
+/**
+ * Letters the interpreter can command, and what they mean by default.
+ *
+ * X, Y and Z place the tool tip; A, B and C turn about them. U, V and W are
+ * the conventional names for a second slide running parallel to X, Y and Z
+ * — a quill, a ram, a pallet shuttle, the W of a boring mill — which is how
+ * a machine gets a sixth axis without a third rotary.
+ */
 export const AXIS_LETTERS = {
   X: { kind: 'linear', axis: [1, 0, 0] },
   Y: { kind: 'linear', axis: [0, 1, 0] },
@@ -30,7 +37,13 @@ export const AXIS_LETTERS = {
   A: { kind: 'rotary', axis: [1, 0, 0] },
   B: { kind: 'rotary', axis: [0, 1, 0] },
   C: { kind: 'rotary', axis: [0, 0, 1] },
+  U: { kind: 'linear', axis: [1, 0, 0] },
+  V: { kind: 'linear', axis: [0, 1, 0] },
+  W: { kind: 'linear', axis: [0, 0, 1] },
 };
+
+/** The three whose values are solved for from a tool-tip position. */
+export const TIP_LETTERS = ['X', 'Y', 'Z'];
 
 /**
  * @typedef {object} AxisNode
@@ -175,16 +188,36 @@ export class Kinematics {
     return this.axes().filter((n) => n.kind === 'rotary');
   }
 
+  /**
+   * Every axis whose position a tool-tip coordinate does not already say:
+   * the rotaries, and any extra linear slide such as U, V or W.
+   *
+   * These are the axes a program has to command by name, and the ones a
+   * move has to carry alongside its tip positions.
+   */
+  extras() {
+    return this.axes().filter((n) => !TIP_LETTERS.includes(n.letter));
+  }
+
+  /** Extra linear slides only — U, V, W and anything like them. */
+  auxLinears() {
+    return this.extras().filter((n) => n.kind === 'linear');
+  }
+
   /** head-head, head-table, table-table, or 3-axis. */
   get configuration() {
     const rot = this.rotaries();
-    if (!rot.length) return '3-axis';
+    // An extra slide is named rather than counted into the "5-axis" label,
+    // because a W quill does not make a 3-axis mill into a 4-axis one.
+    const aux = this.auxLinears();
+    const suffix = aux.length ? ` + ${aux.map((n) => n.letter).join('')}` : '';
+    if (!rot.length) return `3-axis${suffix}`;
     const onTool = rot.filter((n) => this.toolSet.has(n.id)).length;
     const onWork = rot.filter((n) => this.workSet.has(n.id)).length;
-    if (onTool >= 2 && onWork === 0) return 'head-head';
-    if (onTool >= 1 && onWork >= 1) return 'head-table';
-    if (onWork >= 2) return 'table-table';
-    return onTool ? '4-axis head' : '4-axis table';
+    if (onTool >= 2 && onWork === 0) return `head-head${suffix}`;
+    if (onTool >= 1 && onWork >= 1) return `head-table${suffix}`;
+    if (onWork >= 2) return `table-table${suffix}`;
+    return `${onTool ? '4-axis head' : '4-axis table'}${suffix}`;
   }
 
   /** Resolve slaved axes, so a follower always mirrors its master. */

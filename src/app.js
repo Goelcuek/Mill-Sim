@@ -79,6 +79,8 @@ export class App {
 
     this.library = new ToolLibrary();
     if (!this.library.restore()) this.library.loadDefaults();
+    /** Said out loud once the notifier exists; see `start()`. */
+    this.libraryRepaired = this.library.repaired || [];
     this.simulator = new Simulator();
     this.stock = null;
 
@@ -101,6 +103,9 @@ export class App {
     });
 
     requestAnimationFrame(() => this.fitToScene());
+    if (this.libraryRepaired.length) {
+      this.notify(`The stored library had no ${this.libraryRepaired.join(' and no ')}, so the built-in ${this.libraryRepaired.length === 1 ? 'set was' : 'sets were'} put back. Anything else you had saved is untouched.`, 'info');
+    }
     this.notify('Pick an example in the Program tab, or open your own G-code.', 'info');
   }
 
@@ -189,7 +194,7 @@ export class App {
       // Work coordinates are whatever the table is carrying, which in
       // full-machine view is somewhere else entirely.
       workFrame: () => this.machineView.workGroup,
-      bodies: () => this.machineView.bodyMeshes(),
+      bodies: () => this.machineView.pickMeshes(),
       axisOrigins: () => {
         const kin = this.machineView.kinematics;
         const out = [];
@@ -412,6 +417,8 @@ export class App {
   applyKinematics() {
     const kin = this.machineView.kinematics;
     kin.rebuild();
+    // The readout lists this machine's axes, so it is rebuilt with it.
+    this.buildHud();
     this.applyMachineParts();          // which re-rigs the tree as it goes
     this.simulator.load({ machine: this.state.machine, kinematics: kin });
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
@@ -581,6 +588,34 @@ export class App {
       this.stockView.setSection(pct >= 1 ? null : z);
     }
     this.viewer.invalidate();
+  }
+
+  /**
+   * Read a library file into the current one.
+   *
+   * @param {File} file
+   * @param {boolean} merge add to what is here, rather than replace it
+   */
+  async importLibraryFile(file, merge = true) {
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const stats = this.library.fromJSON(data, { merge });
+      if (!stats) {
+        this.notify(`${file.name} has no tools in it that this could read. Mill-Sim libraries and Fusion 360 / HSMWorks tool libraries are both understood; a post or a setup sheet is not.`, 'error');
+        return;
+      }
+      this.refreshSlots();
+      const bits = [
+        stats.tools ? `${stats.tools} ${stats.tools === 1 ? 'cutter' : 'cutters'}` : null,
+        stats.holders ? `${stats.holders} ${stats.holders === 1 ? 'holder' : 'holders'}` : null,
+        stats.assemblies ? `${stats.assemblies} ${stats.assemblies === 1 ? 'assembly' : 'assemblies'}` : null,
+      ].filter(Boolean);
+      this.notify(`${merge ? 'Added' : 'Loaded'} ${bits.join(', ')} from ${file.name}.`, 'ok');
+      this.setPage('tools', 'assemblies');
+    } catch (err) {
+      this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
+    }
   }
 
   setPersistLibrary(on) {
@@ -914,14 +949,23 @@ export class App {
     const val = (key) => (this.hudFields[key] = el('b'));
     const dim = (key) => (this.hudFields[key] = el('span'));
 
+    // Whatever this machine has beyond the tip: the rotaries, and any extra
+    // slide such as W. A 3-axis mill gets no second row at all.
+    const extras = this.machineView ? this.machineView.kinematics.extras() : [];
+    this.hudExtras = extras.map((n) => n.letter);
+    const extraRow = extras.length
+      ? el('div.hud-row', {}, extras.flatMap((n) => [cell('span.hud-axis', n.letter), val(`ax${n.letter}`)]))
+      : null;
+
     clear(this.hud);
-    this.hud.append(
+    this.hud.append(...[
       el('div.hud-row', {}, [
         cell('span', 'X'), val('x'), cell('span', 'Y'), val('y'), cell('span', 'Z'), val('z'),
       ]),
+      extraRow,
       el('div.hud-row.dim', {}, [dim('tool'), dim('toolName'), dim('feed'), dim('rpm')]),
       el('div.hud-row.dim', {}, [cell('span', 'removed'), val('removed')]),
-    );
+    ].filter(Boolean));
   }
 
   updateHud() {
@@ -936,6 +980,13 @@ export class App {
     set(f.x, fmt(sim.pos[0], 3));
     set(f.y, fmt(sim.pos[1], 3));
     set(f.z, fmt(sim.pos[2], 3));
+    if (this.hudExtras && this.hudExtras.length) {
+      const values = sim.currentPose().values || {};
+      for (const L of this.hudExtras) {
+        const node = f[`ax${L}`];
+        if (node) set(node, fmt(values[L] || 0, 3));
+      }
+    }
     set(f.tool, `T${sim.currentTool || '–'}`);
     set(f.toolName, slot ? slot.built.tool.def.name : 'no tool');
     set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${fmt(mv.feed, 0)}`) : '');

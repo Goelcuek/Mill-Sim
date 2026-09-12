@@ -9,7 +9,7 @@
 // Every dialog works on a draft copy. Cancel throws the draft away; nothing
 // touches the library until OK.
 
-import { el, field, select, row, button, clear } from './dom.js';
+import { el, field, select, row, button, clear, pickFile } from './dom.js';
 import { Dialog } from './dialog.js';
 import { PreviewViewer } from './preview.js';
 import { TOOL_TYPES, TOOL_FIELDS, DEFAULT_TOOL } from '../tools/toolDefs.js';
@@ -332,3 +332,53 @@ export function openAssemblyDialog(app, assemblyId = null) {
 }
 
 /** Stock size, position and simulation resolution. */
+
+/**
+ * Bringing somebody else's library in.
+ *
+ * Two questions have to be answered together — which file, and whether it
+ * joins this library or replaces it — so they are answered in a window
+ * rather than by a button that guesses. Replacing matters: a shop's
+ * library carries its own T numbers, and merging renumbers whatever
+ * collides, which is exactly wrong when the program you are about to run
+ * was posted against those numbers.
+ */
+export function openLibraryImportDialog(app) {
+  const state = { file: null, mode: 'merge' };
+  const fileLabel = el('div.hint', {}, 'No file chosen.');
+
+  const body = el('div.dialog-form', {}, [
+    row([el('button.btn', {
+      type: 'button',
+      onclick: async () => {
+        const [file] = await pickFile('.json,.tools,.hsmlib,application/json');
+        state.file = file || null;
+        fileLabel.textContent = file ? file.name : 'No file chosen.';
+        dialog.setConfirmEnabled(!!file);
+      },
+    }, 'Choose file…')]),
+    fileLabel,
+    el('div.hint', {}, 'A library exported from Mill-Sim, or a tool library exported from Fusion 360 or HSMWorks — those are read directly, geometry, feeds and T numbers.'),
+    select('How', [
+      { value: 'merge', label: 'Add to this library' },
+      { value: 'replace', label: 'Replace this library' },
+    ], state.mode, (v) => { state.mode = v; }),
+    el('div.hint', {}, 'Adding keeps what is here and moves any incoming T number that is already taken. Replacing keeps the incoming numbering, which is what you want when the programs were posted against it.'),
+  ]);
+
+  const dialog = new Dialog({
+    title: 'Import a tool library',
+    subtitle: 'Mill-Sim or Fusion JSON',
+    width: 480,
+    body,
+    confirm: 'Import',
+    onConfirm: () => {
+      if (!state.file) return false;
+      app.importLibraryFile(state.file, state.mode === 'merge');
+      return true;
+    },
+  });
+  dialog.setConfirmEnabled(false);
+  dialog.open();
+  return dialog;
+}

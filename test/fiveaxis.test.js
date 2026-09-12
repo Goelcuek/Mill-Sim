@@ -11,6 +11,7 @@ import { buildTool, makeTool } from '../src/tools/toolDefs.js';
 import { interpret, tiltedPlaneMatrix } from '../src/gcode/interpreter.js';
 import * as m4 from '../src/core/mat4.js';
 import { buildPreset } from '../src/machine/presets.js';
+import { Kinematics } from '../src/machine/kinematics.js';
 
 const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) < tol, `${what}: ${a} vs ${b}`);
 const rad = (d) => (d * Math.PI) / 180;
@@ -398,4 +399,72 @@ test('travel limits are reported against the machine, not the program', () => {
   assert.equal(over.length, 1);
   assert.equal(over[0].axis, 'A');
   assert.equal(over[0].limit, 30);
+});
+
+// ------------------------------------------------------------- sixth axis
+
+/** A boring mill: X table, Z head, W quill hanging off the head. */
+const quillMachine = () => new Kinematics({
+  name: 'W quill',
+  toolNode: 'spindle',
+  workNode: 'table',
+  nodes: [
+    { id: 'base', name: 'Base', kind: 'carrier', parent: null },
+    { id: 'x', letter: 'X', parent: 'base', limits: { min: -500, max: 500 } },
+    { id: 'y', letter: 'Y', parent: 'x', limits: { min: -300, max: 300 } },
+    { id: 'table', name: 'Table', kind: 'carrier', parent: 'y' },
+    { id: 'z', letter: 'Z', parent: 'base', origin: [0, 0, 600], limits: { min: -400, max: 0 } },
+    { id: 'w', letter: 'W', parent: 'z', limits: { min: -150, max: 0 } },
+    { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'w' },
+  ],
+});
+
+test('a W word drives the sixth axis on a machine that has one', () => {
+  const kin = quillMachine();
+  const p = run(['G90 G21 G54', 'G0 X10 Y0 Z0', 'G1 W-50 F200', 'G1 W-80 X20', 'M30'], { kinematics: kin });
+  assert.deepEqual(errs(p), []);
+
+  const quilled = p.moves.filter((m) => (m.rotTo || {}).W);
+  assert.equal(quilled.length, 2, 'both W blocks moved the machine');
+  assert.equal(quilled[0].rotTo.W, -50);
+  assert.equal(quilled[0].rotFrom.W, 0);
+  assert.equal(quilled[1].rotTo.W, -80, 'W is modal and absolute like every other axis');
+
+  // Inches are converted like any other length; degrees would not be.
+  const inch = run(['G20 G90', 'G1 W-2 F10', 'M30'], { kinematics: kin });
+  near(inch.moves[inch.moves.length - 1].rotTo.W, -50.8, 1e-9, 'W-2 inches');
+});
+
+test('W is left alone on a machine with no W axis', () => {
+  // The same letter means other things on other controls, so reading it as
+  // a 50 mm move on a machine that has no such slide is not a trade worth
+  // making.
+  const p = run(['G90 G21', 'G0 X0 Y0 Z0', 'G1 W-50 F200', 'M30'], { kinematics: buildPreset('vmc3') });
+  assert.deepEqual(errs(p), []);
+  for (const mv of p.moves) assert.equal((mv.rotTo || {}).W, undefined);
+});
+
+test('cutting with the quill is cutting', () => {
+  // The sixth axis is only worth anything if the material removal follows
+  // it, so the same slot is cut twice: once with Z, once with W.
+  const kin = quillMachine();
+  const built = buildAssembly({ stickout: 40 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }), null, {});
+  const slots = new Map([[1, { built, index: 0, spheres: silhouetteSpheres([...built.toolPoints]) }]]);
+
+  const cut = (lines) => {
+    const stock = new Stock({ origin: [-50, -25, -20], size: [100, 50, 20], resolution: 0.25 });
+    const program = interpret(lines.join('\n'), { kinematics: kin, gaugeLength: built.gaugeLength });
+    const sim = new Simulator();
+    sim.load({ program, stock, slots, fallbackSlot: slots.get(1), kinematics: kin });
+    sim.runAll();
+    return { volume: sim.removedVolume, floor: stock.heightAt(0, 0) };
+  };
+
+  const byZ = cut(['G90 G21 G54', 'G0 X-60 Y0 Z5', 'G1 Z-3 F300', 'G1 X60 F1000', 'M30']);
+  const byW = cut(['G90 G21 G54', 'G0 X-60 Y0 Z5', 'G1 W-8 F300', 'G1 X60 F1000', 'M30']);
+
+  near(byZ.floor, -3, 1e-6, 'Z-3 leaves a floor at -3');
+  near(byW.floor, -3, 1e-6, 'Z5 then W-8 leaves the same floor');
+  near(byW.volume, byZ.volume, 1e-6, 'and takes the same metal out');
+  assert.ok(byW.volume > 0);
 });

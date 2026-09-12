@@ -221,7 +221,7 @@ export class MachinePanel extends Panel {
     const s = spec || {};
     const parent = (s.parent && k.byId.get(s.parent)) || this.selected || k.byId.get(k.toolNode) || k.roots()[0] || null;
     const used = new Set(k.axes().map((n) => n.letter));
-    const letter = 'letter' in s ? s.letter : (['A', 'B', 'C', 'X', 'Y', 'Z'].find((L) => !used.has(L)) || null);
+    const letter = 'letter' in s ? s.letter : (['A', 'B', 'C', 'X', 'Y', 'Z', 'U', 'V', 'W'].find((L) => !used.has(L)) || null);
     const node = makeAxis({
       ...s,
       letter,

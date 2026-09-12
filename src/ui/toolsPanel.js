@@ -7,12 +7,12 @@
 // apply to rather than in the ribbon, where they would be a second copy of
 // the same three buttons.
 
-import { el, button, row, section, clear, checkbox, pickFile, download } from './dom.js';
+import { el, button, row, section, clear, checkbox, download } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { TOOL_TYPES } from '../tools/toolDefs.js';
 import { TAPERS, HOLDER_TYPES } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
-import { openToolDialog, openHolderDialog, openAssemblyDialog } from './toolDialogs.js';
+import { openToolDialog, openHolderDialog, openAssemblyDialog, openLibraryImportDialog } from './toolDialogs.js';
 import { confirmDialog } from './dialog.js';
 import { fmt } from '../core/util.js';
 
@@ -114,18 +114,6 @@ export class ToolsPanel extends Panel {
     this.app.setPage('tools', 'assemblies');
   }
 
-  async importLibrary() {
-    const app = this.app;
-    const [file] = await pickFile('.json,application/json');
-    if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      if (app.library.fromJSON(data, { merge: true })) app.notify(`Merged ${file.name} into the library.`, 'ok');
-      else app.notify('That file contains no tools, holders or assemblies.', 'error');
-    } catch (err) {
-      app.notify(`Could not read ${file.name}: ${err.message}`, 'error');
-    }
-  }
 
   // ---- rendering ----------------------------------------------------------
 
@@ -242,7 +230,20 @@ export class ToolsPanel extends Panel {
       el('div.hint', {}, 'Saved to local storage, so it survives a reload on this machine only. Export the JSON to move it somewhere else.'),
       actionRow([
         { label: 'Export JSON', onClick: () => download('mill-sim-library.json', JSON.stringify(lib.toJSON(), null, 2), 'application/json') },
-        { label: 'Import JSON…', onClick: () => this.importLibrary() },
+        { label: 'Import library…', variant: 'primary', onClick: () => openLibraryImportDialog(app), hint: 'A Mill-Sim library, or one exported from Fusion 360' },
+      ]),
+      actionRow([
+        {
+          label: 'Put the built-in tools back',
+          hint: 'Adds whichever of the shipped cutters, holders and assemblies are missing, and leaves yours alone',
+          onClick: () => {
+            const added = lib.mergeDefaults();
+            app.refreshSlots();
+            app.notify(added
+              ? `Put ${added} built-in ${added === 1 ? 'item' : 'items'} back. Nothing of yours was touched.`
+              : 'Every built-in tool, holder and assembly is already here.', 'ok');
+          },
+        },
       ]),
       actionRow([
         {
