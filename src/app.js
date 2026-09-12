@@ -18,6 +18,7 @@ import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
 import { Stock } from './sim/stock.js';
+import { columnFor, describeShape } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
@@ -54,7 +55,16 @@ export class App {
   constructor(root) {
     this.root = root;
     this.state = {
-      stock: { size: [120, 80, 25], origin: [-60, -40, -25], resolution: 0.28 },
+      stock: {
+        shape: 'box',
+        size: [120, 80, 25],
+        origin: [-60, -40, -25],
+        resolution: 0.28,
+        /** Round bar only. */
+        diameter: 80,
+        /** A model used as stock: its triangles, kept in memory only. */
+        model: null,
+      },
       machine: {
         ...DEFAULT_MACHINE,
         controller: { ...DEFAULT_MACHINE.controller },
@@ -368,12 +378,36 @@ export class App {
 
   setStock(patch) {
     Object.assign(this.state.stock, patch);
+    this.normaliseStock();
     this.rebuildStock();
+  }
+
+  /**
+   * Keep the stock's description honest about itself.
+   *
+   * A round bar's footprint is its diameter in both directions, and a
+   * stock that says it is a model but has no model is a block.
+   */
+  normaliseStock() {
+    const s = this.state.stock;
+    if (s.shape === 'round') {
+      const d = Math.max(s.diameter || Math.min(s.size[0], s.size[1]), 0.2);
+      s.diameter = d;
+      s.size = [d, d, Math.max(s.size[2], 0.2)];
+    }
+    if (s.shape === 'model' && !(s.model && s.model.positions)) s.shape = 'box';
   }
 
   rebuildStock() {
     const s = this.state.stock;
-    this.stock = new Stock({ origin: s.origin, size: s.size, resolution: s.resolution });
+    this.stock = new Stock({
+      origin: s.origin,
+      size: s.size,
+      resolution: s.resolution,
+      // What shape it starts as. A plain block needs no sampler, and gets
+      // none, so nothing changes for the case that is already right.
+      column: columnFor(s),
+    });
     this.stockView.setStock(this.stock, { renderer: this.viewer.renderer });
     this.viewer.setGridExtent(Math.max(s.size[0], s.size[1]));
     this.applyDisplay();
@@ -381,6 +415,10 @@ export class App {
     this.refreshTarget();
     this.refreshOrigins();
     this.refreshResults();
+    // The Stock page describes this block — its shape, its grid, what is
+    // left of it — so it is redrawn with it rather than left saying what
+    // the last one was.
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
     this.viewer.invalidate();
   }
 

@@ -7,9 +7,10 @@
 
 import { el, field, select, button, row, section } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
-import { openFixtureDialog } from './setupDialogs.js';
+import { openFixtureDialog, openStockDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
 import { fmt } from '../core/util.js';
+import { describeShape } from '../sim/stockShape.js';
 import { RESOLUTIONS } from '../app.js';
 
 const AXES = ['X', 'Y', 'Z'];
@@ -53,7 +54,10 @@ export class SetupPanel extends Panel {
     const updateInfo = () => {
       const st = app.stock;
       if (!st) { info.textContent = ''; return; }
-      info.innerHTML = `Grid <b>${st.nx} × ${st.ny}</b> = ${(st.cellCount / 1000).toFixed(0)}k columns · cell ${fmt(st.dx, 3)} × ${fmt(st.dy, 3)} mm`;
+      const asked = app.state.stock.resolution;
+      info.innerHTML = st.cell > asked * 1.05
+        ? `Asked for <b>${asked} mm</b> cells; this block needs more columns than the memory budget allows, so it is simulated at <b>${fmt(st.cell, 3)} mm</b>.`
+        : `Simulated at <b>${fmt(st.cell, 3)} mm</b> per column.`;
     };
     updateInfo();
 
@@ -74,16 +78,57 @@ export class SetupPanel extends Panel {
       },
     });
 
+    // What the block is, rather than what it was asked to be: the grid it
+    // was actually given, how much metal is in it, and how much is left.
+    const detail = el('div.stat-grid');
+    const updateDetail = () => {
+      const st = app.stock;
+      if (!st) { detail.replaceChildren(); return; }
+      const remaining = st.remainingVolume();
+      const cut = Math.max(st.stockVolume - remaining, 0);
+      const stat = (label, value, dim) => el('div.stat', {}, [
+        el('div.stat-label', {}, label),
+        el(`div.stat-value${dim ? '.dim' : ''}`, {}, value),
+      ]);
+      detail.replaceChildren(
+        stat('Shape', describeShape(s)),
+        stat('Grid', `${st.nx} × ${st.ny}`),
+        stat('Columns', st.cellCount >= 1e6 ? `${(st.cellCount / 1e6).toFixed(1)}M` : `${(st.cellCount / 1000).toFixed(0)}k`),
+        stat('Cell', `${fmt(st.dx, 3)} × ${fmt(st.dy, 3)} mm`, true),
+        stat('Stock', `${fmt(st.stockVolume / 1000, 2)} cm³`),
+        stat('Removed', `${fmt(cut / 1000, 2)} cm³ · ${st.stockVolume > 0 ? ((cut / st.stockVolume) * 100).toFixed(1) : '0'}%`),
+      );
+    };
+    updateDetail();
+
+    const setSize = (i, v, min = 0.2) => {
+      const size = [...app.state.stock.size];
+      size[i] = Math.max(min, v || min);
+      app.setStock({ size });
+      this.refresh();
+    };
+
+    // A block is three numbers, a bar is two, and a model is however it was
+    // drawn — so the page asks for what this stock actually has.
+    const shapeFields = s.shape === 'round'
+      ? [row([
+        field('Diameter', s.diameter, {
+          min: 0.2, step: 1, unit: 'mm',
+          onChange: (v) => { app.setStock({ diameter: Math.max(0.2, v || 0.2) }); this.refresh(); },
+        }),
+        field('Height', s.size[2], { min: 0.2, step: 1, unit: 'mm', onChange: (v) => setSize(2, v) }),
+      ])]
+      : s.shape === 'model'
+        ? [
+          el('div.hint', {}, `${s.model ? s.model.name : 'A model'} — ${s.model ? s.model.triangles.toLocaleString() : '0'} triangles, ${s.size.map((v) => fmt(v, 1)).join(' × ')} mm. Its top surface is the starting surface; the size comes from the model and is not typed in.`),
+        ]
+        : [row(AXES.map((a, i) => field(`Size ${a}`, s.size[i], {
+          min: 0.2, step: 1, unit: 'mm', onChange: (v) => setSize(i, v),
+        })))];
+
     return section('Stock', [
-      row(AXES.map((a, i) => field(`Size ${a}`, s.size[i], {
-        min: 1, step: 1, unit: 'mm',
-        onChange: (v) => {
-          const size = [...app.state.stock.size];
-          size[i] = Math.max(1, v || 1);
-          app.setStock({ size });
-          this.refresh();
-        },
-      }))),
+      addBar('Add stock…', () => openStockDialog(app, this), { hint: 'A block, a bar, or a model' }),
+      ...shapeFields,
       row(AXES.map((a, i) => field(`Min ${a}`, s.origin[i], {
         step: 1, unit: 'mm',
         onChange: (v) => {
@@ -93,6 +138,7 @@ export class SetupPanel extends Panel {
           this.refresh();
         },
       }))),
+      detail,
       actionRow([
         { label: 'Move by two points…', onClick: () => app.moveStockByPoints(), hint: 'Click a point on the stock, then click its destination' },
         { label: 'Centre on zero', onClick: () => { const sz = app.state.stock.size; app.setStock({ origin: [-sz[0] / 2, -sz[1] / 2, -sz[2]] }); this.refresh(); } },
@@ -100,8 +146,9 @@ export class SetupPanel extends Panel {
       actionRow([
         {
           label: 'Fit to the program',
-          disabled: !app.state.program,
-          hint: app.state.program ? 'Size the block around the toolpath' : 'Load a program first',
+          disabled: !app.state.program || s.shape === 'model',
+          hint: s.shape === 'model' ? 'A model is whatever size it was drawn'
+            : app.state.program ? 'Size the block around the toolpath' : 'Load a program first',
           onClick: () => { app.fitStockToProgram(); this.refresh(); },
         },
         { label: 'Reset the cut', onClick: () => app.resetStock(), hint: 'Put the material back and start the run over' },

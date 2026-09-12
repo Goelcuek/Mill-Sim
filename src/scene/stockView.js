@@ -204,6 +204,8 @@ export class StockView {
       uTexel: { value: new THREE.Vector2(1 / this.gridSize[0], 1 / this.gridSize[1]) },
       uStep: { value: new THREE.Vector2(stock.dx * this.renderStep, stock.dy * this.renderStep) },
       uBase: { value: stock.base },
+      /** Below this thickness a column is air, not metal. */
+      uMinThick: { value: 1e-4 },
       uStockColor: { value: new THREE.Color('#8e97a6') },
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
@@ -221,9 +223,12 @@ export class StockView {
           uniform vec2 uTexel;
           uniform vec2 uStep;
           uniform float uBase;
+          uniform float uMinThick;
           attribute float aMode;
           varying float vCut;
           varying float vWorldZ;
+          varying vec2 vGridUv;
+          varying float vSolid;
         `)
         .replace('#include <beginnormal_vertex>', `
           vec3 objectNormal = vec3( normal );
@@ -244,6 +249,12 @@ export class StockView {
         .replace('#include <begin_vertex>', `
           vec2 hs = texture2D( uHeight, uv ).rg;
           vCut = hs.g;
+          vGridUv = uv;
+          // Whether this corner has metal under it. Interpolated, it is
+          // non-zero anywhere on a triangle that touches material, which is
+          // what keeps the wall of a round bar — a single quad stretched
+          // from the last full column down to the empty one — solid.
+          vSolid = ( hs.r - uBase > uMinThick ) ? 1.0 : 0.0;
           vec3 transformed = vec3( position );
           if ( aMode > 0.5 ) transformed.z = hs.r - uBase;
           vWorldZ = transformed.z + uBase;
@@ -252,16 +263,26 @@ export class StockView {
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `
           #include <common>
+          uniform sampler2D uHeight;
+          uniform float uBase;
+          uniform float uMinThick;
           uniform vec3 uStockColor;
           uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
           uniform float uShowTools;
           uniform float uSectionZ;
           varying float vCut;
           varying float vWorldZ;
+          varying vec2 vGridUv;
+          varying float vSolid;
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
           if ( vWorldZ > uSectionZ ) discard;
+          // Nothing in this column and nothing on this triangle: outside a
+          // round bar or a cast shape, or milled clean through. A flat film
+          // across a through-pocket is a lie the eye believes, and the flat
+          // sheet outside a bar is another.
+          if ( texture2D( uHeight, vGridUv ).r - uBase <= uMinThick && vSolid < 1e-5 ) discard;
           vec3 surface = uStockColor;
           if ( vCut > 0.5 ) {
             int ti = int( clamp( vCut - 1.0, 0.0, ${MAX_TOOL_COLORS - 1}.0 ) );

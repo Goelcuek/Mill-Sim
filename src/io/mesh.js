@@ -13,6 +13,11 @@
  * @returns {{positions:Float32Array, triangles:number}}
  */
 export function heightmapToTriangles(stock, opts = {}) {
+  // A stock that is not a solid block — a round bar, a casting, or a block
+  // with something cut clean through it — has columns with nothing in them,
+  // and a single skin stretched over the bounding box would export a part
+  // that does not exist. Those go the long way round.
+  if (stock.shaped || hasEmptyColumns(stock)) return shapedToTriangles(stock, opts);
   const step = Math.max(1, Math.floor(opts.decimate || 1));
   const nx = stock.nx;
   const ny = stock.ny;
@@ -84,6 +89,76 @@ export function heightmapToTriangles(stock, opts = {}) {
   quad([xMin, yMin, base], [xMin, yMax, base], [xMax, yMax, base], [xMax, yMin, base]);
 
   return { positions: positions.subarray(0, o), triangles: o / 9 };
+}
+
+/** Is any column empty — outside the shape, or milled clean through? */
+function hasEmptyColumns(stock) {
+  const limit = stock.base + 1e-6;
+  for (let k = 0; k < stock.height.length; k++) if (stock.height[k] <= limit) return true;
+  return false;
+}
+
+/**
+ * The same surface, for stock with holes in it.
+ *
+ * Each cell of the grid is either solid — all four of its corners have
+ * material — or it is not there at all. A solid cell contributes its top
+ * face and its floor; where it meets a cell that is not there, it also
+ * contributes the wall between them. The result closes around a bar, a
+ * casting and a through-pocket alike, at the cost of a floor made of cells
+ * rather than one quad, which is why the plain block keeps its own path.
+ */
+function shapedToTriangles(stock, opts = {}) {
+  const step = Math.max(1, Math.floor(opts.decimate || 1));
+  const nx = stock.nx;
+  const ny = stock.ny;
+
+  const xs = [];
+  for (let i = 0; i < nx; i += step) xs.push(i);
+  if (xs[xs.length - 1] !== nx - 1) xs.push(nx - 1);
+  const ys = [];
+  for (let j = 0; j < ny; j += step) ys.push(j);
+  if (ys[ys.length - 1] !== ny - 1) ys.push(ny - 1);
+
+  const gw = xs.length;
+  const gh = ys.length;
+  const base = stock.base;
+  const limit = base + 1e-6;
+  const h = (gi, gj) => stock.height[ys[gj] * nx + xs[gi]];
+  const px = (gi) => (gi === 0 ? stock.origin[0] : gi === gw - 1 ? stock.origin[0] + stock.size[0] : stock.cx(xs[gi]));
+  const py = (gj) => (gj === 0 ? stock.origin[1] : gj === gh - 1 ? stock.origin[1] + stock.size[1] : stock.cy(ys[gj]));
+
+  const out = [];
+  const put = (x, y, z) => { out.push(x, y, z); };
+  const quad = (a, b, c, d) => {
+    put(a[0], a[1], a[2]); put(b[0], b[1], b[2]); put(c[0], c[1], c[2]);
+    put(a[0], a[1], a[2]); put(c[0], c[1], c[2]); put(d[0], d[1], d[2]);
+  };
+  const quadOut = (a, b, c, d) => quad(d, c, b, a);
+
+  const solid = (gi, gj) => gi >= 0 && gj >= 0 && gi < gw - 1 && gj < gh - 1
+    && h(gi, gj) > limit && h(gi + 1, gj) > limit
+    && h(gi + 1, gj + 1) > limit && h(gi, gj + 1) > limit;
+
+  for (let gj = 0; gj < gh - 1; gj++) {
+    for (let gi = 0; gi < gw - 1; gi++) {
+      if (!solid(gi, gj)) continue;
+      const x0 = px(gi), x1 = px(gi + 1);
+      const y0 = py(gj), y1 = py(gj + 1);
+      const h00 = h(gi, gj), h10 = h(gi + 1, gj), h11 = h(gi + 1, gj + 1), h01 = h(gi, gj + 1);
+
+      quad([x0, y0, h00], [x1, y0, h10], [x1, y1, h11], [x0, y1, h01]);
+      quad([x0, y0, base], [x0, y1, base], [x1, y1, base], [x1, y0, base]);
+
+      // A wall wherever the neighbour is not there.
+      if (!solid(gi, gj - 1)) quadOut([x0, y0, base], [x0, y0, h00], [x1, y0, h10], [x1, y0, base]);
+      if (!solid(gi, gj + 1)) quadOut([x1, y1, base], [x1, y1, h11], [x0, y1, h01], [x0, y1, base]);
+      if (!solid(gi - 1, gj)) quadOut([x0, y1, base], [x0, y1, h01], [x0, y0, h00], [x0, y0, base]);
+      if (!solid(gi + 1, gj)) quadOut([x1, y0, base], [x1, y0, h10], [x1, y1, h11], [x1, y1, base]);
+    }
+  }
+
+  return { positions: Float32Array.from(out), triangles: out.length / 9 };
 }
 
 /**

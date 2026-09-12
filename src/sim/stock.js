@@ -28,9 +28,16 @@ const MIN_CUT = 1e-6;
 export class Stock {
   /**
    * @param {{origin:[number,number,number], size:[number,number,number],
-   *          resolution?:number, maxCells?:number}} opts
+   *          resolution?:number, maxCells?:number,
+   *          column?:(x:number, y:number) => number|null}} opts
    *   `origin` is the minimum corner (x, y, z) in scene millimetres;
    *   `resolution` is the requested cell size in millimetres.
+   *
+   *   `column` is the shape: given a point on the grid it returns the
+   *   height the material starts at, or null where there is none. Omitted,
+   *   every column starts at the top and the stock is a plain block — which
+   *   is the same answer, written out for the case that does not need
+   *   asking. See sim/stockShape.js.
    */
   constructor(opts) {
     const size = opts.size.map((v) => Math.max(Math.abs(v), 0.1));
@@ -63,6 +70,38 @@ export class Stock {
     /** 0 = untouched stock face, otherwise 1 + tool index that cut it. */
     this.cutBy = new Uint8Array(nx * ny);
 
+    /**
+     * Where each column starts, which is what the shape means.
+     *
+     * A plain block shares one value and keeps no array for it: at a fine
+     * resolution that would be another 80 MB to say "the top" twenty
+     * million times. Anything else is read off the sampler once, here, and
+     * never thought about again.
+     */
+    this.shaped = typeof opts.column === 'function';
+    this.initial = null;
+    if (!this.shaped) {
+      this.initialVolume = size[0] * size[1] * size[2];
+    } else {
+      this.initial = new Float32Array(nx * ny);
+      let filled = 0;
+      let sum = 0;
+      for (let j = 0; j < ny; j++) {
+        const y = this.origin[1] + (j + 0.5) * this.dy;
+        for (let i = 0; i < nx; i++) {
+          const x = this.origin[0] + (i + 0.5) * this.dx;
+          const z = opts.column(x, y);
+          const h = z === null || !Number.isFinite(z)
+            ? this.base
+            : Math.min(Math.max(z, this.base), this.top);
+          this.initial[j * nx + i] = h;
+          if (h > this.base) { filled++; sum += h - this.base; }
+        }
+      }
+      this.filledColumns = filled;
+      this.initialVolume = sum * this.dx * this.dy;
+    }
+
     this.tilesX = Math.ceil(nx / TILE);
     this.tilesY = Math.ceil(ny / TILE);
     this.tileMax = new Float32Array(this.tilesX * this.tilesY);
@@ -81,15 +120,27 @@ export class Stock {
   get cellArea() { return this.dx * this.dy; }
 
   /** Initial (uncut) stock volume in mm^3. */
-  get stockVolume() { return this.size[0] * this.size[1] * this.size[2]; }
+  get stockVolume() { return this.initialVolume; }
+
+  /** Columns that started with material in them. */
+  get filled() { return this.shaped ? this.filledColumns : this.cellCount; }
 
   reset() {
-    this.height.fill(this.top);
+    if (this.initial) this.height.set(this.initial);
+    else this.height.fill(this.top);
     this.cutBy.fill(0);
-    this.tileMax.fill(this.top);
-    this.tileDirty.fill(0);
     this.removedVolume = 0;
     this.version++;
+    if (this.shaped) {
+      // A shaped stock has no single starting height, so the tile maxima
+      // are read back off the grid rather than assumed.
+      this.tileMax.fill(this.base);
+      this.tileDirty.fill(1);
+      this.refreshTiles();
+    } else {
+      this.tileMax.fill(this.top);
+      this.tileDirty.fill(0);
+    }
     this.markDirtyRect(0, 0, this.nx - 1, this.ny - 1);
   }
 
@@ -727,6 +778,17 @@ export class Stock {
    * work offset, so they are offered independently of the machined surface.
    */
   snapPoints() {
+    // The corners of a block are real. The corners of the box around a
+    // round bar are in mid-air, so a shaped stock only offers the middle of
+    // its faces and its own top.
+    if (this.shaped) {
+      const cx = this.origin[0] + this.size[0] / 2;
+      const cy = this.origin[1] + this.size[1] / 2;
+      return [
+        { point: [cx, cy, this.top], kind: 'centre' },
+        { point: [cx, cy, this.base], kind: 'centre' },
+      ];
+    }
     const x = [this.origin[0], this.origin[0] + this.size[0] / 2, this.origin[0] + this.size[0]];
     const y = [this.origin[1], this.origin[1] + this.size[1] / 2, this.origin[1] + this.size[1]];
     const z = [this.base, (this.base + this.top) / 2, this.top];
@@ -783,7 +845,10 @@ export class Stock {
     const at = (t) => [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
     const below = (p) => {
       const h = this.heightAt(p[0], p[1]);
-      return Number.isFinite(h) && p[2] <= h;
+      // A column with nothing in it — outside a round bar, or cut clean
+      // through — is air. Without this the ray lands on a floor that is
+      // not there and "click the stock" points into space.
+      return Number.isFinite(h) && h > this.base && p[2] <= h;
     };
 
     // Entering already inside the material: the entry face is the hit.
@@ -836,6 +901,8 @@ export class Stock {
       grid: [this.nx, this.ny],
       cell: this.cell,
       cells: this.cellCount,
+      filled: this.filled,
+      volume: this.stockVolume,
     };
   }
 }

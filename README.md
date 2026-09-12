@@ -60,6 +60,20 @@ envelope, so what you see is the surface the tool actually leaves —
 scallops from a ball nose stepover, the radius a cutter leaves in a square
 corner, the ramp from a helical entry.
 
+**Stock that is not a block.** **Add stock…** offers three shapes, because
+three is what a shop has: a rectangular block (X, Y, Z), a round bar (Ø and
+height), and a model — a casting, a forging, a weldment, or the output of
+the last operation, imported as STL. The simulation is a field of vertical
+columns, so a shape is nothing more than the height each column starts at:
+a block answers "the top, everywhere", a bar answers "the top, inside the
+circle", and a model answers with its own upper surface. Everything
+downstream already works column by column, so cutting, collision checking,
+volume and the picked surface need to know nothing about which of the three
+they are looking at — a facing pass over a Ø50 bar removes the disc, not
+the square, and a cut that reaches the bottom leaves a hole rather than a
+film. Like the rest of this model a shape cannot hold an undercut: what
+hides beneath the top surface is taken to be solid.
+
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
 imported fixtures, the table surface and the travel limits.
