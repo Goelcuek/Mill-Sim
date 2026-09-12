@@ -56,6 +56,12 @@ export const DEFAULT_MACHINE = {
    */
   macros: defaultMacros('fanuc'),
   parameters: { ...DEFAULT_PARAMETERS },
+  /**
+   * Subprograms that live in the control between jobs — probing cycles,
+   * pallet routines, the builder's own O9000 programs. Any program loaded
+   * on this machine can call them.
+   */
+  subprograms: [],
   mode: 'part',
   visible: true,
 };
@@ -135,6 +141,7 @@ export class MachineView {
       table: { ...DEFAULT_MACHINE.table, ...(cfg && cfg.table) },
       parameters: { ...DEFAULT_PARAMETERS, ...(cfg && cfg.parameters) },
       macros: (cfg && Array.isArray(cfg.macros)) ? cfg.macros : defaultMacros((cfg && cfg.controller && cfg.controller.flavour) || 'fanuc'),
+      subprograms: (cfg && Array.isArray(cfg.subprograms)) ? cfg.subprograms : [],
     };
     if (changedPreset) this.kinematics = buildPreset(this.config.preset);
     this.rebuild();

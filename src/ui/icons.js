@@ -42,6 +42,7 @@ const PATHS = {
   edit: 'M4 20h4L20 8l-4-4L4 16z',
   view: 'M12 3l9 5v8l-9 5-9-5V8z',
   gouge: 'M4 8h16M4 8v8M20 8v8M9 8v5l3 3 3-3V8',
+  code: 'M9 7l-5 5 5 5M15 7l5 5-5 5M13 4l-2 16',
 };
 
 /**

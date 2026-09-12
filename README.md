@@ -94,8 +94,8 @@ defaults and changing one re-reads the program.
 *do* M06. It runs a program the machine builder wrote, which retracts the
 head, crosses to the change position, unclamps and indexes the carousel —
 which is why two machines reading the same G-code visibly do different
-things at the same code. The Macros page (under **Program**) holds those
-programs, as G-code:
+things at the same code. **Machine › Macros** holds those programs, as
+G-code:
 
 ```gcode
 (KR199 tool change: square the head, cross to the changer)
@@ -106,20 +106,28 @@ G53 G0 X#toolChangeX Y#toolChangeY
 G4 P3.0            (arm swings)
 ```
 
-`#toolChangeX` is a machine parameter, set on the same page; `#T`, `#S`,
+`#toolChangeX` is a machine parameter, set in the same place; `#T`, `#S`,
 `#P`, `#Q`, `#R`, `#H` and `#D` are the words of the block that called the
 macro, so the body can say which tool it is loading. Everything else is
 ordinary G-code read by the ordinary interpreter, so G28, G53, dwells and
-canned cycles all work inside one. Macros belong to the machine, not to the
-part program, and they travel with it. They ship switched off: a macro that
+canned cycles all work inside one. They ship switched off: a macro that
 runs changes what every program does at that code, and that should be a
 decision rather than a surprise.
 
-**Subprograms.** A post that writes `M98 P1000` expects a file called
-O1000 to be on the control. The Subprograms page holds those files beside
-the main program, so the call resolves and the moves inside them are
-simulated, carved and collision-checked like any others — the toolpath and
-every warning say which file they came from. A program that carries its own
+The same page holds the **subprograms that live in the machine** — probing
+cycles, pallet routines, the builder's own O9000 programs, the files that
+stay in the control between jobs. Any program loaded on the machine can
+call them with M98 without carrying a copy, and they are saved and loaded
+with the machine, because they are part of it.
+
+**Subprograms that belong to the job** are on **Program › Subprograms**,
+and they are files, nothing more: open one or several the same way the main
+program is opened, edit them in the same editor. The number M98 asks for is
+the `O` word at the top of the file, exactly as a control reads it — rename
+the file however you like. The moves inside a subprogram are simulated,
+carved and collision-checked like any others, and the toolpath and every
+warning say which file they came from. Two files claiming the same O number
+is reported rather than quietly resolved. A program that carries its own
 O-numbered sections still works exactly as it did.
 
 Your own machine goes in through **Machine › Layout › Load machine…**, and
@@ -133,6 +141,7 @@ fidia-kr199.zip
 │                    axis carries each body, and where
 ├── macros/M6.nc     one file per macro, plain G-code
 ├── macros/M30.nc
+├── subprograms/     the files that live in this control between jobs
 ├── bodies/*.stl     the castings themselves, in millimetres
 └── README.txt
 ```
@@ -176,9 +185,9 @@ collapse the page row and give the viewport the space back.
 | Tab | Pages |
 | --- | --- |
 | **Setup** | Stock · Work offsets · Fixtures |
-| **Machine** | Layout · Axes · Assembly · Controller · Travels |
+| **Machine** | Layout · Axes · Assembly · Controller · Macros · Travels |
 | **Tools** | Tool table · Cutters · Holders · Library |
-| **Program** | Main · Subprograms · Macros · Summary |
+| **Program** | Main · Subprograms · Summary |
 | **Results** | Findings · Compare · Export |
 | **View** | Camera · Show · Inspect |
 

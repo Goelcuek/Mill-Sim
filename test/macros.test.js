@@ -123,3 +123,38 @@ test('a warning raised inside a file says which file it came from', () => {
   assert.ok(noFeed, 'the feedless G1 is still caught');
   assert.equal(noFeed.source, 'bad');
 });
+
+test('a subprogram answers to the O number written at the top of it', () => {
+  // No number is declared anywhere but in the file itself, which is how a
+  // control knows what it is holding.
+  const subs = [{ name: 'probe.nc', text: 'O9832\n(probe cycle)\nG1 Z-5 F200\nM99' }];
+  const p = run(['G90 G21', 'G1 Z0 F200', 'M98 P9832', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.moves[1].source, 'probe.nc');
+  assert.equal(Math.round(p.moves[1].to[2]), -5);
+});
+
+test('the machine keeps subprograms of its own, and the job can call them', () => {
+  // What Machine > Macros holds: files that stay on the control between
+  // jobs. The app hands them to the interpreter behind the job's own.
+  const jobSubs = [{ name: 'job-O1000.nc', text: 'O1000\nG1 X5 F300\nM99' }];
+  const machineSubs = [{ name: 'O9001 pallet.nc', text: 'O9001\nG1 Y40 F900\nM99' }];
+  const p = run(['G90 G21', 'G1 X0 Y0 F300', 'M98 P1000', 'M98 P9001', 'M30'],
+    { subprograms: [...jobSubs, ...machineSubs] });
+  assert.deepEqual(errs(p), []);
+  assert.deepEqual(p.moves.map((m) => m.source || 'main'),
+    ['main', 'job-O1000.nc', 'O9001 pallet.nc']);
+});
+
+test('two files claiming the same number is said out loud', () => {
+  const subs = [
+    { name: 'mine.nc', text: 'O1000\nG1 X5 F300\nM99' },
+    { name: 'the machine’s.nc', text: 'O1000\nG1 X50 F300\nM99' },
+  ];
+  const p = run(['G90 G21', 'G1 X0 F300', 'M98 P1000', 'M30'], { subprograms: subs });
+  const clash = p.warnings.find((w) => /O1000 is in both/.test(w.message));
+  assert.ok(clash, 'the clash is reported');
+  // And the first one — the job's own — is the one that runs.
+  assert.equal(p.moves[1].source, 'mine.nc');
+  assert.equal(Math.round(p.moves[1].to[0]), 5);
+});

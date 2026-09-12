@@ -91,3 +91,21 @@ export function lex(text) {
 
   return blocks;
 }
+
+/**
+ * The O number a file declares, or null.
+ *
+ * This is how a control knows which subprogram a file is: the O word at the
+ * top of it. M98 P1000 looks for the file that says O1000, so that is what
+ * is read here rather than anything about the file's name.
+ *
+ * @param {string} text
+ * @returns {number|null}
+ */
+export function programNumber(text) {
+  for (const b of lex(text)) {
+    const o = b.words.find((w) => w.letter === 'O');
+    if (o) return o.value;
+  }
+  return null;
+}

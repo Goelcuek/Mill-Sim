@@ -311,9 +311,23 @@ export function interpret(text, config = {}) {
   // Index O-numbers for M98 subprogram calls. The label is the block after
   // the O word, so a call jumps straight into the body.
   const labels = new Map();
+  const declaredIn = new Map();
+  const clashed = new Set();
   blocks.forEach((b, idx) => {
     const o = b.words.find((w) => w.letter === 'O');
-    if (o && !labels.has(o.value)) labels.set(o.value, idx + 1);
+    if (!o) return;
+    const source = b.src || 'the main program';
+    if (labels.has(o.value)) {
+      // Two files both called O1000 is a real mix-up on a control, and
+      // silently running one of them is how the wrong pocket gets cut.
+      if (declaredIn.get(o.value) !== source && !clashed.has(o.value)) {
+        clashed.add(o.value);
+        warn(b.line, `O${o.value} is in both ${declaredIn.get(o.value)} and ${source}; M98 will run the first.`);
+      }
+      return;
+    }
+    labels.set(o.value, idx + 1);
+    declaredIn.set(o.value, source);
   });
   // A file that declares its own number answers to it, unless the main
   // program already has a label of its own with that number.

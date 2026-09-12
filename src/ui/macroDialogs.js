@@ -1,14 +1,14 @@
-// Windows for the parts of a job that are made rather than opened: a
-// subprogram file, a macro, and a machine parameter for a macro to read.
+// Windows for the two things that are written rather than opened: a macro,
+// and a machine parameter for one to read.
 //
-// Each is a decision with several parts that only mean anything together —
-// a subprogram needs a number before M98 can find it, a macro needs a code
-// before it can run — so each is filled in and committed as a whole.
+// A macro is a decision with several parts that only mean anything together
+// — a code, whether the machine runs it, and the G-code itself — so it is
+// filled in and committed as a whole. A subprogram is not: it is a file,
+// and files are opened, which is why there is no window for one.
 
-import { el, field, select, row, checkbox, pickFile } from './dom.js';
+import { el, field, select, row, checkbox } from './dom.js';
 import { Dialog } from './dialog.js';
 import { MACRO_CATALOGUE, normaliseCode, macroReferences } from '../machine/macros.js';
-import { uid } from '../core/util.js';
 
 /** A monospace editor box, for the things that are G-code. */
 function codeBox(value, onChange, rows = 12) {
@@ -20,63 +20,6 @@ function codeBox(value, onChange, rows = 12) {
   });
   area.value = value || '';
   return area;
-}
-
-/**
- * A subprogram file: what M98 P____ finds.
- */
-export function openSubprogramDialog(app, panel) {
-  const used = new Set(app.state.subprograms.map((s) => Number(s.number)));
-  let next = 1000;
-  while (used.has(next)) next += 1;
-
-  const state = { name: 'Subprogram', number: next, text: `O${next}\n(subprogram)\n\nM99\n` };
-  const nameField = field('Name', state.name, { type: 'text', onChange: (v) => { state.name = v || 'Subprogram'; } });
-  const fileLabel = el('div.hint', {}, 'Or start from a file.');
-
-  const body = el('div.dialog-form', {}, [
-    row([
-      field('O number', state.number, {
-        type: 'number', step: 1, min: 1,
-        onChange: (v) => { state.number = Math.max(1, Math.round(Number(v) || 0)); },
-      }),
-      nameField,
-    ]),
-    el('div.hint', {}, 'M98 P' + next + ' in the main program calls this file. If the text starts with its own O number that one wins, which is how a file copied off a control keeps working.'),
-    row([el('button.btn', {
-      type: 'button',
-      onclick: async () => {
-        const [file] = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.sub');
-        if (!file) return;
-        state.text = await file.text();
-        state.name = file.name.replace(/\.[^.]+$/, '');
-        nameField.input.value = state.name;
-        fileLabel.textContent = `${file.name} — ${state.text.split('\n').length} lines`;
-        const m = state.text.match(/^\s*O\s*(\d+)/m);
-        if (m) state.number = Number(m[1]);
-      },
-    }, 'Open a file…')]),
-    fileLabel,
-  ]);
-
-  const dialog = new Dialog({
-    title: 'Add a subprogram',
-    subtitle: 'A file the main program can call with M98',
-    width: 480,
-    body,
-    confirm: 'Add',
-    onConfirm: () => {
-      const sub = { id: uid('sub'), name: state.name, number: state.number, text: state.text };
-      app.state.subprograms.push(sub);
-      panel.subId = sub.id;
-      panel.subEditorFor = null;
-      app.loadProgram(app.state.source, app.state.programName);
-      panel.render();
-      return true;
-    },
-  });
-  dialog.open();
-  return dialog;
 }
 
 /**

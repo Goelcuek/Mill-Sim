@@ -5,13 +5,16 @@
 // its properties here, where they can be changed. Adding an axis or a
 // casting starts from nothing, so each gets a window.
 
-import { el, field, select, checkbox, button, row, section, clear } from './dom.js';
+import { el, field, select, checkbox, button, row, section, clear, pickFile, download } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
 import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineDialogs.js';
+import { openMacroDialog, openParameterDialog } from './macroDialogs.js';
+import { PARAMETER_HINTS, macroReferences } from '../machine/macros.js';
+import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
-import { fmt } from '../core/util.js';
+import { fmt, uid } from '../core/util.js';
 
 const KINDS = [
   { value: 'linear', label: 'Linear' },
@@ -46,9 +49,13 @@ export class MachinePanel extends Panel {
       { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
       { id: 'assembly', label: 'Assembly', icon: 'import', hint: 'Import bodies and assemble the machine from them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
       { id: 'controller', label: 'Controller', icon: 'report', hint: 'Which G-code this machine reads', render: MachinePanel.prototype.controllerPage },
+      { id: 'macros', label: 'Macros', icon: 'code', hint: 'What this machine does at an M code, and the subprograms that live in it', badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: MachinePanel.prototype.macrosPage },
       { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
     ]);
     this.selectedId = null;
+    /** What the Macros page is acting on. */
+    this.macroId = null;
+    this.machineSubId = null;
     this.render();
   }
 
@@ -90,6 +97,10 @@ export class MachinePanel extends Panel {
 
   controllerPage() {
     return [this.controllerSection()];
+  }
+
+  macrosPage() {
+    return [this.macroSection(), this.machineSubSection(), this.parameterSection()];
   }
 
   /** The body the Assembly page is acting on. */
@@ -562,6 +573,212 @@ export class MachinePanel extends Panel {
         ], String(c.feedMode), (v) => set({ feedMode: Number(v) })),
       ]),
       el('div.hint', {}, 'A program that names these itself overrides them on the block it appears in. These are what applies until it does.'),
+    ]);
+  }
+
+  // ---- macros ------------------------------------------------------------
+  //
+  // Everything on this page belongs to the machine rather than to the job:
+  // what it does when it reads an M code, the subprograms that live in its
+  // memory, and the positions those two read. All of it is saved with the
+  // machine and arrives with it.
+
+  macroSection() {
+    const app = this.app;
+    const macros = app.state.machine.macros || [];
+    const list = el('div.list');
+
+    for (const mac of macros) {
+      const refs = macroReferences(mac.body);
+      list.appendChild(el(`div.list-item${this.macroId === mac.id ? '.selected' : ''}`, {
+        onclick: () => { this.macroId = mac.id; this.render(); },
+        ondblclick: () => openMacroDialog(app, this, mac.id),
+        title: 'Double-click to edit',
+      }, [
+        el('div.swatch', { style: { background: mac.enabled ? '#1a9d4b' : '#d0d4db' } }),
+        el('div.list-main', {}, [
+          el('div.list-title', {}, [el('span.tnum', {}, mac.code), mac.name]),
+          el('div.list-sub', {}, [
+            mac.enabled ? 'runs' : 'not used',
+            `${String(mac.body || '').trim().split('\n').length} lines`,
+            refs.length ? `reads ${refs.map((r) => `#${r}`).join(' ')}` : null,
+          ].filter(Boolean).join(' · ')),
+        ]),
+        el('div.list-actions', {}, [
+          button(mac.enabled ? 'Turn off' : 'Turn on', (e) => {
+            e.stopPropagation();
+            mac.enabled = !mac.enabled;
+            app.reinterpret();
+            this.render();
+          }),
+        ]),
+      ]));
+    }
+
+    const selected = macros.find((m) => m.id === this.macroId) || null;
+    return section(`M codes (${macros.length})`, [
+      addBar('Add macro…', () => openMacroDialog(app, this, null), { hint: 'Say what this machine does at an M code' }),
+      el('div.hint', {}, 'A control does not really do M06 — it runs a program the machine builder wrote, which retracts, crosses to the change position and swaps the tool. That is what these are, and it is why two machines reading the same G-code do different things at the same code.'),
+      list,
+      actionRow([
+        { label: 'Edit…', variant: 'primary', disabled: !selected, onClick: () => openMacroDialog(app, this, this.macroId) },
+        {
+          label: selected && selected.enabled ? 'Turn off' : 'Turn on',
+          disabled: !selected,
+          hint: 'Whether this machine actually runs it',
+          onClick: () => {
+            selected.enabled = !selected.enabled;
+            app.reinterpret();
+            this.render();
+          },
+        },
+        { label: 'Duplicate', disabled: !selected, onClick: () => this.duplicateMacro() },
+        { label: 'Delete', disabled: !selected, variant: 'warn', onClick: () => this.deleteMacro() },
+      ]),
+    ]);
+  }
+
+  duplicateMacro() {
+    const mac = (this.app.state.machine.macros || []).find((m) => m.id === this.macroId);
+    if (!mac) return;
+    this.macroId = this.app.addMacro({ ...mac, id: undefined, name: `${mac.name} copy`, enabled: false }).id;
+    this.render();
+  }
+
+  deleteMacro() {
+    const app = this.app;
+    app.state.machine.macros = (app.state.machine.macros || []).filter((m) => m.id !== this.macroId);
+    this.macroId = null;
+    app.reinterpret();
+    this.render();
+  }
+
+  /**
+   * Subprograms that live in the machine.
+   *
+   * A shop's probing cycles, its pallet routines, the builder's O9000
+   * programs: files that are in the control's memory whatever job is
+   * loaded, so any program can call them and none of them carries a copy.
+   * They are the machine's, so they are saved and loaded with it.
+   */
+  machineSubSection() {
+    const app = this.app;
+    const subs = app.state.machine.subprograms || [];
+    const list = el('div.list');
+
+    if (!subs.length) {
+      list.appendChild(el('div.empty', {}, [
+        el('div.empty-title', {}, 'Nothing in the machine'),
+        el('div.hint', {}, 'Files that stay on the control between jobs — probing cycles, pallet routines, the builder\u2019s own programs. Any program loaded on this machine can call them with M98, without carrying a copy. Subprograms that belong to one job go on Program \u203a Subprograms instead.'),
+      ]));
+    }
+
+    for (const sub of subs) {
+      const o = programNumber(sub.text);
+      const lines = String(sub.text || '').split('\n').length;
+      list.appendChild(el(`div.list-item${this.machineSubId === sub.id ? '.selected' : ''}`, {
+        onclick: () => { this.machineSubId = sub.id; this.render(); },
+      }, [
+        el('div.swatch', { style: { background: o === null ? '#d7263d' : '#7b8494' } }),
+        el('div.list-main', {}, [
+          el('div.list-title', {}, [o === null ? null : el('span.tnum', {}, `O${o}`), sub.name]),
+          el('div.list-sub', {}, o === null
+            ? 'no O number on its first line, so M98 cannot find it'
+            : `${lines} ${lines === 1 ? 'line' : 'lines'} · in the machine`),
+        ]),
+      ]));
+    }
+
+    const selected = subs.find((x) => x.id === this.machineSubId) || null;
+    const body = [
+      addBar('Open files…', () => this.openMachineSubs(), { hint: 'One or several; they stay with this machine' }),
+      list,
+    ];
+
+    if (selected) {
+      body.push(el('div.dialog-section-label', {}, selected.name));
+      const area = el('textarea.code-box', {
+        spellcheck: false,
+        wrap: 'off',
+        rows: 14,
+        oninput: (e) => {
+          selected.text = e.target.value;
+          clearTimeout(this._subDebounce);
+          this._subDebounce = setTimeout(() => app.reinterpret(), 400);
+        },
+      });
+      area.value = selected.text || '';
+      body.push(area);
+    }
+
+    body.push(actionRow([
+      { label: 'New file', onClick: () => this.newMachineSub(), hint: 'Start an empty one' },
+      { label: 'Save as file', disabled: !selected, onClick: () => download(selected.name, selected.text || '', 'text/plain') },
+      { label: 'Remove', disabled: !selected, variant: 'warn', onClick: () => this.removeMachineSub() },
+    ]));
+
+    return section(`Machine subprograms (${subs.length})`, body);
+  }
+
+  async openMachineSubs() {
+    const files = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.sub,.mpf,.eia', true);
+    if (!files || !files.length) return;
+    const app = this.app;
+    if (!Array.isArray(app.state.machine.subprograms)) app.state.machine.subprograms = [];
+    for (const file of files) {
+      const sub = { id: uid('msub'), name: file.name, text: await file.text() };
+      app.state.machine.subprograms.push(sub);
+      this.machineSubId = sub.id;
+    }
+    app.reinterpret();
+    this.render();
+  }
+
+  newMachineSub() {
+    const app = this.app;
+    if (!Array.isArray(app.state.machine.subprograms)) app.state.machine.subprograms = [];
+    const taken = new Set(app.state.machine.subprograms.map((x) => programNumber(x.text)));
+    let n = 9000;
+    while (taken.has(n)) n += 1;
+    const sub = { id: uid('msub'), name: `O${n}.nc`, text: `O${n}\n\nM99\n` };
+    app.state.machine.subprograms.push(sub);
+    this.machineSubId = sub.id;
+    app.reinterpret();
+    this.render();
+  }
+
+  removeMachineSub() {
+    const app = this.app;
+    app.state.machine.subprograms = (app.state.machine.subprograms || []).filter((x) => x.id !== this.machineSubId);
+    this.machineSubId = null;
+    app.reinterpret();
+    this.render();
+  }
+
+  /** The named numbers macros read: where this machine's positions live. */
+  parameterSection() {
+    const app = this.app;
+    const machine = app.state.machine;
+    return section('Machine parameters', [
+      addBar('Add parameter…', () => openParameterDialog(app, this), { hint: 'A number of your own that macros can read' }),
+      ...Object.keys(machine.parameters || {}).map((key) => row([
+        field(key, machine.parameters[key], {
+          type: 'number',
+          step: 1,
+          unit: PARAMETER_HINTS[key] ? 'mm' : '',
+          title: PARAMETER_HINTS[key] || `Read by a macro as #${key}`,
+          onChange: (v) => {
+            machine.parameters[key] = Number(v) || 0;
+            app.reinterpret();
+          },
+        }),
+        button('✕', () => {
+          delete machine.parameters[key];
+          app.reinterpret();
+          this.render();
+        }, { title: `Remove #${key}`, variant: 'warn' }),
+      ])),
+      el('div.hint', {}, 'A macro reads these by name — #toolChangeX in a body becomes this number. They belong to the machine, so a program that moves to another machine picks up that machine\u2019s positions.'),
     ]);
   }
 

@@ -36,7 +36,7 @@ import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
-import { fmt, fmtDuration, clamp } from './core/util.js';
+import { fmt, fmtDuration, clamp, uid } from './core/util.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
 export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
@@ -62,6 +62,7 @@ export class App {
         // defaults every other machine starts from.
         macros: defaultMacros(DEFAULT_MACHINE.controller.flavour),
         parameters: { ...DEFAULT_PARAMETERS },
+        subprograms: [],
       },
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
       machineZero: [0, 0, 250],
@@ -547,6 +548,12 @@ export class App {
       return { id: m.id, code: m.code, name: m.name, enabled: m.enabled, notes: m.notes, file };
     });
 
+    const subprograms = (machine.subprograms || []).map((sub) => {
+      const file = `subprograms/${unique(sub.name.replace(/\.[^.]+$/, ''), '.nc')}`;
+      files.push({ name: file, data: `${sub.text || ''}` });
+      return { id: sub.id, name: sub.name, file };
+    });
+
     const bodies = [];
     for (const part of this.machineParts.parts) {
       const pos = part.object.geometry.getAttribute('position');
@@ -566,6 +573,7 @@ export class App {
       controller: { ...machine.controller },
       parameters: { ...machine.parameters },
       macros,
+      subprograms,
       bodies,
       savedBy: 'Mill-Sim',
       saved: new Date().toISOString(),
@@ -580,6 +588,8 @@ export class App {
         '              macro list and where each body sits on which axis.',
         'macros/       one G-code file per M code. Editing these edits what',
         '              the machine does at that code.',
+        'subprograms/  the files that live in this control between jobs, the',
+        '              ones any program on it can call with M98.',
         'bodies/       the castings, as STL, in millimetres, each in the',
         '              coordinates of the axis that carries it.',
         '',
@@ -590,7 +600,12 @@ export class App {
 
     try {
       download(`${stem}.zip`, await writeZip(files), 'application/zip');
-      this.notify(`Saved ${stem}.zip — the chain, ${macros.length} ${macros.length === 1 ? 'macro' : 'macros'} and ${bodies.length} ${bodies.length === 1 ? 'body' : 'bodies'}.`, 'ok');
+      const bits = [
+        `${macros.length} ${macros.length === 1 ? 'macro' : 'macros'}`,
+        subprograms.length ? `${subprograms.length} ${subprograms.length === 1 ? 'subprogram' : 'subprograms'}` : null,
+        `${bodies.length} ${bodies.length === 1 ? 'body' : 'bodies'}`,
+      ].filter(Boolean);
+      this.notify(`Saved ${stem}.zip — the chain, ${bits.join(', ')}.`, 'ok');
     } catch (err) {
       this.notify(`Could not write the machine: ${err.message}`, 'error');
     }
@@ -641,6 +656,17 @@ export class App {
         }
         return makeMacro({ ...m, body });
       });
+    }
+
+    // Subprograms that live in the machine, one file each.
+    if (Array.isArray(def.subprograms)) {
+      this.state.machine.subprograms = def.subprograms.map((sub) => ({
+        id: sub.id || uid('msub'),
+        name: sub.name || (sub.file || 'subprogram').split('/').pop(),
+        text: sub.text || (entries && sub.file && entries.has(sub.file)
+          ? new TextDecoder().decode(entries.get(sub.file))
+          : ''),
+      }));
     }
 
     // The castings, when the folder brought them.
@@ -866,6 +892,18 @@ export class App {
 
   // ---- program -----------------------------------------------------------
 
+  /**
+   * Read the current program again.
+   *
+   * Anything that changes what the control would make of the same text —
+   * a subprogram, a macro, a parameter, the controller's power-up state —
+   * goes through here rather than reaching into loadProgram's arguments.
+   */
+  reinterpret() {
+    if (this.state.source) return this.loadProgram(this.state.source, this.state.programName);
+    return null;
+  }
+
   loadProgram(text, name) {
     this.state.source = text;
     if (name) this.state.programName = name;
@@ -879,7 +917,9 @@ export class App {
       controller: this.state.machine.controller,
       // The other two things a control reads: the shop's subprograms, and
       // what this machine's builder made its M codes do.
-      subprograms: this.state.subprograms,
+      // The job's own files first: a program that brings its own O1000
+      // means that one, not the machine's.
+      subprograms: [...this.state.subprograms, ...(this.state.machine.subprograms || [])],
       macros: this.state.machine.macros,
       parameters: this.state.machine.parameters,
     });

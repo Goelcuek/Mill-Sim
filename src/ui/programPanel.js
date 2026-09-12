@@ -1,11 +1,10 @@
 // Program panel: the G-code, and what the interpreter made of it.
 //
-// Four pages, because a job is not one file. The main program is what the
-// post wrote; subprograms are the files it calls with M98 and which live
-// beside it on the control; macros are what the *machine* does at an M
-// code, which is a property of the machine and travels with it. Keeping
-// all three here is what makes "what will this machine do with this
-// program" answerable in one place.
+// A job is not one file. The main program is what the post wrote, and
+// beside it are the subprograms it calls with M98 — ordinary files, opened
+// the same way and edited in the same editor, because that is all they are.
+// What the *machine* does at an M code is not part of the job at all; that
+// lives with the machine, on Machine > Macros.
 //
 // The editors keep their own DOM across redraws — a textarea that is thrown
 // away loses the caret, the scroll position and the undo stack — so
@@ -13,8 +12,8 @@
 
 import { el, button, row, section, clear, select, field, checkbox, download, pickFile } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
-import { openSubprogramDialog, openMacroDialog, openParameterDialog } from './programDialogs.js';
-import { PARAMETER_HINTS, macroReferences } from '../machine/macros.js';
+import { programNumber } from '../gcode/lexer.js';
+import { uid } from '../core/util.js';
 import { GcodeEditor } from './editor.js';
 import { fmt, fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
@@ -23,20 +22,28 @@ export class ProgramPanel extends Panel {
   constructor(app) {
     super(app, [
       { id: 'editor', label: 'Main', icon: 'open', hint: 'The program itself: open, edit and re-read it', render: ProgramPanel.prototype.editorPage },
-      { id: 'subs', label: 'Subprograms', icon: 'library', hint: 'The files M98 calls', badge: () => app.state.subprograms.length || null, render: ProgramPanel.prototype.subsPage },
-      { id: 'macros', label: 'Macros', icon: 'machine', hint: 'What this machine does at each M code', badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: ProgramPanel.prototype.macrosPage },
+      { id: 'subs', label: 'Subprograms', icon: 'library', hint: 'The files this program calls with M98', badge: () => app.state.subprograms.length || null, render: ProgramPanel.prototype.subsPage },
       { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
     ]);
-    this.root.classList.add('panel-program');
     this.editorHost = el('div.editor-host');
     this.subHost = el('div.editor-host');
     this.summaryHost = el('div.summary-host');
     this.editor = null;
     this.subEditor = null;
-    /** Which subprogram and which macro the pages are acting on. */
+    /** Which subprogram the page is acting on. */
     this.subId = null;
-    this.macroId = null;
     this.render();
+  }
+
+  /**
+   * Only the pages that host an editor get the fixed, unscrolling layout
+   * the editor needs. Anything else is an ordinary panel that scrolls, or
+   * its lower half is unreachable.
+   */
+  render() {
+    const hostsEditor = this.page === 'editor' || this.page === 'subs';
+    this.root.classList.toggle('panel-program', hostsEditor);
+    super.render();
   }
 
   // ---- pages -------------------------------------------------------------
@@ -69,6 +76,11 @@ export class ProgramPanel extends Panel {
   }
 
   // ---- subprograms -------------------------------------------------------
+  //
+  // A subprogram is a file, not a form to fill in. It is opened the way the
+  // main program is opened, edited in the same editor, and answers to the O
+  // number written at the top of it — which is how the control finds it,
+  // and so is the only thing here that matters.
 
   /** The subprogram the page is acting on. */
   get sub() {
@@ -78,36 +90,42 @@ export class ProgramPanel extends Panel {
   subsPage() {
     const app = this.app;
     const subs = app.state.subprograms;
-    const list = el('div.list');
 
+    const bar = el('div.toolbar', {}, [
+      button('Open…', () => this.openSubs(), { variant: 'primary', title: 'One file or several' }),
+      button('New', () => this.newSub(), { title: 'Start an empty subprogram' }),
+      button('Save', () => this.saveSub(), { disabled: !this.sub }),
+      button('Remove', () => this.deleteSub(), { disabled: !this.sub, variant: 'warn' }),
+    ]);
+
+    const list = el('div.list');
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'No subprograms'),
-        el('div.hint', {}, 'A post that writes M98 P1000 expects a file called O1000 to be on the control. Add it here and the call resolves; without it the interpreter can only report a missing subprogram. A program that carries its own O-numbered sections needs nothing here.'),
+        el('div.hint', {}, 'A post that writes M98 P1000 expects a file called O1000 to sit beside the program. Open those files here and the calls resolve. A subprogram that lives in the machine rather than with the job belongs on Machine \u203a Macros instead.'),
       ]));
     }
 
     for (const sub of subs) {
+      const o = programNumber(sub.text);
       const lines = String(sub.text || '').split('\n').length;
-      const calls = this.callCount(sub);
+      const ran = this.ranFrom(sub.name);
       list.appendChild(el(`div.list-item${this.subId === sub.id ? '.selected' : ''}`, {
         onclick: () => { this.subId = sub.id; this.render(); },
       }, [
-        el('div.swatch', { style: { background: calls ? '#0a7cff' : '#d0d4db' } }),
+        el('div.swatch', { style: { background: o === null ? '#d7263d' : ran ? '#0a7cff' : '#d0d4db' } }),
         el('div.list-main', {}, [
-          el('div.list-title', {}, [el('span.tnum', {}, `O${sub.number}`), sub.name]),
-          el('div.list-sub', {}, `${lines} ${lines === 1 ? 'line' : 'lines'} · ${calls ? `called ${calls} ${calls === 1 ? 'time' : 'times'}` : 'never called'}`),
+          el('div.list-title', {}, [o === null ? null : el('span.tnum', {}, `O${o}`), sub.name]),
+          el('div.list-sub', {}, o === null
+            ? 'no O number on its first line, so M98 cannot find it'
+            : `${lines} ${lines === 1 ? 'line' : 'lines'} · ${ran ? 'called by this program' : 'not called'}`),
         ]),
       ]));
     }
 
-    const out = [section(`Subprograms (${subs.length})`, [
-      addBar('Add subprogram…', () => openSubprogramDialog(app, this), { hint: 'A file the main program calls with M98' }),
+    const out = [bar, el('div.list-host', {}, [
       list,
-      actionRow([
-        { label: 'Save as file', disabled: !this.sub, onClick: () => { const x = this.sub; download(`O${x.number}.nc`, x.text || '', 'text/plain'); } },
-        { label: 'Delete', disabled: !this.sub, variant: 'warn', onClick: () => this.deleteSub() },
-      ]),
+      el('div.hint', {}, 'The number M98 asks for is the O word at the top of the file — rename the file freely, that is what the control reads.'),
     ])];
 
     const sub = this.sub;
@@ -119,7 +137,7 @@ export class ProgramPanel extends Panel {
             if (!current) return;
             current.text = text;
             clearTimeout(this._subDebounce);
-            this._subDebounce = setTimeout(() => this.app.loadProgram(this.app.state.source, this.app.state.programName), 400);
+            this._subDebounce = setTimeout(() => this.app.reinterpret(), 400);
           },
         });
       } else if (this.subEditor.wrap.parentNode !== this.subHost) {
@@ -131,17 +149,46 @@ export class ProgramPanel extends Panel {
       }
       const program = app.state.program;
       this.subEditor.setMarkers(program ? program.warnings.filter((w) => w.source === sub.name) : []);
-      out.push(el('div.section-label-row', {}, el('div.dialog-section-label', {}, `O${sub.number} — ${sub.name}`)));
+      out.push(el('div.section-label-row', {}, el('div.dialog-section-label', {}, sub.name)));
       out.push(this.subHost);
     }
     return out;
   }
 
-  /** How often the loaded program actually called this subprogram. */
-  callCount(sub) {
+  /** Did the last run actually execute anything from this file? */
+  ranFrom(name) {
     const program = this.app.state.program;
-    if (!program) return 0;
-    return program.moves.filter((m) => m.source === sub.name).length ? 1 : 0;
+    return !!(program && program.moves.some((m) => m.source === name));
+  }
+
+  async openSubs() {
+    const files = await pickFile('.nc,.gcode,.tap,.ngc,.cnc,.txt,.sub,.mpf,.eia', true);
+    if (!files || !files.length) return;
+    for (const file of files) {
+      const sub = { id: uid('sub'), name: file.name, text: await file.text() };
+      this.app.state.subprograms.push(sub);
+      this.subId = sub.id;
+    }
+    this.subEditorFor = null;
+    this.app.reinterpret();
+    this.render();
+  }
+
+  newSub() {
+    const taken = new Set(this.app.state.subprograms.map((s) => programNumber(s.text)));
+    let n = 1000;
+    while (taken.has(n)) n += 1;
+    const sub = { id: uid('sub'), name: `O${n}.nc`, text: `O${n}\n\nM99\n` };
+    this.app.state.subprograms.push(sub);
+    this.subId = sub.id;
+    this.subEditorFor = null;
+    this.app.reinterpret();
+    this.render();
+  }
+
+  saveSub() {
+    const sub = this.sub;
+    if (sub) download(sub.name, sub.text || '', 'text/plain');
   }
 
   deleteSub() {
@@ -149,109 +196,7 @@ export class ProgramPanel extends Panel {
     app.state.subprograms = app.state.subprograms.filter((x) => x.id !== this.subId);
     this.subId = null;
     this.subEditorFor = null;
-    app.loadProgram(app.state.source, app.state.programName);
-    this.render();
-  }
-
-  // ---- macros ------------------------------------------------------------
-
-  macrosPage() {
-    const app = this.app;
-    const machine = app.state.machine;
-    const macros = machine.macros || [];
-    const list = el('div.list');
-
-    for (const mac of macros) {
-      const refs = macroReferences(mac.body);
-      list.appendChild(el(`div.list-item${this.macroId === mac.id ? '.selected' : ''}`, {
-        onclick: () => { this.macroId = mac.id; this.render(); },
-        ondblclick: () => openMacroDialog(app, this, mac.id),
-        title: 'Double-click to edit',
-      }, [
-        el('div.swatch', { style: { background: mac.enabled ? '#1a9d4b' : '#d0d4db' } }),
-        el('div.list-main', {}, [
-          el('div.list-title', {}, [el('span.tnum', {}, mac.code), mac.name]),
-          el('div.list-sub', {}, [
-            mac.enabled ? 'runs' : 'not used',
-            `${String(mac.body || '').trim().split('\n').length} lines`,
-            refs.length ? `reads ${refs.map((r) => `#${r}`).join(' ')}` : null,
-          ].filter(Boolean).join(' · ')),
-        ]),
-        el('div.list-actions', {}, [
-          button(mac.enabled ? 'Turn off' : 'Turn on', (e) => {
-            e.stopPropagation();
-            mac.enabled = !mac.enabled;
-            app.loadProgram(app.state.source, app.state.programName);
-            this.render();
-          }),
-        ]),
-      ]));
-    }
-
-    const selected = macros.find((m) => m.id === this.macroId) || null;
-
-    const params = section('Machine parameters', [
-      addBar('Add parameter…', () => openParameterDialog(app, this), { hint: 'A number of your own that macros can read' }),
-      ...Object.keys(machine.parameters || {}).map((key) => row([
-        field(key, machine.parameters[key], {
-          type: 'number', step: 1,
-          // The ones this program ships know what they are; one the user
-          // added could be an angle or a dwell, so it is left unlabelled.
-          unit: PARAMETER_HINTS[key] ? 'mm' : '',
-          title: PARAMETER_HINTS[key] || `Read by a macro as #${key}`,
-          onChange: (v) => {
-            machine.parameters[key] = Number(v) || 0;
-            app.loadProgram(app.state.source, app.state.programName);
-          },
-        }),
-        button('✕', () => {
-          delete machine.parameters[key];
-          app.loadProgram(app.state.source, app.state.programName);
-          this.render();
-        }, { title: `Remove #${key}`, variant: 'warn' }),
-      ])),
-      el('div.hint', {}, 'A macro reads these by name — #toolChangeX in a body becomes this number. They belong to the machine, so they are saved with it and a program that moves to another machine picks up that machine\u2019s positions.'),
-    ]);
-
-    return [
-      section(`M codes (${macros.length})`, [
-        addBar('Add macro…', () => openMacroDialog(app, this, null), { hint: 'Say what this machine does at an M code' }),
-        el('div.hint', {}, 'A control does not really do M06 — it runs a program the machine builder wrote, which retracts, goes to the change position and swaps the tool. That is what these are. They belong to the machine, not to the part program, and they are saved with it.'),
-        list,
-        actionRow([
-          { label: 'Edit…', variant: 'primary', disabled: !selected, onClick: () => openMacroDialog(app, this, this.macroId) },
-          {
-            label: selected && selected.enabled ? 'Turn off' : 'Turn on',
-            disabled: !selected,
-            hint: 'Whether this machine actually runs it',
-            onClick: () => {
-              selected.enabled = !selected.enabled;
-              app.loadProgram(app.state.source, app.state.programName);
-              this.render();
-            },
-          },
-          { label: 'Duplicate', disabled: !selected, onClick: () => this.duplicateMacro() },
-          { label: 'Delete', disabled: !selected, variant: 'warn', onClick: () => this.deleteMacro() },
-        ]),
-      ]),
-      params,
-    ];
-  }
-
-  duplicateMacro() {
-    const app = this.app;
-    const mac = (app.state.machine.macros || []).find((m) => m.id === this.macroId);
-    if (!mac) return;
-    const copy = app.addMacro({ ...mac, id: undefined, name: `${mac.name} copy`, enabled: false });
-    this.macroId = copy.id;
-    this.render();
-  }
-
-  deleteMacro() {
-    const app = this.app;
-    app.state.machine.macros = (app.state.machine.macros || []).filter((m) => m.id !== this.macroId);
-    this.macroId = null;
-    app.loadProgram(app.state.source, app.state.programName);
+    app.reinterpret();
     this.render();
   }
 
@@ -301,7 +246,11 @@ export class ProgramPanel extends Panel {
 
   /** Called by the app on every re-interpret; harmless when off-screen. */
   refresh() {
-    if (this.page === 'summary' || this.page === 'subs' || this.page === 'macros') this.render();
+    if (this.page === 'summary') this.render();
+    else if (this.page === 'subs') {
+      // The list says which files ran; only the editor keeps its own state.
+      this.render();
+    }
     else if (this.editor && this.app.state.program) {
       // Only the notes that belong to this text: a warning raised inside a
       // subprogram carries that file's line numbers, not these.

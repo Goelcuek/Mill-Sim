@@ -505,6 +505,9 @@ select.speed { width: 82px; }
 .panel-host { flex: 1; min-height: 0; display: flex; }
 .panel { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 4px 0 28px; }
 .panel-program { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+/* The list above an editor scrolls on its own, so a shop with thirty
+   subprograms can still reach the last one. */
+.panel-program .list-host { flex: 0 1 auto; overflow-y: auto; min-height: 64px; padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
 
 .section { border-bottom: 1px solid var(--line); }
 .section-head {
