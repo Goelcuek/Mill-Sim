@@ -18,6 +18,7 @@ export const COLLISION_TYPES = {
   notool: { label: 'No tool assembly loaded', severity: 'warning' },
   deep: { label: 'Depth of cut exceeds flute length', severity: 'error' },
   gouge: { label: 'Gouge into the reference part', severity: 'error' },
+  near: { label: 'Near miss', severity: 'warning' },
 };
 
 const MAX_COLLISIONS = 400;
@@ -101,6 +102,7 @@ export class Simulator {
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
     if (opts.target !== undefined) this.target = opts.target;
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
+    if (opts.checks !== undefined) this.checks = opts.checks;
     this.reset();
   }
 
@@ -115,6 +117,7 @@ export class Simulator {
     if (opts.machine !== undefined) this.machine = opts.machine;
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
+    if (opts.checks !== undefined) this.checks = opts.checks;
   }
 
   reset() {
@@ -526,7 +529,7 @@ export class Simulator {
       if (removed > 0) {
         this.removedVolume += removed;
         this.moveStats[mv.i] += removed;
-        if (mv.kind === 'rapid') {
+        if (mv.kind === 'rapid' && (!this.checks || this.checks.rapidIntoStock !== false)) {
           this.report('rapid', {
             line: mv.line,
             message: `G0 rapid removed material at Z${z.toFixed(3)}. On the machine this is a crash, not a cut.`,
@@ -569,26 +572,46 @@ export class Simulator {
     }
 
     for (const tip of this.probePoints(poseA.tip, poseB.tip)) {
+    // How close is too close. Zero means only report metal in metal, which
+    // is what a check was before anybody could ask for room.
+    const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
+
     if (this.fixtures && this.fixtures.length) {
-      const f = checkFixtures(slot.spheres, tip, this.fixtures, 0);
-      if (f) {
+      const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance);
+      if (f && f.gap < 0) {
         this.report('fixture', {
           line: mv.line,
           message: (d) => `Assembly intersects "${f.fixture.name}" by ${d.toFixed(2)} mm.`,
           position: f.point,
           depth: f.depth,
         });
+      } else if (f) {
+        this.report('near', {
+          line: mv.line,
+          message: `Passes within ${f.gap.toFixed(2)} mm of "${f.fixture.name}" — asked for ${f.clearance.toFixed(2)} mm.`,
+          position: f.point,
+          depth: f.clearance - f.gap,
+          gap: f.gap,
+        });
       }
     }
 
     if (this.machine) {
-      const tbl = checkTable(slot.spheres, tip, this.machine.table);
-      if (tbl) {
+      const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance);
+      if (tbl && tbl.gap < 0) {
         this.report('table', {
           line: mv.line,
           message: (d) => `Assembly reaches ${d.toFixed(2)} mm below the table surface.`,
           position: [x, y, tbl.z],
           depth: tbl.depth,
+        });
+      } else if (tbl) {
+        this.report('near', {
+          line: mv.line,
+          message: `Passes within ${tbl.gap.toFixed(2)} mm of the table surface — asked for ${tbl.clearance.toFixed(2)} mm.`,
+          position: [x, y, tbl.z],
+          depth: tbl.clearance - tbl.gap,
+          gap: tbl.gap,
         });
       }
       const lim = checkLimits(tip, this.machine.limits);

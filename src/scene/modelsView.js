@@ -89,6 +89,10 @@ export class ModelsView {
       mesh,
       material,
       visible: true,
+      /** Skip this one in the crash model, whatever its role says. */
+      ignore: false,
+      /** Room this one wants for itself, in mm; null follows the setting. */
+      clearance: null,
       triangles: geometry.attributes.position.count / 3,
       dirty: true,
     };
@@ -207,6 +211,10 @@ export class ModelsView {
         centre: [centre.x, centre.y, centre.z],
         half: [half.x, half.y, half.z],
         scale: Math.max(Math.abs(s.x), Math.abs(s.y), Math.abs(s.z)) || 1,
+        // Rules this one carries itself: a part the tool is meant to touch,
+        // or one that wants more room than the rest.
+        ignore: !!m.ignore,
+        clearance: Number.isFinite(m.clearance) ? m.clearance : null,
       });
       m.dirty = false;
     }

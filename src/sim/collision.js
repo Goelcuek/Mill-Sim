@@ -80,22 +80,37 @@ function applyMatrix(m, x, y, z, out) {
  *                              a clamp — pass 0 to test everything)
  * @returns {null|{fixture:FixtureBox, depth:number, point:[number,number,number], localZ:number}}
  */
-export function checkFixtures(spheres, tip, fixtures, skipBelow = 0) {
+export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance = 0) {
   if (!fixtures || !fixtures.length || !spheres.length) return null;
   const p = [0, 0, 0];
   let worst = null;
 
   for (const f of fixtures) {
+    if (f.ignore) continue;
     const s = f.scale || 1;
+    // A fixture may ask for more room than the global setting — a fragile
+    // probe or a delicate casting — but never less than nothing.
+    const want = Math.max(Number.isFinite(f.clearance) ? f.clearance : clearance, 0);
     for (let i = 0; i < spheres.length; i += 2) {
       const lz = spheres[i];
       if (lz < skipBelow) continue;
       const r = spheres[i + 1];
       applyMatrix(f.inverse, tip[0], tip[1], tip[2] + lz, p);
       const d = pointBoxDistance(p[0] - f.centre[0], p[1] - f.centre[1], p[2] - f.centre[2], f.half[0], f.half[1], f.half[2]) * s;
-      const depth = r - d;
-      if (depth > 0 && (!worst || depth > worst.depth)) {
-        worst = { fixture: f, depth, point: [tip[0], tip[1], tip[2] + lz], localZ: lz };
+      // Negative gap is metal in metal; a small positive one is the near
+      // miss that the operator would have watched with a hand on the feed
+      // hold. Both come back here; which of them is worth reporting is the
+      // caller's business.
+      const gap = d - r;
+      if (gap < want && (!worst || gap < worst.gap)) {
+        worst = {
+          fixture: f,
+          gap,
+          clearance: want,
+          depth: Math.max(-gap, 0),
+          point: [tip[0], tip[1], tip[2] + lz],
+          localZ: lz,
+        };
       }
     }
   }
@@ -107,21 +122,20 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0) {
  *
  * @returns {null|{depth:number, z:number, localZ:number}}
  */
-export function checkTable(spheres, tip, table) {
+export function checkTable(spheres, tip, table, clearance = 0) {
   if (!table || !table.enabled) return null;
   const { z, xMin, xMax, yMin, yMax } = table;
   if (tip[0] < xMin || tip[0] > xMax || tip[1] < yMin || tip[1] > yMax) return null;
+  const want = Math.max(clearance, 0);
   let worst = null;
-  for (let i = 0; i < spheres.length; i += 2) {
-    const lz = spheres[i];
-    const r = spheres[i + 1];
-    const bottom = tip[2] + lz - r;
-    const depth = z - bottom;
-    if (depth > 0 && (!worst || depth > worst.depth)) worst = { depth, z: bottom, localZ: lz };
-  }
-  // The tip itself, which has no sphere at r=0.
-  const tipDepth = z - tip[2];
-  if (tipDepth > 0 && (!worst || tipDepth > worst.depth)) worst = { depth: tipDepth, z: tip[2], localZ: 0 };
+  const consider = (bottom, localZ) => {
+    const gap = bottom - z;
+    if (gap < want && (!worst || gap < worst.gap)) {
+      worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ };
+    }
+  };
+  for (let i = 0; i < spheres.length; i += 2) consider(tip[2] + spheres[i] - spheres[i + 1], spheres[i]);
+  consider(tip[2], 0);                      // the tip itself, which has no radius
   return worst;
 }
 

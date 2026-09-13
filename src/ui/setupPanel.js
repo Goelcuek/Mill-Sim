@@ -5,7 +5,7 @@
 // it. Fixtures are the one thing on these pages that gets created from
 // nothing, so that is the one thing behind an Add button and a window.
 
-import { el, field, select, button, row, section } from './dom.js';
+import { el, field, select, checkbox, button, row, section } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { openFixtureDialog, openStockDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
@@ -23,6 +23,7 @@ export class SetupPanel extends Panel {
       { id: 'stock', label: 'Stock', icon: 'cube', hint: 'The block, where it sits and how finely it is simulated', render: SetupPanel.prototype.stockPage },
       { id: 'origin', label: 'Work offsets', icon: 'target', hint: 'Where X0 Y0 Z0 is for each offset', render: SetupPanel.prototype.originPage },
       { id: 'fixtures', label: 'Fixtures', icon: 'vice', hint: 'Vices, clamps, parallels and reference parts', badge: () => app.models.models.length || null, render: SetupPanel.prototype.fixturesPage },
+      { id: 'checks', label: 'Checks', icon: 'gouge', hint: 'What counts as a crash: clearances, and what is checked at all', render: SetupPanel.prototype.checksPage },
     ]);
     this.gizmoMode = 'translate';
     this.importOpts = { units: 'mm', role: 'fixture', recentre: true };
@@ -74,6 +75,61 @@ export class SetupPanel extends Panel {
 
   originPage() {
     return [this.originSection()];
+  }
+
+  /**
+   * What the crash model looks for.
+   *
+   * A collision check is a rule, and a rule that cannot be adjusted is a
+   * rule people learn to ignore: the shop that models its holders
+   * generously gets a holder crash on every block and stops reading the
+   * findings at all. So the distances and the exceptions live here, in one
+   * place, rather than being hard-coded as "touching is bad".
+   */
+  checksPage() {
+    const app = this.app;
+    const c = app.state.checks;
+    const parts = c.parts;
+
+    const partRow = (key, label, hint) => checkbox(label, parts[key] !== false, (v) => {
+      app.setChecks({ parts: { [key]: v } });
+    }, { title: hint });
+
+    const ignored = app.models.models.filter((m) => m.ignore).length;
+    const special = app.models.models.filter((m) => Number.isFinite(m.clearance)).length;
+
+    return [
+      section('Clearance', [
+        el('label.field', {}, [
+          el('span.field-label', {}, ['Near miss ', el('span.value', {}, c.nearMiss > 0 ? `${fmt(c.nearMiss, 2)} mm` : 'off')]),
+          el('input', {
+            type: 'range', min: 0, max: 10, step: 0.25, value: c.nearMiss,
+            oninput: (e) => { app.state.checks.nearMiss = parseFloat(e.target.value); this.refresh(); },
+            onchange: (e) => app.setChecks({ nearMiss: parseFloat(e.target.value) }),
+          }),
+        ]),
+        el('div.hint', {}, c.nearMiss > 0
+          ? `Anything that passes within ${fmt(c.nearMiss, 2)} mm of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
+          : 'Off: only metal in metal is reported. Ask for room and the run also tells you where it came close, which is what you want before the first part rather than after it.'),
+        checkbox('Report rapids that touch material', c.rapidIntoStock !== false, (v) => app.setChecks({ rapidIntoStock: v })),
+        el('div.hint', {}, 'A G0 that removes material is a crash on the machine. Some posts rapid to the surface on purpose, so this can be turned off.'),
+      ]),
+      section('What is checked', [
+        partRow('tool', 'The cutter and its shank', 'The flutes and the shank above them'),
+        partRow('holder', 'The holder', 'Collet chuck, shrink fit, shell arbor'),
+        partRow('spindle', 'The spindle nose', 'The face of the spindle itself'),
+        el('div.hint', {}, 'Everything checked is checked against the fixtures, the table and the travel limits. Turning one off does not make it safe — it makes this program stop mentioning it.'),
+      ]),
+      section('Exceptions', [
+        el('div.hint', {}, ignored || special
+          ? `${ignored} ${ignored === 1 ? 'model is' : 'models are'} ignored and ${special} ${special === 1 ? 'asks' : 'ask'} for a clearance of their own.`
+          : 'No model has a rule of its own yet.'),
+        el('div.hint', {}, 'A fixture the tool is meant to touch — a soft jaw being cut, a sacrificial plate — can be ignored on its own, and a fragile one can ask for more room than everything else. Both live on the fixture, on Setup › Fixtures.'),
+        actionRow([
+          { label: 'Go to fixtures', onClick: () => app.setPage('setup', 'fixtures') },
+        ]),
+      ]),
+    ];
   }
 
   fixturesPage() {
@@ -395,6 +451,31 @@ export class SetupPanel extends Panel {
         el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: m.material.opacity, oninput: (e) => app.models.setOpacity(m, parseFloat(e.target.value)) }),
       ]),
       el('div.hint', {}, `Local size ${fmt(size.x, 1)} × ${fmt(size.y, 1)} × ${fmt(size.z, 1)} mm. Collision uses each model's oriented bounding box — import an awkward fixture as a few simple pieces for a tighter fit.`),
+      // Rules this one carries itself, because a fixture the tool is meant
+      // to touch and a fragile probe are both exceptions to the same rule.
+      row([
+        checkbox('Ignore in the crash model', !!m.ignore, (v) => {
+          m.ignore = v;
+          app.refreshFixtures();
+          app.rerunIfFinished();
+          this.refresh();
+        }),
+        field('Clearance', Number.isFinite(m.clearance) ? m.clearance : '', {
+          type: 'number', min: 0, step: 0.5, unit: 'mm',
+          title: 'How much room this one wants; blank follows Setup › Checks',
+          onChange: (v) => {
+            m.clearance = v === null || v === '' ? null : Math.max(0, Number(v) || 0);
+            app.refreshFixtures();
+            app.rerunIfFinished();
+            this.refresh();
+          },
+        }),
+      ]),
+      el('div.hint', {}, m.ignore
+        ? 'Ignored: the assembly passes through this one without a word.'
+        : Number.isFinite(m.clearance)
+          ? `Asks for ${fmt(m.clearance, 2)} mm of its own, whatever Setup › Checks says.`
+          : 'Follows the near-miss distance on Setup › Checks. Leave the clearance blank unless this one is special.'),
       row([
         button('Drop onto table', () => {
           app.dropModelToTable(m);

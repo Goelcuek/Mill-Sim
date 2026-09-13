@@ -103,6 +103,20 @@ export class App {
       seekTarget: null,
       /** What has been measured on the part, newest last. */
       measurements: [],
+      /**
+       * What the crash model looks for.
+       *
+       * `nearMiss` is how much room the assembly is asked to leave: zero
+       * means report metal in metal and nothing else, which is what a check
+       * was before anyone could ask for clearance. `parts` says which of
+       * the assembly is checked at all — a shop that models its holders
+       * generously would rather not be told about the holder every block.
+       */
+      checks: {
+        nearMiss: 0,
+        parts: { tool: true, shank: true, holder: true, spindle: true },
+        rapidIntoStock: true,
+      },
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
     };
@@ -381,6 +395,33 @@ export class App {
   }
 
   // ---- state changes -----------------------------------------------------
+
+  /**
+   * Change what the crash model looks for.
+   *
+   * A rule that changes what counts as a crash changes the findings, and
+   * findings come out of a run — so the run is done again rather than left
+   * showing what the old rule found.
+   */
+  setChecks(patch) {
+    const checks = this.state.checks;
+    // Merge the parts rather than replace them: a patch that turns the
+    // spindle nose off says nothing about the holder, and assigning over
+    // the whole object would have quietly dropped the rest.
+    const parts = patch.parts ? { ...checks.parts, ...patch.parts } : checks.parts;
+    Object.assign(checks, patch, { parts });
+    this.simulator.retune({ checks, fixtures: this.models.collisionBoxes() });
+    if (patch.parts) this.refreshSlots();
+    this.rerunIfFinished();
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+  }
+
+  /** Re-check a run that has already been made, without moving anything. */
+  rerunIfFinished() {
+    if (!this.state.program || !this.simulator.finished) return;
+    this.resetStock();
+    this.runToEnd();
+  }
 
   setStock(patch) {
     Object.assign(this.state.stock, patch);
@@ -934,7 +975,15 @@ export class App {
     for (const a of this.library.assemblies) {
       const built = this.library.build(a.id, machine);
       if (!built) continue;
-      const spheres = silhouetteSpheres([...built.toolPoints, ...built.holderPoints, ...built.spindlePoints]);
+      // Only the parts of the assembly the rules ask about. The tool and
+      // its shank are one silhouette, so they stand or fall together.
+      const parts = this.state.checks.parts;
+      const points = [
+        ...(parts.tool === false && parts.shank === false ? [] : built.toolPoints),
+        ...(parts.holder === false ? [] : built.holderPoints),
+        ...(parts.spindle === false ? [] : built.spindlePoints),
+      ];
+      const spheres = silhouetteSpheres(points);
       const slot = { built, spheres, index: index % 8, assemblyId: a.id };
       index++;
       const n = Number(a.number);
@@ -952,6 +1001,7 @@ export class App {
       fixtures: this.models.collisionBoxes(),
       stock: this.stock,
       program: this.state.program,
+      checks: this.state.checks,
     });
 
     this.slots = slots;

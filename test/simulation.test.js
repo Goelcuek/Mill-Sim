@@ -17,6 +17,17 @@ function slot(toolIndex, holderIndex, stickout, index = 0) {
   return { built, index, spheres: silhouetteSpheres([...built.toolPoints, ...built.holderPoints, ...built.spindlePoints]) };
 }
 
+/** A box fixture at a position, as collisionBoxes() would describe it. */
+function boxFixture(centre, size) {
+  return {
+    id: 'fx', name: 'clamp',
+    inverse: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    centre,
+    half: size.map((v) => v / 2),
+    scale: 1,
+  };
+}
+
 function simulate(lines, { stock, slots, machine = null, fixtures = [] }) {
   const program = interpret(Array.isArray(lines) ? lines.join('\n') : lines);
   const sim = new Simulator();
@@ -281,4 +292,50 @@ test('an unknown T number falls back and says so', () => {
     stock, slots: new Map([[2, slot(1, 0, 40)]]),
   });
   assert.ok(sim.collisions.some((c) => c.type === 'notool'));
+});
+
+test('a near miss is a near miss, not a crash and not silence', () => {
+  // A clamp 4 mm to the side of the tool: nothing touches it, but nobody
+  // wants to find that out with a hand on the feed hold.
+  const holder = slot(1, 0, 30);
+  const clamp = boxFixture([26, 0, -10], [10, 20, 40]);
+
+  const bare = checkFixtures(holder.spheres, [0, 0, 0], [clamp], 0, 0);
+  assert.equal(bare, null, 'nothing is touching, so nothing is reported');
+
+  const asked = checkFixtures(holder.spheres, [0, 0, 0], [clamp], 0, 12);
+  assert.ok(asked, 'asked for room, and it says how much there is');
+  assert.ok(asked.gap > 0, 'a gap, not a depth');
+  assert.ok(asked.gap < 12);
+  assert.equal(asked.depth, 0, 'nothing is buried in anything');
+
+  // Push the tool into it and the same call reports a real collision.
+  const hit = checkFixtures(holder.spheres, [24, 0, 0], [clamp], 0, 12);
+  assert.ok(hit.gap < 0);
+  assert.ok(hit.depth > 0);
+});
+
+test('a fixture can carry its own rule', () => {
+  const holder = slot(1, 0, 30);
+  const clamp = boxFixture([26, 0, -10], [10, 20, 40]);
+
+  // Ignored: it is not in the crash model at all, however close anything is.
+  assert.equal(checkFixtures(holder.spheres, [24, 0, 0], [{ ...clamp, ignore: true }], 0, 5), null);
+
+  // Or it asks for more room than the setting, and gets it.
+  const fussy = { ...clamp, clearance: 30 };
+  const near = checkFixtures(holder.spheres, [0, 0, 0], [fussy], 0, 0);
+  assert.ok(near && near.gap > 0, 'reported even though the setting asked for nothing');
+  assert.equal(near.clearance, 30);
+});
+
+test('the table reports the gap above it as well as the dent in it', () => {
+  const holder = slot(1, 0, 30);
+  const table = { enabled: true, z: -50, xMin: -200, xMax: 200, yMin: -200, yMax: 200 };
+
+  assert.equal(checkTable(holder.spheres, [0, 0, 0], table, 0), null, 'well clear');
+  const near = checkTable(holder.spheres, [0, 0, 0], table, 60);
+  assert.ok(near && near.gap > 0 && near.gap <= 60);
+  const hit = checkTable(holder.spheres, [0, 0, -55], table, 0);
+  assert.ok(hit && hit.gap < 0 && hit.depth > 0);
 });

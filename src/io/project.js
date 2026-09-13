@@ -78,6 +78,8 @@ export async function writeProject(app) {
       position: [o.position.x, o.position.y, o.position.z],
       rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
       scale: [o.scale.x, o.scale.y, o.scale.z],
+      ignore: !!m.ignore,
+      clearance: Number.isFinite(m.clearance) ? m.clearance : null,
     };
   });
 
@@ -115,6 +117,7 @@ export async function writeProject(app) {
     wcsEdit: state.wcsEdit,
     machineZero: [...state.machineZero],
     gougeTolerance: state.gougeTolerance,
+    checks: JSON.parse(JSON.stringify(state.checks)),
     activeAssemblyId: state.activeAssemblyId,
     display: { ...state.display },
     models,
@@ -207,6 +210,8 @@ export async function readProject(app, entries) {
     const stl = parseSTL(asBuffer(data));
     const model = app.models.add({ name: m.name, positions: stl.positions, role: m.role, recentre: false });
     app.models.setTransform(model, { position: m.position, rotation: m.rotation, scale: m.scale });
+    model.ignore = !!m.ignore;
+    model.clearance = Number.isFinite(m.clearance) ? m.clearance : null;
     if (m.visible === false) app.models.setVisible(model, false);
   }
   app.refreshFixtures();
@@ -215,6 +220,10 @@ export async function readProject(app, entries) {
   if (def.wcsEdit) app.state.wcsEdit = def.wcsEdit;
   if (Array.isArray(def.machineZero)) app.state.machineZero = def.machineZero.map(Number);
   if (Number.isFinite(def.gougeTolerance)) app.state.gougeTolerance = def.gougeTolerance;
+  if (def.checks) {
+    Object.assign(app.state.checks, def.checks);
+    app.state.checks.parts = { ...app.state.checks.parts, ...(def.checks.parts || {}) };
+  }
   if (def.display) Object.assign(app.state.display, def.display);
   app.state.activeAssemblyId = def.activeAssemblyId || null;
   app.applyDisplay();
