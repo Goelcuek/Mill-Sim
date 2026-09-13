@@ -112,6 +112,27 @@ export const EXAMPLES = [
     },
     "file": "examples/five-axis-tilted-planes-and-swarf.nc",
     "lines": 101
+  },
+  {
+    "name": "Macro family of parts",
+    "description": "One program, any size of the same plate: Fanuc macro B variables, WHILE loops for the roughing rings and the bolt circle, and IF to clip the last depth pass.",
+    "setup": {
+      "stock": {
+        "size": [
+          100,
+          70,
+          20
+        ],
+        "origin": [
+          -50,
+          -35,
+          -20
+        ],
+        "resolution": 0.25
+      }
+    },
+    "file": "examples/macro-family-of-parts.nc",
+    "lines": 67
   }
 ];
 

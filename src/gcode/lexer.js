@@ -6,6 +6,8 @@
 
 const WORD_RE = /([A-Za-z])\s*([+-]?(?:\d+\.?\d*|\.\d+))/g;
 
+import { hasMacroSyntax, parseMacroBlock } from './macro.js';
+
 /**
  * @typedef {{ letter:string, value:number, text:string }} Word
  * @typedef {{ line:number, raw:string, words:Word[], comments:string[],
@@ -67,6 +69,24 @@ export function lex(text) {
     // Program start/end markers and O-numbers carry no motion.
     if (body === '%') {
       blocks.push({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
+      continue;
+    }
+
+    // A block that uses variables, brackets or the macro keywords is read
+    // by the macro parser instead. Everything else takes the path it
+    // always took, which is most blocks in most programs.
+    if (hasMacroSyntax(body)) {
+      const macro = parseMacroBlock(body);
+      blocks.push({
+        line: i + 1,
+        raw,
+        words: macro.words,
+        comments,
+        blockDelete,
+        skipped: false,
+        macro: { assigns: macro.assigns, control: macro.control },
+        error: macro.error,
+      });
       continue;
     }
 

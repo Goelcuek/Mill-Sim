@@ -7,6 +7,7 @@
 
 import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
+import { Vars, evaluate, ARGUMENTS } from './macro.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -287,7 +288,6 @@ export function interpret(text, config = {}) {
   const warnings = [];
   const toolChanges = [];
   const events = [];
-  let warnedMacro = false;
 
   /** Which source the block being read came from; null is the main program. */
   let curSrc = null;
@@ -525,6 +525,54 @@ export function interpret(text, config = {}) {
     return moved;
   };
 
+  // ---- macro variables ---------------------------------------------------
+  //
+  // #1 to #33 belong to whichever macro call is running; #100 and up belong
+  // to the program. Everything that reads a number can read one of these,
+  // which is what makes a family of parts one program instead of twenty.
+
+  const vars = new Vars();
+
+  /** Where an N number is, within the source that asked for it. */
+  const labelCache = new Map();
+  const findLabel = (from, n) => {
+    const key = `${from.src || ''}\u0000${n}`;
+    if (labelCache.has(key)) return labelCache.get(key);
+    let found = -1;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if ((b.src || null) !== (from.src || null) || !b.words) continue;
+      const label = b.words.find((w) => w.letter === 'N');
+      if (label && Math.round(label.value) === Math.round(n)) { found = i; break; }
+    }
+    labelCache.set(key, found);
+    return found;
+  };
+
+  /** The END that closes the loop opened at `idx`, and the other way round. */
+  const loopCache = new Map();
+  const matchLoop = (idx, forward) => {
+    const key = `${idx}:${forward}`;
+    if (loopCache.has(key)) return loopCache.get(key);
+    const from = blocks[idx];
+    const level = from.macro.control.level;
+    let depth = 0;
+    let found = -1;
+    for (let i = idx + (forward ? 1 : -1); forward ? i < blocks.length : i >= 0; i += forward ? 1 : -1) {
+      const b = blocks[i];
+      if ((b.src || null) !== (from.src || null) || !b.macro || !b.macro.control) continue;
+      const c = b.macro.control;
+      if (c.level !== level) continue;
+      if ((forward && (c.kind === 'while' || c.kind === 'do')) || (!forward && c.kind === 'end')) depth++;
+      else if ((forward && c.kind === 'end') || (!forward && (c.kind === 'while' || c.kind === 'do'))) {
+        if (depth === 0) { found = i; break; }
+        depth--;
+      }
+    }
+    loopCache.set(key, found);
+    return found;
+  };
+
   const callStack = [];
   let pc = 0;
   let executed = 0;
@@ -580,6 +628,9 @@ export function interpret(text, config = {}) {
       pc = frame.target;
     } else {
       pc = frame.ret;
+      // The call's own #1 to #33 go with it, which is what lets one macro
+      // call another without the two treading on each other.
+      if (frame.macroVars) vars.pop();
       if (frame.resumeEnded) ended = true;
     }
   };
@@ -620,17 +671,59 @@ export function interpret(text, config = {}) {
       continue;
     }
 
+    // ---- macro arithmetic and control flow -------------------------------
+    if (b.macro) {
+      try {
+        // A word's value may be an expression: G1 X[#100 + 2].
+        for (const w of b.words) if (w.expr) w.value = evaluate(w.expr, vars);
+        for (const a of b.macro.assigns) vars.set(evaluate(a.target, vars), evaluate(a.value, vars));
+
+        const c = b.macro.control;
+        if (c) {
+          if (c.kind === 'goto' || (c.kind === 'if-goto' && evaluate(c.cond, vars))) {
+            const n = evaluate(c.target, vars);
+            const at = findLabel(b, n);
+            if (at < 0) { warn(b.line, `GOTO N${n}: there is no such line in this program.`, 'error'); continue; }
+            pc = at;
+            continue;
+          }
+          if (c.kind === 'if-goto') continue;              // the condition was false
+          if (c.kind === 'if-then') {
+            if (evaluate(c.cond, vars)) vars.set(evaluate(c.assign.target, vars), evaluate(c.assign.value, vars));
+            continue;
+          }
+          if (c.kind === 'while' || c.kind === 'do') {
+            // Look for the END first, whatever the condition says. A loop
+            // that never closes is wrong even on the pass where the test
+            // happens to be true, and saying so then is the point.
+            const end = matchLoop(pc - 1, true);
+            if (end < 0) {
+              warn(b.line, `${c.kind === 'do' ? 'DO' : 'WHILE ... DO'} ${c.level} has no END ${c.level}.`, 'error');
+              continue;
+            }
+            if (c.kind === 'do' || evaluate(c.cond, vars)) continue;   // into the body
+            pc = end + 1;
+            continue;
+          }
+          if (c.kind === 'end') {
+            const head = matchLoop(pc - 1, false);
+            if (head < 0) { warn(b.line, `END ${c.level} has no WHILE or DO ${c.level} above it.`, 'error'); continue; }
+            pc = head;
+            continue;
+          }
+        }
+      } catch (err) {
+        warn(b.line, `Macro: ${err.message}.`, 'error');
+        continue;
+      }
+    }
+
     if (b.blockDelete) {
       b.skipped = true;
       continue;
     }
     if (b.error) warn(b.line, b.error, 'error');
     if (!b.words.length) continue;
-    if (!warnedMacro && /#/.test(b.raw)) {
-      warnedMacro = true;
-      warn(b.line, 'Macro variables (#) are not evaluated; motion using them will be wrong.', 'error');
-    }
-
     // Bucket the words for this block.
     const g = [];
     const m = [];
@@ -761,6 +854,24 @@ export function interpret(text, config = {}) {
           if (st.tcp) events.push({ line: b.line, type: 'tcp', moveIndex: moves.length, text: 'Tool centre point control off (G49)' });
           st.tcp = 0;
           break;
+        case 65: {
+          // A macro call: the block's letters become #1 to #26 inside it,
+          // which is why its X, Y and Z are arguments rather than a move.
+          if (p === undefined) { warn(b.line, 'G65 without P.', 'error'); break; }
+          const target = labels.get(p);
+          if (target === undefined) { warn(b.line, `Macro O${p} not found.`, 'error'); break; }
+          if (callStack.length > 16) { warn(b.line, 'Macro calls nested too deep.', 'error'); break; }
+          const args = [];
+          for (const w of b.words) {
+            const n = ARGUMENTS[w.letter];
+            if (n) args.push([n, w.value]);
+          }
+          vars.push(args);
+          callStack.push({ ret: pc, remaining: Math.max(1, Math.floor(l ?? 1)) - 1, target, macroVars: true });
+          pc = target;
+          axesConsumed = true;
+          break;
+        }
         case 53: machineCoords = true; break;
         case 54: case 55: case 56: case 57: case 58: case 59: st.wcs = `G${code}`; break;
         case 61: case 61.1: case 64: break;
@@ -1120,5 +1231,7 @@ export function interpret(text, config = {}) {
     events,
     config: cfg,
     stats: { rapidDistance, feedDistance, cycleTime, bounds, moveCount: moves.length, blockCount: blocks.length },
+    /** What the macro variables came to, for anyone who wants to look. */
+    variables: vars.snapshot(),
   };
 }

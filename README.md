@@ -76,7 +76,44 @@ hides beneath the top surface is taken to be solid.
 
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
-imported fixtures, the table surface and the travel limits.
+imported fixtures, the table surface and the travel limits. **Setup ›
+Checks** decides what counts: ask for clearance and a pass that clears a
+clamp by 2 mm is reported as the near miss it is, rather than only metal
+in metal. Which parts of the assembly are checked at all is a switch, and
+two exceptions live on the fixture itself — a soft jaw being cut can be
+ignored, a fragile one can ask for more room than everything else.
+
+**Macro B.** Variables, arithmetic and control flow, because that is what
+the programs in a real control's memory are made of:
+
+```gcode
+#1 = 0
+WHILE [#1 LT #2] DO 1
+  #10 = #3 * COS[360 * #1 / #2]
+  #11 = #3 * SIN[360 * #1 / #2]
+  G0 X#10 Y#11
+  G83 Z-12. R2. Q3. F180
+  #1 = #1 + 1
+END 1
+```
+
+Assignment and arithmetic with the usual precedence and the usual
+functions (in degrees, like the control), an expression anywhere a number
+goes, `IF … GOTO`, `IF … THEN`, `WHILE … DO … END`, and `G65` calls whose
+letters arrive as `#1`, `#2`, `#3` — local to that call, so a macro can
+call a macro. A program that uses none of it is read exactly as it was
+before: only blocks with a `#`, a bracket or a keyword take the macro
+path. What a run left in the variables is on **Program › Summary**, which
+is the first place to look when a macro program lands somewhere odd.
+
+**Measuring.** A verifier that cannot answer "how deep is that pocket" is
+asking to be trusted and checked somewhere else. **View › Measure** takes
+two points for a distance, with its three components, or three points
+round a bore for its diameter and centre. Points snap to corners, edges,
+face centres, work origins — and to the rim of whatever has been cut,
+which is what makes a bore measurable at all: its wall is one column wide,
+so the top edge is the only part worth pointing at. A Ø10 hole on a
+0.28 mm grid measures Ø10.045.
 
 **Five-axis machines.** A machine is a tree of joints rather than a fixed
 layout, so head-head, head-table and table-table are the same code with the
@@ -144,6 +181,17 @@ warning say which file they came from. Two files claiming the same O number
 is reported rather than quietly resolved. A program that carries its own
 O-numbered sections still works exactly as it did.
 
+**The job as one file.** A setup is not a program: it is a program, the
+machine it runs on, the stock it starts from, where that stock sits
+against the work offsets, which tools the T numbers mean, and the clamps
+standing around it. **Setup › Project** saves all of it as one zip —
+`project.json` for the setup, `program/` for the G-code and its
+subprograms, `machine/` laid out exactly as **Save machine** writes it,
+`library.json` for the tools, `models/` and `stock/` as STL. Opening one
+puts it back in the order the thing itself requires, camera included.
+Every part of it opens in something else: a project only this program can
+read is a hostage, not an archive.
+
 Your own machine goes in through **Machine › Layout › Load machine…**, and
 comes out through **Save machine…** as a folder — a `.zip`, because a web
 page cannot hand you a directory, and every operating system opens one as a
@@ -204,12 +252,12 @@ collapse the page row and give the viewport the space back.
 
 | Tab | Pages |
 | --- | --- |
-| **Setup** | Stock · Work offsets · Fixtures |
+| **Setup** | Project · Stock · Work offsets · Fixtures · Checks |
 | **Machine** | Layout · Axes · Assembly · Controller · Macros · Travels |
 | **Tools** | Tool table · Cutters · Holders · Library |
 | **Program** | Main · Subprograms · Summary |
 | **Results** | Findings · Compare · Export |
-| **View** | Camera · Show · Inspect |
+| **View** | Camera · Show · Inspect · Measure |
 
 The viewport draws **on demand**. A machining simulator is static most of
 the time — the program is not running, nobody is dragging the view, and the
@@ -555,7 +603,7 @@ src/
     icons.js          the stroked icon set
     ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
-examples/             the five example programs
+examples/             the six example programs
   machines/           a worked machine definition to copy
 scripts/              static server, smoke test, single-file build
 test/                 unit tests (node --test)
