@@ -58,7 +58,11 @@ function keywordsOf(d) {
   for (const v of Object.values(d.compare)) if (/^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
   for (const v of Object.values(d.logic)) if (/^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
   for (const v of Object.values(d.keywords)) if (v && /^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
-  if (d.call && d.call.program && /^[A-Z]+$/i.test(d.call.program)) out.add(d.call.program.toUpperCase());
+  // Only a word: Fanuc's "call" is the letter P of G65 P9010, and reserving
+  // a single letter would take it away from every block that uses it.
+  if (d.call && d.call.program && d.call.program.length > 1 && /^[A-Z]+$/i.test(d.call.program)) {
+    out.add(d.call.program.toUpperCase());
+  }
   return out;
 }
 
@@ -368,7 +372,11 @@ export function parseMacroBlock(code, dialect) {
   const assigns = [];
   let control = null;
   let label = null;
+  let call = false;
   const p = new Parser(tokenize(code, d), d);
+  /** This control's word for "run that file", when it spells it as a word. */
+  const callWord = d.call && d.call.program && d.call.program.length > 1
+    ? d.call.program.toUpperCase() : null;
 
   const assignment = () => {
     p.expect('#');
@@ -447,6 +455,14 @@ export function parseMacroBlock(code, dialect) {
         if (p.isWord('repeat')) { p.next(); control = { kind: 'repeat', level: 0 }; continue; }
         if (p.isWord('until')) { p.next(); control = { kind: 'until', cond: p.expression(), level: 0 }; continue; }
 
+        // CALL "ROUGH": the name itself was lifted out of the block before
+        // it reached here, because a file name is not arithmetic.
+        if (callWord && p.peek().text === callWord) {
+          p.next();
+          call = true;
+          continue;
+        }
+
         throw new Error(`"${p.peek().text}" cannot start a block`);
       }
 
@@ -464,10 +480,10 @@ export function parseMacroBlock(code, dialect) {
       throw new Error(`"${p.peek().text}" does not belong here`);
     }
   } catch (err) {
-    return { words, assigns, control, label, error: err.message };
+    return { words, assigns, control, label, call, error: err.message };
   }
 
-  return { words, assigns, control, label };
+  return { words, assigns, control, label, call };
 }
 
 /** The counter of a FOR loop: a variable, an =, and where it starts. */

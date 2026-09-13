@@ -60,7 +60,7 @@ export async function writeProject(app) {
   files.push({ name: programFile, data: state.source || '' });
 
   const subprograms = (state.subprograms || []).map((sub) => {
-    const file = `program/subs/${unique(sub.name, '.nc')}`;
+    const file = `program/subs/${unique(String(sub.name || 'sub').replace(/\.[^.]+$/, ''), '.nc')}`;
     files.push({ name: file, data: sub.text || '' });
     return { id: sub.id, name: sub.name, file };
   });

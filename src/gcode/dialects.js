@@ -31,7 +31,7 @@ export const LOGIC = ['and', 'or', 'xor'];
  * @property {Record<string,string>} logic
  * @property {Record<string,string|null>} keywords
  * @property {'line'|'name'} labels    GOTO finds an N number, or a name
- * @property {{code:string|null, program:string}} call
+ * @property {{code:string|null, program:string, ret:string}} call
  */
 
 const FANUC = {
@@ -53,7 +53,7 @@ const FANUC = {
   },
   locals: 33,
   labels: 'line',
-  call: { code: 'G65', program: 'P' },
+  call: { code: 'G65', program: 'P', ret: 'M99' },
 };
 
 const SIEMENS = {
@@ -75,7 +75,7 @@ const SIEMENS = {
   },
   locals: 0,
   labels: 'name',
-  call: { code: null, program: 'CALL' },
+  call: { code: null, program: 'CALL', ret: 'M17' },
 };
 
 const HEIDENHAIN = {
@@ -97,7 +97,7 @@ const HEIDENHAIN = {
   },
   locals: 0,
   labels: 'line',
-  call: { code: 'G65', program: 'P' },
+  call: { code: 'G65', program: 'P', ret: 'M99' },
 };
 
 const OKUMA = {
@@ -119,7 +119,7 @@ const OKUMA = {
   },
   locals: 0,
   labels: 'line',
-  call: { code: 'G65', program: 'P' },
+  call: { code: 'G65', program: 'P', ret: 'M99' },
 };
 
 export const DIALECTS = {
@@ -128,6 +128,28 @@ export const DIALECTS = {
   heidenhain: HEIDENHAIN,
   okuma: OKUMA,
 };
+
+/**
+ * The controls a machine can be built with.
+ *
+ * A control arrives with the machine and stays with it, so this list is
+ * read where a machine is *made* rather than where one is edited.
+ */
+export const CONTROLS = [
+  { value: 'fanuc', label: 'Fanuc' },
+  { value: 'haas', label: 'Haas' },
+  { value: 'fidia', label: 'Fidia' },
+  { value: 'siemens', label: 'Siemens 840D' },
+  { value: 'heidenhain', label: 'Heidenhain' },
+  { value: 'okuma', label: 'Okuma' },
+  { value: 'generic', label: 'Generic ISO' },
+];
+
+/** What to call one. */
+export function controlName(flavour) {
+  const found = CONTROLS.find((c) => c.value === flavour);
+  return found ? found.label : String(flavour || 'Fanuc');
+}
 
 /** Which dialect a controller flavour starts from. */
 export const FLAVOUR_DIALECT = {

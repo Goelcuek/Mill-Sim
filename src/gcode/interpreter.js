@@ -309,12 +309,28 @@ export function interpret(text, config = {}) {
   };
 
   // Subprogram files come after the main program, in the order given.
+  //
+  // A file answers to two things: the number it declares, the way Fanuc
+  // counts programs, and the name it is saved under, the way most other
+  // controls find one. Neither is required, and a file that has both can be
+  // called either way.
   const subStarts = new Map();
+  /** name (lower case, with and without its extension) -> where it starts. */
+  const byName = new Map();
+  const nameKey = (n) => String(n == null ? '' : n).trim().toLowerCase();
+  const nameSource = (name, start) => {
+    const key = nameKey(name);
+    if (!key) return;
+    if (!byName.has(key)) byName.set(key, start);
+    const bare = key.replace(/\.[^.]+$/, '');
+    if (bare && !byName.has(bare)) byName.set(bare, start);
+  };
   for (const sub of cfg.subprograms || []) {
     if (!sub) continue;
     const start = appendSource(sub.name || `O${sub.number}`, sub.text || '');
     const n = Number(sub.number);
     if (Number.isFinite(n) && n > 0) subStarts.set(n, start);
+    nameSource(sub.name, start);
   }
 
   // Index O-numbers for M98 subprogram calls. The label is the block after
@@ -341,6 +357,22 @@ export function interpret(text, config = {}) {
   // A file that declares its own number answers to it, unless the main
   // program already has a label of its own with that number.
   for (const [n, start] of subStarts) if (!labels.has(n)) labels.set(n, start);
+
+  /**
+   * The name a block asks for, when it asks for one rather than a number.
+   *
+   * Three spellings, all of them in use: a name in brackets or quotes after
+   * a call word (`CALL "ROUGH"`, `M98 <ROUGH>`), the name a Fanuc control
+   * writes in the block's own comment (`M98 (ROUGH)`), and the bare name of
+   * a file, which is a whole call on the controls that spell it that way.
+   */
+  const askedName = (b, { bare = false, comment = false } = {}) => {
+    if (b.names && b.names.length) return b.names[0];
+    if (comment && b.comments && b.comments.length) return b.comments[0];
+    if (bare && b.idents && b.idents.length === 1) return b.idents[0];
+    return null;
+  };
+  const namedTarget = (name) => (name === null ? undefined : byName.get(nameKey(name)));
 
   const push = (move) => {
     move.i = moves.length;
@@ -794,7 +826,32 @@ export function interpret(text, config = {}) {
       b.skipped = true;
       continue;
     }
+    // ---- a call written as a name ----------------------------------------
+    //
+    // Not every control counts its programs. Siemens writes CALL "ROUGH";
+    // some controls write the name of the file and nothing else. Either way
+    // the block is a call, and what it calls is a file this machine holds.
+    if ((b.macro && b.macro.call) || (!b.words.length && !(b.macro && b.macro.control))) {
+      const name = askedName(b, { bare: true });
+      const target = namedTarget(name);
+      if (target !== undefined) {
+        if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); continue; }
+        callStack.push({ ret: pc, remaining: 0, target });
+        pc = target;
+        continue;
+      }
+      if (name !== null && ((b.macro && b.macro.call) || (b.names && b.names.length))) {
+        warn(b.line, `There is no subprogram called ${name}.`, 'error');
+        continue;
+      }
+    }
+
     if (b.error) warn(b.line, b.error, 'error');
+    else if (b.idents && b.idents.length) {
+      // A word that is not a call and not an address is a typo — the one
+      // thing a reader must never pass over in silence.
+      warn(b.line, `Unrecognised text: ${b.idents.join(' ').slice(0, 24)}`, 'error');
+    }
     if (!b.words.length) continue;
     // Bucket the words for this block.
     const g = [];
@@ -929,9 +986,10 @@ export function interpret(text, config = {}) {
         case 65: {
           // A macro call: the block's letters become #1 to #26 inside it,
           // which is why its X, Y and Z are arguments rather than a move.
-          if (p === undefined) { warn(b.line, 'G65 without P.', 'error'); break; }
-          const target = labels.get(p);
-          if (target === undefined) { warn(b.line, `Macro O${p} not found.`, 'error'); break; }
+          const name = askedName(b, { comment: p === undefined });
+          if (p === undefined && name === null) { warn(b.line, 'G65 without a macro to call.', 'error'); break; }
+          const target = p !== undefined ? labels.get(p) : namedTarget(name);
+          if (target === undefined) { warn(b.line, `Macro ${p !== undefined ? `O${p}` : name} not found.`, 'error'); break; }
           if (callStack.length > 16) { warn(b.line, 'Macro calls nested too deep.', 'error'); break; }
           const args = [];
           for (const w of b.words) {
@@ -1020,16 +1078,26 @@ export function interpret(text, config = {}) {
         case 8: st.coolant = 'flood'; break;
         case 9: st.coolant = 'off'; break;
         case 98: {
-          if (p === undefined) { warn(b.line, 'M98 without P.', 'error'); break; }
-          const target = labels.get(p);
-          if (target === undefined) { warn(b.line, `Subprogram O${p} not found — no label in this program and no subprogram file with that number.`, 'error'); break; }
+          // P1000 on a Fanuc, a name on everything else — and on a Fanuc
+          // too, when the file has one: M98 <ROUGH> and M98 (ROUGH).
+          const name = askedName(b, { comment: p === undefined });
+          const target = p !== undefined ? labels.get(p) : namedTarget(name);
+          if (p === undefined && name === null) { warn(b.line, 'M98 without a program to call.', 'error'); break; }
+          if (target === undefined) {
+            warn(b.line, p !== undefined
+              ? `Subprogram O${p} not found — no label in this program and no subprogram file with that number.`
+              : `Subprogram ${name} not found — no file of that name is loaded.`, 'error');
+            break;
+          }
           const repeats = Math.max(1, Math.floor(l ?? 1));
           if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); break; }
           callStack.push({ ret: pc, remaining: repeats - 1, target });
           pc = target;
           break;
         }
-        case 99: returnFromCall(); break;
+        // M99 on a Fanuc, M17 on a Siemens and most of Europe: both mean
+        // "that is the end of this subprogram, go back to what called it".
+        case 17: case 99: returnFromCall(); break;
         default:
           events.push({ line: b.line, type: 'm', moveIndex: moves.length, text: `M${code}` });
       }

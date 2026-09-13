@@ -15,6 +15,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,7 +39,26 @@ const stop = async (code) => {
 await new Promise((r) => setTimeout(r, 800));
 
 const errors = [];
-const browser = await chromium.launch({ args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'] });
+// Whatever Chromium this machine has. A pre-installed browser under
+// PLAYWRIGHT_BROWSERS_PATH is not always the build this Playwright expects,
+// and "close enough" beats "run the installer" on a machine with no network.
+const findChromium = () => {
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH;
+  if (!root || !existsSync(root)) return undefined;
+  const dirs = readdirSync(root).filter((d) => d.startsWith('chromium')).sort().reverse();
+  for (const dir of dirs) {
+    for (const exe of ['chrome-linux/chrome', 'chrome-linux/headless_shell', 'chrome-mac/Chromium.app/Contents/MacOS/Chromium']) {
+      const path = join(root, dir, exe);
+      if (existsSync(path)) return path;
+    }
+  }
+  return undefined;
+};
+
+const browser = await chromium.launch({
+  executablePath: findChromium(),
+  args: ['--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--no-sandbox'],
+});
 const watch = (page) => {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(`${e.message}\n${e.stack || ''}`));
@@ -122,7 +142,12 @@ try {
   // ---- a project saves and opens into a working session -----------------
   await loadExample(page, 0, 'Demo bracket');
   await page.evaluate(() => {
-    window.millsim.state.subprograms.push({ id: 'smoke', name: 'O1000-smoke.nc', text: 'O1000\nG1 X5 F300\nM99\n' });
+    // One called by its number, one by its name: both are how a shop's
+    // files arrive, and a name that comes back changed is a broken call.
+    window.millsim.state.subprograms.push(
+      { id: 'smoke', name: 'O1000-smoke.nc', text: 'O1000\nG1 X5 F300\nM99\n' },
+      { id: 'smoke2', name: 'finishing pass.nc', text: 'G91 G1 X1 F300\nG90\nM99\n' },
+    );
     window.millsim.reinterpret();
   });
   await page.waitForTimeout(500);
@@ -130,6 +155,7 @@ try {
     source: window.millsim.state.source.length,
     blocks: window.millsim.state.program.stats.blockCount,
     subs: window.millsim.state.subprograms.length,
+    names: window.millsim.state.subprograms.map((s) => s.name).join('|'),
   }));
 
   await page.click('.ribbon-tab[data-tab="setup"]');
@@ -162,12 +188,25 @@ try {
     source: window.millsim.state.source.length,
     blocks: window.millsim.state.program.stats.blockCount,
     subs: window.millsim.state.subprograms.length,
+    names: window.millsim.state.subprograms.map((s) => s.name).join('|'),
     shown: document.querySelector('.editor-area').value.length,
   }));
   console.log('project round trip:', JSON.stringify(after));
   check(after.source === before.source && after.blocks === before.blocks,
     'the project did not come back with its program');
   check(after.subs === before.subs, 'the project did not come back with its subprograms');
+  check(after.names === before.names, `the subprogram names changed: ${before.names} became ${after.names}`);
+
+  // ---- and a file is found by the name it is saved under ----------------
+  const named = await page.evaluate(() => {
+    window.millsim.loadProgram('G21 G90 G54\nG1 X0 Y0 F400\nM98 <finishing pass>\nM30\n', 'named.nc');
+    return {
+      errors: window.millsim.state.program.warnings.filter((w) => w.severity === 'error').length,
+      ran: window.millsim.state.program.moves.some((m) => m.source === 'finishing pass.nc'),
+    };
+  });
+  console.log('call by name:', JSON.stringify(named));
+  check(named.errors === 0 && named.ran, 'a subprogram called by its name was not found');
   check(after.shown === after.source, 'the program came back but the editor is empty');
 } catch (err) {
   console.error('SMOKE FAILED:', err.message);

@@ -17,6 +17,7 @@ import { uid } from '../core/util.js';
 import { GcodeEditor } from './editor.js';
 import { fmt, fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
+import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 
 export class ProgramPanel extends Panel {
   constructor(app) {
@@ -87,9 +88,10 @@ export class ProgramPanel extends Panel {
   // ---- subprograms -------------------------------------------------------
   //
   // A subprogram is a file, not a form to fill in. It is opened the way the
-  // main program is opened, edited in the same editor, and answers to the O
-  // number written at the top of it — which is how the control finds it,
-  // and so is the only thing here that matters.
+  // main program is opened and edited in the same editor. It answers to two
+  // things: the O number written at the top of it, which is how a Fanuc
+  // finds one, and the name it is saved under, which is how most other
+  // controls do — so the name is the shop's to choose, and changeable.
 
   /** The subprogram the page is acting on. */
   get sub() {
@@ -111,7 +113,7 @@ export class ProgramPanel extends Panel {
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'No subprograms'),
-        el('div.hint', {}, 'A post that writes M98 P1000 expects a file called O1000 to sit beside the program. Open those files here and the calls resolve. A subprogram that lives in the machine rather than with the job belongs on Machine \u203a Macros instead.'),
+        el('div.hint', {}, 'A post that writes M98 P1000 expects a file called O1000 to sit beside the program; one that writes a name expects a file with that name. Open those files here and the calls resolve. A subprogram that lives in the machine rather than with the job belongs on Machine \u203a Macros instead.'),
       ]));
     }
 
@@ -122,19 +124,21 @@ export class ProgramPanel extends Panel {
       list.appendChild(el(`div.list-item${this.subId === sub.id ? '.selected' : ''}`, {
         onclick: () => { this.subId = sub.id; this.render(); },
       }, [
-        el('div.swatch', { style: { background: o === null ? '#d7263d' : ran ? '#0a7cff' : '#d0d4db' } }),
+        el('div.swatch', { style: { background: ran ? '#0a7cff' : '#d0d4db' } }),
         el('div.list-main', {}, [
           el('div.list-title', {}, [o === null ? null : el('span.tnum', {}, `O${o}`), sub.name]),
-          el('div.list-sub', {}, o === null
-            ? 'no O number on its first line, so M98 cannot find it'
-            : `${lines} ${lines === 1 ? 'line' : 'lines'} · ${ran ? 'called by this program' : 'not called'}`),
+          el('div.list-sub', {}, [
+            `${lines} ${lines === 1 ? 'line' : 'lines'}`,
+            ran ? 'called by this program' : 'not called',
+            o === null ? 'called by name' : null,
+          ].filter(Boolean).join(' · ')),
         ]),
       ]));
     }
 
     const out = [bar, el('div.list-host', {}, [
       list,
-      el('div.hint', {}, 'The number M98 asks for is the O word at the top of the file — rename the file freely, that is what the control reads.'),
+      el('div.hint', {}, 'Call one by the O word at the top of it — M98 P1000 — or by its name, which is what most controls outside Fanuc read. Rename a file and the calls that use its name follow it.'),
     ])];
 
     const sub = this.sub;
@@ -163,7 +167,16 @@ export class ProgramPanel extends Panel {
       }
       const program = app.state.program;
       this.subEditor.setMarkers(program ? program.warnings.filter((w) => w.source === sub.name) : []);
-      out.push(el('div.section-label-row', {}, el('div.dialog-section-label', {}, sub.name)));
+      // The name is the file's, so it is edited here rather than fixed at
+      // the moment the file was made.
+      out.push(row([
+        field('Name', sub.name, {
+          type: 'text',
+          onChange: (v) => this.renameSub(sub, v),
+          title: 'What this file is called, and what a call by name asks for',
+        }),
+      ]));
+      out.push(el('div.hint', {}, `Called with ${callLine(machineDialect(this.app), { name: sub.name, number: programNumber(sub.text) || 0 })}`));
       out.push(this.subHost);
     }
     return out;
@@ -189,13 +202,34 @@ export class ProgramPanel extends Panel {
   }
 
   newSub() {
-    const taken = new Set(this.app.state.subprograms.map((s) => programNumber(s.text)));
-    let n = 1000;
-    while (taken.has(n)) n += 1;
-    const sub = { id: uid('sub'), name: `O${n}.nc`, text: `O${n}\n\nM99\n` };
-    this.app.state.subprograms.push(sub);
-    this.subId = sub.id;
-    this.subEditorFor = null;
+    const subs = this.app.state.subprograms;
+    openNewSubprogramDialog(this.app, {
+      subtitle: 'A file this job carries with it',
+      names: subs.map((s) => s.name),
+      numbers: subs.map((s) => programNumber(s.text)),
+      from: 1000,
+      onCreate: (file) => {
+        const sub = { id: uid('sub'), ...file };
+        subs.push(sub);
+        this.subId = sub.id;
+        this.subEditorFor = null;
+        this.app.reinterpret();
+        this.render();
+      },
+    });
+  }
+
+  /**
+   * Rename a file.
+   *
+   * The name is not decoration: a program that calls this file by name asks
+   * for exactly this, so the program is re-read afterwards and a call that
+   * has just been broken — or just been fixed — says so straight away.
+   */
+  renameSub(sub, name) {
+    const next = String(name || '').trim();
+    if (!next || next === sub.name) { this.render(); return; }
+    sub.name = next;
     this.app.reinterpret();
     this.render();
   }

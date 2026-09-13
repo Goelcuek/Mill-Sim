@@ -10,7 +10,7 @@ import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE, MACHINE_SETTINGS } from './scene/machineView.js';
 import { defaultMacros, DEFAULT_PARAMETERS, makeMacro, normaliseCode } from './machine/macros.js';
 import { MachineParts } from './machine/parts.js';
-import { PRESETS } from './machine/presets.js';
+import { PRESETS, buildPreset } from './machine/presets.js';
 import { Kinematics } from './machine/kinematics.js';
 import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
@@ -23,6 +23,7 @@ import { columnFor, describeShape } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
+import { FLAVOUR_DIALECT, controlName } from './gcode/dialects.js';
 
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
 import { buildTargetMap, compareToTarget } from './sim/target.js';
@@ -570,14 +571,35 @@ export class App {
   }
 
   /**
-   * Start a machine from nothing: one base, which does not move.
+   * Start a machine from nothing: one control, and one base that does not
+   * move.
    *
    * Nothing else is guessed. A table and a spindle are only the shape most
    * mills happen to have, and pre-drawing them makes the chain look finished
    * when it is not — so the tool and the part both start on the base, the
    * Axes page says so, and the chain grows from there.
+   *
+   * The control is the one thing that cannot be added later: a machine has
+   * the control it was built with, and everything that comes with it — how
+   * its macros are spelled, what its M codes do, the files in its memory —
+   * starts fresh here rather than carrying over from the machine before.
+   *
+   * @param {string} name
+   * @param {string} [control] a controller flavour; see gcode/dialects.js
+   * @param {string} [preset] one of the shapes a mill comes in, or nothing
    */
-  newMachine(name) {
+  newMachine(name, control, preset) {
+    const flavour = FLAVOUR_DIALECT[control] ? control : this.state.machine.controller.flavour;
+    this.state.machine.name = name || 'New machine';
+    this.state.machine.controller = {
+      ...DEFAULT_MACHINE.controller,
+      flavour,
+      dialect: FLAVOUR_DIALECT[flavour] || 'fanuc',
+      syntax: null,
+    };
+    this.state.machine.macros = defaultMacros(flavour);
+    this.state.machine.parameters = { ...DEFAULT_PARAMETERS };
+    this.state.machine.subprograms = [];
     const def = {
       name: name || 'New machine',
       toolNode: 'base',
@@ -588,12 +610,20 @@ export class App {
         { id: 'base', name: 'Base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
       ],
     };
-    this.machineView.setKinematics(new Kinematics(def));
-    this.state.machine.preset = 'custom';
+    // The iron: one of the shapes a mill comes in, or nothing at all.
+    const known = preset && PRESETS[preset] ? preset : null;
+    this.state.machine.preset = known || 'custom';
+    this.machineView.setKinematics(known ? buildPreset(known) : new Kinematics(def));
+    this.machineView.setConfig(this.state.machine);
     for (const p of this.machineParts.parts) p.nodeId = null;
     this.applyKinematics();
+    this.reinterpret();
     this.setPage('machine', 'axes');
-    this.notify('An empty machine: one base. Add axes with “Add axis…” — each says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps.', 'ok');
+    if (known) {
+      this.notify(`A ${PRESETS[known].label} with a ${controlName(flavour)} control. Change what you need on the Axes page and bring the bodies in on Assembly.`, 'ok');
+      return;
+    }
+    this.notify(`An empty ${controlName(flavour)} machine: one base. Add axes with “Add axis…” — each says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps.`, 'ok');
   }
 
   /**
@@ -789,7 +819,14 @@ export class App {
     if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('that file has no axes in it.');
     this.machineView.setKinematics(new Kinematics(def));
     this.state.machine.preset = 'custom';
-    if (def.controller) Object.assign(this.state.machine.controller, def.controller);
+    // The control the machine was saved with, whole: a machine does not
+    // half-arrive on a control it was not built for. An older file that
+    // names only its flavour still reads the macros that flavour reads.
+    if (def.controller) {
+      const c = { ...DEFAULT_MACHINE.controller, ...def.controller };
+      if (!def.controller.dialect) c.dialect = FLAVOUR_DIALECT[c.flavour] || 'fanuc';
+      this.state.machine.controller = c;
+    }
     if (def.parameters) this.state.machine.parameters = { ...DEFAULT_PARAMETERS, ...def.parameters };
 
     // The travels, the table and the spindle nose: the crash model's idea

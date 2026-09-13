@@ -9,6 +9,8 @@
 import { el, field, select, row, pickFile } from './dom.js';
 import { Dialog } from './dialog.js';
 import { AXIS_LETTERS } from '../machine/kinematics.js';
+import { PRESETS } from '../machine/presets.js';
+import { CONTROLS, DIALECTS, FLAVOUR_DIALECT } from '../gcode/dialects.js';
 
 const KINDS = [
   { value: 'linear', label: 'Linear — slides along its direction' },
@@ -217,26 +219,50 @@ export function openBodyDialog(app, panel) {
   return dialog;
 }
 
-/** Start a machine from nothing. */
+/**
+ * Start a machine from nothing.
+ *
+ * The control is asked for here and nowhere else. A machine arrives with
+ * its control and keeps it — nobody swaps the Siemens in a mill for a
+ * Fanuc — so it belongs to the moment the machine is made, along with the
+ * macros and the macro spellings that come with it.
+ */
 export function openNewMachineDialog(app) {
-  const state = { name: 'New machine' };
+  const state = { name: 'New machine', control: 'fanuc', preset: '' };
+  const reads = el('div.hint', {});
+  const drawReads = () => {
+    const d = DIALECTS[FLAVOUR_DIALECT[state.control] || 'fanuc'];
+    reads.replaceChildren(`Macros are written the way a ${d.name} writes them. That spelling can be matched to the control in front of you afterwards, on Machine \u203a Macros — which control this is cannot.`);
+  };
+
   const body = el('div.dialog-form', {}, [
     field('Name', state.name, { type: 'text', onChange: (v) => { state.name = v || 'New machine'; } }),
-    el('div.hint', {}, 'You get one thing: a base that does not move. Build the chain out from it on the Axes page — each axis says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps, and bring the bodies in on Assembly.'),
+    row([
+      select('Control', CONTROLS, state.control, (v) => { state.control = v; drawReads(); },
+        { title: 'The control this machine has, for as long as it exists' }),
+      select('Iron', [
+        { value: '', label: 'A bare base' },
+        ...Object.entries(PRESETS).map(([value, p]) => ({ value, label: p.label })),
+      ], state.preset, (v) => { state.preset = v; },
+        { title: 'The shape it starts in; every part of it can be changed afterwards' }),
+    ]),
+    reads,
+    el('div.hint', {}, 'A bare base is a base that does not move and nothing else: build the chain out from it on the Axes page — each axis says what it is mounted on and what it carries — then mark where the tool hangs and where the part clamps. Starting from one of the shapes gives you that chain to change instead. Either way the bodies come in on Assembly.'),
     el('div.inline-warning', {}, 'The machine you have now is replaced, and any bodies already imported come off their axes. Save it first if you want to keep it.'),
   ]);
 
   const dialog = new Dialog({
     title: 'New machine',
-    subtitle: 'A bare base, and nothing else',
+    subtitle: 'A control, a bare base, and nothing else',
     width: 460,
     body,
     confirm: 'Create',
     onConfirm: () => {
-      app.newMachine(state.name);
+      app.newMachine(state.name, state.control, state.preset);
       return true;
     },
   });
+  drawReads();
   dialog.open();
   return dialog;
 }

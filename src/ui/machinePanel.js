@@ -10,8 +10,9 @@ import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
 import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineDialogs.js';
 import { openMacroDialog, openParameterDialog, openSyntaxDialog } from './macroDialogs.js';
+import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 import { PARAMETER_HINTS, macroReferences } from '../machine/macros.js';
-import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor } from '../gcode/dialects.js';
+import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor, controlName } from '../gcode/dialects.js';
 import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
@@ -46,10 +47,9 @@ const dirKey = (v) => `${v[0]},${v[1]},${v[2]}`;
 export class MachinePanel extends Panel {
   constructor(app) {
     super(app, [
-      { id: 'layout', label: 'Layout', icon: 'machine', hint: 'Which machine this is, and how it is drawn', render: MachinePanel.prototype.layoutPage },
+      { id: 'layout', label: 'Layout', icon: 'machine', hint: 'Which machine this is, what control it has, and how it is drawn', render: MachinePanel.prototype.layoutPage },
       { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
       { id: 'assembly', label: 'Assembly', icon: 'import', hint: 'Import bodies and assemble the machine from them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
-      { id: 'controller', label: 'Controller', icon: 'report', hint: 'Which G-code this machine reads', render: MachinePanel.prototype.controllerPage },
       { id: 'macros', label: 'Macros', icon: 'code', hint: 'What this machine does at an M code, and the subprograms that live in it', badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: MachinePanel.prototype.macrosPage },
       { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
     ]);
@@ -83,7 +83,7 @@ export class MachinePanel extends Panel {
   // ---- pages -------------------------------------------------------------
 
   layoutPage() {
-    return [this.presetSection()];
+    return [this.presetSection(), this.controlSection()];
   }
 
   axesPage() {
@@ -94,10 +94,6 @@ export class MachinePanel extends Panel {
   assemblyPage() {
     const body = this.selectedBody;
     return [this.partsSection(), body ? this.bodySection(body) : null];
-  }
-
-  controllerPage() {
-    return [this.controllerSection()];
   }
 
   macrosPage() {
@@ -522,41 +518,38 @@ export class MachinePanel extends Panel {
     ]);
   }
 
-  // ---- controller --------------------------------------------------------
+  // ---- the control -------------------------------------------------------
 
   /**
-   * What the control makes of a program before the program says anything.
+   * The control this machine has, and what it believes before a program
+   * says anything.
    *
-   * Controls do not agree on their power-up state, and a program posted for
-   * one machine read by another is the classic way to crash: the second one
-   * starts in inches, or reads I/J as absolute, or comes up in G18. So these
-   * belong to the machine, and changing one re-reads the program.
+   * Which control it is, is not a setting. A machine arrives with its
+   * control and keeps it: nobody swaps the Siemens in a mill for a Fanuc,
+   * and a program posted for one read by the other is not a mode to toggle
+   * but a different machine. So it is chosen when the machine is made and
+   * only stated here.
+   *
+   * The power-up state is a genuine setting, and a sharp one: controls do
+   * not agree about it, and the second machine starting in inches, or
+   * reading I/J as absolute, or coming up in G18, is a classic way to
+   * crash. Changing one re-reads the program.
    */
-  controllerSection() {
+  controlSection() {
     const app = this.app;
     const c = app.state.machine.controller;
+    const dialect = resolveDialect(c.dialect || FLAVOUR_DIALECT[c.flavour] || 'fanuc', c.syntax);
     const set = (patch) => {
       app.setMachine({ controller: { ...c, ...patch } });
       this.render();
     };
 
-    return section('Controller', [
-      select('Flavour', [
-        { value: 'fanuc', label: 'Fanuc' },
-        { value: 'haas', label: 'Haas' },
-        { value: 'fidia', label: 'Fidia' },
-        { value: 'siemens', label: 'Siemens 840D' },
-        { value: 'heidenhain', label: 'Heidenhain' },
-        { value: 'okuma', label: 'Okuma' },
-        { value: 'generic', label: 'Generic ISO' },
-      ], c.flavour, (v) => {
-        // The flavour picks which macro table this control starts from,
-        // unless the machine has already been told to read another.
-        const patch = { flavour: v };
-        if (!c.syntax) patch.dialect = FLAVOUR_DIALECT[v] || 'fanuc';
-        set(patch);
-      }),
-      el('div.hint', {}, `The flavour decides how macros are written — see Macros, which reads as ${(DIALECTS[c.dialect || FLAVOUR_DIALECT[c.flavour] || 'fanuc'] || DIALECTS.fanuc).name}. The five-axis codes are the Fanuc ones on every flavour so far: G68.2, G69, G53.1, G43.4 and G43.5.`),
+    return section('Control', [
+      el('div.hint', {}, [
+        el('b', {}, controlName(c.flavour)),
+        ` · reads ${dialect.name}`,
+      ]),
+      el('div.hint', {}, 'The control comes with the machine, so it is chosen when the machine is made and does not change afterwards — start a new machine, or load one, to work with another. How its macros are spelled is on Macros, where the spellings can be matched to the control in front of you. The five-axis codes are the Fanuc ones on every control so far: G68.2, G69, G53.1, G43.4 and G43.5.'),
 
       el('div.dialog-section-label', {}, 'Power-up state'),
       row([
@@ -609,15 +602,10 @@ export class MachinePanel extends Panel {
     const edited = !!c.syntax;
 
     return section('Macro syntax', [
-      select('Reads like', Object.values(DIALECTS).map((d) => ({ value: d.id, label: d.name })), baseId, (v) => {
-        c.dialect = v;
-        c.syntax = null;                       // a different control, not an edit of this one
-        // Keep the Controller page's flavour honest: a machine reading
-        // Siemens macros is a Siemens, not a Fanuc with a note.
-        if ((FLAVOUR_DIALECT[c.flavour] || 'fanuc') !== v) c.flavour = v;
-        app.setMachine({ controller: { ...c } });
-        this.render();
-      }),
+      // Which control this is came with the machine — see Layout. What can
+      // be changed is how that control spells things, because two machines
+      // wearing the same badge do not always agree about that.
+      el('div.hint', {}, [el('b', {}, `Reads like ${DIALECTS[baseId] ? DIALECTS[baseId].name : baseId}`), `, because this is a ${controlName(c.flavour)}.`]),
       el('div.hint', {}, DIALECTS[baseId] ? DIALECTS[baseId].notes : ''),
       el('pre.code-sample', {}, sampleFor(dialect)),
       edited ? el('div.inline-warning', {}, `Edited: this machine does not read quite like a standard ${DIALECTS[baseId].name}. ${describeDialect(dialect)}`) : null,
@@ -722,12 +710,14 @@ export class MachinePanel extends Panel {
       list.appendChild(el(`div.list-item${this.machineSubId === sub.id ? '.selected' : ''}`, {
         onclick: () => { this.machineSubId = sub.id; this.render(); },
       }, [
-        el('div.swatch', { style: { background: o === null ? '#d7263d' : '#7b8494' } }),
+        el('div.swatch', { style: { background: '#7b8494' } }),
         el('div.list-main', {}, [
           el('div.list-title', {}, [o === null ? null : el('span.tnum', {}, `O${o}`), sub.name]),
-          el('div.list-sub', {}, o === null
-            ? 'no O number on its first line, so M98 cannot find it'
-            : `${lines} ${lines === 1 ? 'line' : 'lines'} · in the machine`),
+          el('div.list-sub', {}, [
+            `${lines} ${lines === 1 ? 'line' : 'lines'}`,
+            'in the machine',
+            o === null ? 'called by name' : null,
+          ].filter(Boolean).join(' · ')),
         ]),
       ]));
     }
@@ -739,7 +729,20 @@ export class MachinePanel extends Panel {
     ];
 
     if (selected) {
-      body.push(el('div.dialog-section-label', {}, selected.name));
+      body.push(row([
+        field('Name', selected.name, {
+          type: 'text',
+          title: 'What this file is called, and what a call by name asks for',
+          onChange: (v) => {
+            const next = String(v || '').trim();
+            if (!next || next === selected.name) { this.render(); return; }
+            selected.name = next;
+            app.reinterpret();
+            this.render();
+          },
+        }),
+      ]));
+      body.push(el('div.hint', {}, `Called with ${callLine(machineDialect(app), { name: selected.name, number: programNumber(selected.text) || 0 })}`));
       const area = el('textarea.code-box', {
         spellcheck: false,
         wrap: 'off',
@@ -780,14 +783,20 @@ export class MachinePanel extends Panel {
   newMachineSub() {
     const app = this.app;
     if (!Array.isArray(app.state.machine.subprograms)) app.state.machine.subprograms = [];
-    const taken = new Set(app.state.machine.subprograms.map((x) => programNumber(x.text)));
-    let n = 9000;
-    while (taken.has(n)) n += 1;
-    const sub = { id: uid('msub'), name: `O${n}.nc`, text: `O${n}\n\nM99\n` };
-    app.state.machine.subprograms.push(sub);
-    this.machineSubId = sub.id;
-    app.reinterpret();
-    this.render();
+    const subs = app.state.machine.subprograms;
+    openNewSubprogramDialog(app, {
+      subtitle: 'A file that stays on this control between jobs',
+      names: subs.map((x) => x.name),
+      numbers: subs.map((x) => programNumber(x.text)),
+      from: 9000,
+      onCreate: (file) => {
+        const sub = { id: uid('msub'), ...file };
+        subs.push(sub);
+        this.machineSubId = sub.id;
+        app.reinterpret();
+        this.render();
+      },
+    });
   }
 
   removeMachineSub() {

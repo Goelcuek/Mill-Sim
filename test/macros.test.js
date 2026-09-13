@@ -186,3 +186,67 @@ test('everything a machine is gets saved with it, or is deliberately not', () =>
     assert.ok(key in DEFAULT_MACHINE, `"${key}" is saved but no longer part of a machine`);
   }
 });
+
+// ---- a file called by its name -------------------------------------------
+//
+// Counting programs in O numbers is Fanuc's convention, not the world's. A
+// file saved as "roughing.nc" is called by that name on most other controls,
+// and on a Fanuc too when the file has a name rather than a number.
+
+test('a subprogram can be called by the name it is saved under', () => {
+  const subs = [{ name: 'roughing.nc', text: 'G1 X12 F400\nM99' }];
+  const p = run(['G90 G21', 'G1 X0 F400', 'M98 <roughing>', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.moves[1].source, 'roughing.nc');
+  assert.equal(Math.round(p.moves[1].to[0]), 12);
+});
+
+test('the name may be written with its extension, or in the block comment', () => {
+  const subs = [{ name: 'face top.nc', text: 'G1 Y7 F400\nM99' }];
+  const full = run(['G90 G21', 'G1 Y0 F400', 'M98 <face top.nc>', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(full), []);
+  assert.equal(full.moves[1].source, 'face top.nc');
+
+  // What a Haas control writes: M98 (FILE).
+  const commented = run(['G90 G21', 'G1 Y0 F400', 'M98 (face top)', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(commented), []);
+  assert.equal(commented.moves[1].source, 'face top.nc');
+});
+
+test('a control that spells a call with a word is read that way', () => {
+  const subs = [{ name: 'BOHREN', text: 'G1 Z=-4 F200\nM17' }];
+  const p = run(['G90 G21', 'G1 Z0 F200', 'CALL "BOHREN"', 'G1 Z2', 'M30'],
+    { subprograms: subs, controller: { dialect: 'siemens' } });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.moves[1].source, 'BOHREN');
+  assert.equal(Math.round(p.moves[1].to[2]), -4);
+  // M17 returned: the block after the call is back in the main program.
+  assert.equal(p.moves[2].source, undefined);
+});
+
+test('the bare name of a file is a call on the controls that write one', () => {
+  const subs = [{ name: 'PALLET', text: 'G1 X30 F900\nM99' }];
+  const p = run(['G90 G21', 'G1 X0 F900', 'PALLET', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.moves[1].source, 'PALLET');
+});
+
+test('a name that names nothing is an error, not a silent skip', () => {
+  const p = run(['G90 G21', 'M98 <missing>', 'M30']);
+  assert.equal(errs(p).length, 1);
+  assert.match(errs(p)[0].message, /missing/);
+
+  // And so is a word that is not a call at all.
+  const typo = run(['G90 G21', 'G1 X10 F200 RAPID', 'M30']);
+  assert.match(errs(typo)[0].message, /Unrecognised text: RAPID/);
+});
+
+test('a file with both a number and a name answers to either', () => {
+  const subs = [{ name: 'drill.nc', text: 'O1000\nG1 Z-3 F100\nM99' }];
+  const byNumber = run(['G90 G21', 'G1 Z0 F100', 'M98 P1000', 'M30'], { subprograms: subs });
+  const byName = run(['G90 G21', 'G1 Z0 F100', 'M98 <drill>', 'M30'], { subprograms: subs });
+  assert.deepEqual(errs(byNumber), []);
+  assert.deepEqual(errs(byName), []);
+  assert.equal(byNumber.moves[1].source, 'drill.nc');
+  assert.equal(byName.moves[1].source, 'drill.nc');
+});
