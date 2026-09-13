@@ -5,7 +5,7 @@
 // places, which is the one thing this layout is built to avoid — so Setup
 // talks about the stock and View decides what colour it is.
 
-import { el, select, checkbox, row, section, clear } from './dom.js';
+import { el, select, checkbox, button, row, section, clear } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
 import { fmt } from '../core/util.js';
@@ -16,6 +16,7 @@ export class ViewPanel extends Panel {
       { id: 'camera', label: 'Camera', icon: 'view', hint: 'Where you are looking from', render: ViewPanel.prototype.cameraPage },
       { id: 'show', label: 'Show', icon: 'eye', hint: 'What is drawn', render: ViewPanel.prototype.showPage },
       { id: 'inspect', label: 'Inspect', icon: 'ruler', hint: 'Section plane, opacity, backplot', render: ViewPanel.prototype.inspectPage },
+      { id: 'measure', label: 'Measure', icon: 'target', hint: 'Measure the cut part: distances and bore diameters', badge: () => app.state.measurements.length || null, render: ViewPanel.prototype.measurePage },
     ]);
     this.render();
   }
@@ -104,6 +105,54 @@ export class ViewPanel extends Panel {
         el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own shade so you can see which one made which face.'),
       ]),
     ];
+  }
+
+  /**
+   * Measuring the part that was actually cut.
+   *
+   * A verification tool that cannot answer "how deep is that pocket" is
+   * asking to be trusted and checked somewhere else. The snapping is the
+   * same snapping every other pick uses, so a corner is a corner and the
+   * floor of a pocket is the floor of a pocket.
+   */
+  measurePage() {
+    const app = this.app;
+    const list = el('div.list');
+    const items = app.state.measurements;
+
+    if (!items.length) {
+      list.appendChild(el('div.empty', {}, [
+        el('div.empty-title', {}, 'Nothing measured yet'),
+        el('div.hint', {}, 'Measure between two points, or take three points round a bore for its diameter. Points snap to corners, edges, face centres and the machined surface itself, so what you measure is what the cutter left.'),
+      ]));
+    }
+
+    for (const m of items) {
+      list.appendChild(el('div.list-item', {}, [
+        el('div.swatch', { style: { background: m.kind === 'circle' ? '#af52de' : '#0a7cff' } }),
+        el('div.list-main', {}, [
+          el('div.list-title', {}, m.kind === 'circle' ? `Ø${fmt(m.value, 3)} mm` : `${fmt(m.value, 3)} mm`),
+          el('div.list-sub', {}, m.kind === 'circle'
+            ? `centre X ${fmt(m.centre[0], 3)}  Y ${fmt(m.centre[1], 3)}  Z ${fmt(m.centre[2], 3)}`
+            : `ΔX ${fmt(m.delta[0], 3)}  ΔY ${fmt(m.delta[1], 3)}  ΔZ ${fmt(m.delta[2], 3)}`),
+        ]),
+        el('div.list-actions', {}, [
+          button('✕', () => app.removeMeasurement(m.id), { title: 'Remove', variant: 'warn' }),
+        ]),
+      ]));
+    }
+
+    return section(`Measurements (${items.length})`, [
+      actionRow([
+        { label: 'Distance…', variant: 'primary', onClick: () => app.measureDistance(), hint: 'Two points' },
+        { label: 'Bore or boss…', onClick: () => app.measureCircle(), hint: 'Three points round a circle' },
+      ]),
+      list,
+      actionRow([
+        { label: 'Clear all', disabled: !items.length, variant: 'warn', onClick: () => app.clearMeasurements() },
+      ]),
+      el('div.hint', {}, 'Everything is in work coordinates — the same numbers as the drawing. Measurements are drawn on the part, so they follow it when the table moves.'),
+    ]);
   }
 
   inspectPage() {

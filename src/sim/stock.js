@@ -807,6 +807,61 @@ export class Stock {
   }
 
   /**
+   * The rim of the nearest step in the surface.
+   *
+   * The wall of a bore or a pocket is one column wide in a heightmap, so a
+   * raw surface hit on it lands anywhere between the floor and the top —
+   * which is no good for measuring a hole. What anybody actually points at
+   * is the rim: the top edge where the wall meets the face above it. This
+   * finds the biggest height step within a few columns of the cursor and
+   * returns the point at the top of it.
+   *
+   * @param {number} x world mm
+   * @param {number} y world mm
+   * @param {number} [cells] how far to look, in columns
+   * @returns {null | {point:[number,number,number], drop:number}}
+   */
+  rimNear(x, y, cells = 6) {
+    const ci = Math.floor((x - this.origin[0]) / this.dx);
+    const cj = Math.floor((y - this.origin[1]) / this.dy);
+    if (ci < 0 || cj < 0 || ci >= this.nx || cj >= this.ny) return null;
+
+    // A step worth snapping to is taller than the grid is coarse; anything
+    // smaller is the staircase of a slope, not an edge.
+    const least = Math.max(this.cell * 2, 0.05);
+    let best = null;
+    const i0 = Math.max(1, ci - cells);
+    const i1 = Math.min(this.nx - 2, ci + cells);
+    const j0 = Math.max(1, cj - cells);
+    const j1 = Math.min(this.ny - 2, cj + cells);
+
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const k = j * this.nx + i;
+        const h = this.height[k];
+        if (h <= this.base) continue;
+        const drops = [h - this.height[k - 1], h - this.height[k + 1],
+          h - this.height[k - this.nx], h - this.height[k + this.nx]];
+        let side = 0;
+        for (let n = 1; n < 4; n++) if (drops[n] > drops[side]) side = n;
+        const drop = drops[side];
+        if (drop < least) continue;
+        // The edge is the boundary between this column and the one that
+        // falls away, not the middle of either, so the point lands half a
+        // cell over — which is the difference between a bore measuring its
+        // own diameter and measuring it a cell wide.
+        const px = this.cx(i) + (side === 0 ? -this.dx / 2 : side === 1 ? this.dx / 2 : 0);
+        const py = this.cy(j) + (side === 2 ? -this.dy / 2 : side === 3 ? this.dy / 2 : 0);
+        // Nearest to the cursor wins, so the rim under the pointer is the
+        // one that snaps rather than the deepest step in the window.
+        const d = Math.hypot(px - x, py - y);
+        if (!best || d < best.d) best = { d, point: [px, py, h], drop };
+      }
+    }
+    return best ? { point: best.point, drop: best.drop } : null;
+  }
+
+  /**
    * Cast a ray at the machined surface.
    *
    * The rendered stock is displaced on the GPU, so the CPU-side geometry a

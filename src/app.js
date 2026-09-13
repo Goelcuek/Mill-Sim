@@ -14,6 +14,7 @@ import { PRESETS } from './machine/presets.js';
 import { Kinematics } from './machine/kinematics.js';
 import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
+import { MeasureView, circleThrough } from './scene/measureView.js';
 import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
@@ -100,6 +101,8 @@ export class App {
       persistLibrary: true,
       exportDecimate: 1,
       seekTarget: null,
+      /** What has been measured on the part, newest last. */
+      measurements: [],
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
     };
@@ -212,6 +215,8 @@ export class App {
 
     this.toolView = new ToolView();
     this.viewer.add(this.toolView.group);
+
+    this.measure = new MeasureView(this.viewer, this.viewOverlay);
 
     this.pick = new PickController(this.viewer, {
       stock: () => this.stock,
@@ -1408,6 +1413,82 @@ export class App {
   // thing, pick where that point should end up, apply the delta. It reads
   // the way a machinist sets a job — "this corner goes there" — instead of
   // asking anybody to compute an offset in their head.
+
+  // ---- measuring ---------------------------------------------------------
+  //
+  // Everything picked is in work coordinates, which is what a drawing is
+  // in: "40.002 from the datum" means the same thing here as on the print.
+
+  /** Two points: the distance between them, and its three components. */
+  measureDistance() {
+    this.pick.begin({
+      steps: 2,
+      title: 'Measure',
+      hints: ['Click the first point', 'Click the second point'],
+      onDone: ([a, b]) => {
+        const delta = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        this.addMeasurement({
+          kind: 'distance',
+          points: [a, b],
+          delta,
+          value: Math.hypot(delta[0], delta[1], delta[2]),
+        });
+      },
+    });
+    this.buildRibbon();
+  }
+
+  /** Three points on a bore or a boss: its diameter and centre. */
+  measureCircle() {
+    this.pick.begin({
+      steps: 3,
+      title: 'Measure a circle',
+      hints: ['Click a point on the circle', 'Click a second point', 'Click a third point'],
+      onDone: (points) => {
+        const circle = circleThrough(...points);
+        if (!circle) {
+          this.notify('Those three points are in a line, so there is no circle through them.', 'error');
+          return;
+        }
+        this.addMeasurement({
+          kind: 'circle',
+          points,
+          centre: circle.centre,
+          value: circle.radius * 2,
+        });
+      },
+    });
+    this.buildRibbon();
+  }
+
+  addMeasurement(item) {
+    this.state.measurements.push({ id: uid('meas'), ...item });
+    this.refreshMeasurements();
+    const m = this.state.measurements[this.state.measurements.length - 1];
+    this.notify(m.kind === 'circle'
+      ? `Ø${fmt(m.value, 3)} mm, centre X ${fmt(m.centre[0], 3)} Y ${fmt(m.centre[1], 3)} Z ${fmt(m.centre[2], 3)}.`
+      : `${fmt(m.value, 3)} mm — ΔX ${fmt(m.delta[0], 3)}  ΔY ${fmt(m.delta[1], 3)}  ΔZ ${fmt(m.delta[2], 3)}.`, 'ok');
+  }
+
+  removeMeasurement(id) {
+    this.state.measurements = this.state.measurements.filter((m) => m.id !== id);
+    this.refreshMeasurements();
+  }
+
+  clearMeasurements() {
+    this.state.measurements = [];
+    this.refreshMeasurements();
+  }
+
+  refreshMeasurements() {
+    // Drawn in the work frame, so they stay on the part when the table moves.
+    this.measure.attach(this.pick.frameObject() || this.viewer.scene);
+    this.measure.setItems(this.state.measurements);
+    if (this.panels && this.panels.view) this.panels.view.refresh();
+    // The page's count is in the ribbon, so it is redrawn with the list.
+    if (this.ribbon) this.buildRibbon();
+    this.viewer.invalidate();
+  }
 
   /** Translate the stock so point A lands on point B. */
   moveStockByPoints() {

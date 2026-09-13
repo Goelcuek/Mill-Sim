@@ -394,6 +394,23 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .hud-val { font-family: var(--mono); font-size: 12.5px; min-width: 62px; }
 .hud-row.dim { color: var(--text-3); font-size: 11.5px; }
 
+/* A measurement's number, over the line it belongs to. */
+.measure-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-press);
+  box-shadow: var(--shadow-1);
+  white-space: nowrap;
+}
+
 .crash-badge {
   pointer-events: auto;
   cursor: pointer;

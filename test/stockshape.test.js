@@ -152,3 +152,30 @@ test('a hole cut clean through a block is a hole in the exported part', async ()
     }
   }
 });
+
+test('the rim of a cut is a snappable edge', () => {
+  // A Ø10 blind hole, plunged: the rim is a circle of radius 5 at the top
+  // face, and it is what a hand points at when measuring the hole.
+  const s = new Stock({ origin: [-30, -30, -20], size: [60, 60, 20], resolution: 0.25 });
+  s.carve(envOf({ type: 'flat', diameter: 10, fluteLength: 30 }), 6, -4, -6);
+
+  const rim = s.rimNear(6 + 6.2, -4);
+  assert.ok(rim, 'found the edge from 1.2 mm away');
+  near(Math.hypot(rim.point[0] - 6, rim.point[1] + 4), 5, s.cell, 'on the wall of the hole');
+  near(rim.point[2], 0, 1e-6, 'at the top face, not the floor');
+  near(rim.drop, 6, 1e-6, 'and it knows how far it falls');
+
+  // Three points round the rim measure the hole to within the grid.
+  const pts = [0, 120, 240].map((deg) => {
+    const t = (deg * Math.PI) / 180;
+    const p = s.rimNear(6 + 6.2 * Math.cos(t), -4 + 6.2 * Math.sin(t));
+    assert.ok(p, `rim at ${deg}°`);
+    return p.point;
+  });
+  for (const p of pts) near(Math.hypot(p[0] - 6, p[1] + 4), 5, s.cell, 'each point on the circle');
+
+  // Far from anything cut, there is no edge to snap to.
+  assert.equal(s.rimNear(-25, -25), null);
+  // And on a surface with no step in it either.
+  assert.equal(new Stock({ origin: [0, 0, 0], size: [20, 20, 5], resolution: 0.25 }).rimNear(10, 10), null);
+});

@@ -444,6 +444,13 @@ export class PickController {
       const stock = this.ctx.stock();
       if (stock) {
         for (const s of stock.snapPoints()) out.push({ ...s, label: 'stock' });
+        // The rim of whatever has been cut near the cursor. This is what
+        // makes a bore measurable: the wall of one is a single column wide,
+        // so its top edge is the only part of it worth pointing at.
+        if (free && free.label === 'stock') {
+          const rim = stock.rimNear(free.point[0], free.point[1]);
+          if (rim) out.push({ point: rim.point, kind: 'edge', label: 'rim' });
+        }
       }
 
       const models = this.ctx.models();
