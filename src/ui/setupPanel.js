@@ -19,6 +19,7 @@ const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']]
 export class SetupPanel extends Panel {
   constructor(app) {
     super(app, [
+      { id: 'project', label: 'Project', icon: 'save', hint: 'The whole job in one file: program, machine, stock, tools and fixtures', render: SetupPanel.prototype.projectPage },
       { id: 'stock', label: 'Stock', icon: 'cube', hint: 'The block, where it sits and how finely it is simulated', render: SetupPanel.prototype.stockPage },
       { id: 'origin', label: 'Work offsets', icon: 'target', hint: 'Where X0 Y0 Z0 is for each offset', render: SetupPanel.prototype.originPage },
       { id: 'fixtures', label: 'Fixtures', icon: 'vice', hint: 'Vices, clamps, parallels and reference parts', badge: () => app.models.models.length || null, render: SetupPanel.prototype.fixturesPage },
@@ -30,6 +31,42 @@ export class SetupPanel extends Panel {
   }
 
   // ---- pages -------------------------------------------------------------
+
+  /**
+   * The job as one file.
+   *
+   * Everything else on this tab describes one part of a setup; this page is
+   * the setup itself, which is the only thing worth keeping when the
+   * browser tab closes.
+   */
+  projectPage() {
+    const app = this.app;
+    const s = app.state;
+    const kin = app.machineView.kinematics;
+    const program = s.program;
+
+    const stat = (label, value, dim) => el('div.stat', {}, [
+      el('div.stat-label', {}, label),
+      el(`div.stat-value${dim ? '.dim' : ''}`, {}, value),
+    ]);
+
+    return section('Project', [
+      el('div.hint', {}, 'A setup is not a program. It is a program, the machine it runs on, the stock it starts from, where that stock sits, which tools the T numbers mean, and the clamps standing around it — and losing any one of those makes the rest unverifiable. They are saved together.'),
+      actionRow([
+        { label: 'Save project…', variant: 'primary', onClick: () => app.saveProject(), hint: 'One zip holding all of it' },
+        { label: 'Open project…', onClick: () => app.openProject(), hint: 'A project saved earlier — or a machine folder' },
+      ]),
+      el('div.stat-grid', {}, [
+        stat('Program', s.programName || 'none', !s.programName),
+        stat('Blocks', program ? String(program.stats.blockCount) : '—', !program),
+        stat('Subprograms', String(s.subprograms.length)),
+        stat('Machine', kin.name, false),
+        stat('Tool table', `${app.library.assemblies.length} assemblies`),
+        stat('Models', `${app.models.models.length} loaded`),
+      ]),
+      el('div.hint', {}, 'Inside the zip: project.json for the setup, program/ for the G-code, machine/ laid out exactly as Save machine writes it, library.json for the tools, models/ and stock/ as STL. Every part of it opens in something else — a project only this program can read is a hostage, not an archive.'),
+    ]);
+  }
 
   stockPage() {
     return [this.stockSection()];

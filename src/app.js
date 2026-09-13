@@ -27,6 +27,7 @@ import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mes
 import { buildTargetMap, compareToTarget } from './sim/target.js';
 import { writeSTL, writeOBJ, parseSTL } from './io/stl.js';
 import { writeZip, readZip } from './io/zip.js';
+import { writeProject, readProject, isProject } from './io/project.js';
 
 import { el, clear, button, download, pickFile } from './ui/dom.js';
 import { SetupPanel } from './ui/setupPanel.js';
@@ -550,28 +551,20 @@ export class App {
   }
 
   /**
-   * Write the machine out as a folder.
+   * The machine as a set of files, ready to be zipped.
    *
-   * A machine is not one file. It is a chain, a control, the macros that
-   * control runs, and however many castings somebody imported and mated —
-   * and the chain is worth nothing without them, because "the saddle is on
-   * Y" names a body that has to exist. A page cannot hand out a folder, so
-   * it hands out a zip, which every operating system opens as one:
+   * Shared by "Save machine" and by the project file, which carries the
+   * whole machine inside itself under `machine/`. The same bytes either
+   * way, so there is only ever one description of a machine on disk.
    *
-   *   machine.json      the chain, the controller, the parameters, and
-   *                     where every body sits on it
-   *   macros/M6.nc      one file per macro, plain G-code, editable in any
-   *                     editor and readable without this program
-   *   bodies/*.stl      the castings themselves
-   *   README.txt        what the above is, for whoever opens it in a year
+   * @param {string} [prefix] the folder the files go in, e.g. "machine/"
    */
-  async exportMachine() {
+  machineFiles(prefix = '') {
     const kin = this.machineView.kinematics;
     const machine = this.state.machine;
-    const stem = (kin.name || 'machine').replace(/\s+/g, '-').toLowerCase();
     const used = new Set();
     const unique = (name, ext) => {
-      let base = String(name || 'part').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'part';
+      const base = String(name || 'part').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'part';
       let out = `${base}${ext}`;
       let n = 2;
       while (used.has(out)) out = `${base}-${n++}${ext}`;
@@ -581,13 +574,13 @@ export class App {
 
     const files = [];
     const macros = (machine.macros || []).map((m) => {
-      const file = `macros/${unique(m.code, '.nc')}`;
+      const file = `${prefix}macros/${unique(m.code, '.nc')}`;
       files.push({ name: file, data: `${m.body || ''}\n` });
       return { id: m.id, code: m.code, name: m.name, enabled: m.enabled, notes: m.notes, file };
     });
 
     const subprograms = (machine.subprograms || []).map((sub) => {
-      const file = `subprograms/${unique(sub.name.replace(/\.[^.]+$/, ''), '.nc')}`;
+      const file = `${prefix}subprograms/${unique(sub.name.replace(/\.[^.]+$/, ''), '.nc')}`;
       files.push({ name: file, data: `${sub.text || ''}` });
       return { id: sub.id, name: sub.name, file };
     });
@@ -595,7 +588,7 @@ export class App {
     const bodies = [];
     for (const part of this.machineParts.parts) {
       const pos = part.object.geometry.getAttribute('position');
-      const file = `bodies/${unique(part.name, '.stl')}`;
+      const file = `${prefix}bodies/${unique(part.name, '.stl')}`;
       files.push({ name: file, data: writeSTL(pos.array, { name: part.name }) });
       bodies.push({
         name: part.name,
@@ -622,7 +615,31 @@ export class App {
       savedBy: 'Mill-Sim',
       saved: new Date().toISOString(),
     };
-    files.unshift({ name: 'machine.json', data: JSON.stringify(def, null, 2) });
+    files.unshift({ name: `${prefix}machine.json`, data: JSON.stringify(def, null, 2) });
+    return { def, files };
+  }
+
+  /**
+   * Write the machine out as a folder.
+   *
+   * A machine is not one file. It is a chain, a control, the macros that
+   * control runs, and however many castings somebody imported and mated —
+   * and the chain is worth nothing without them, because "the saddle is on
+   * Y" names a body that has to exist. A page cannot hand out a folder, so
+   * it hands out a zip, which every operating system opens as one:
+   *
+   *   machine.json      the chain, the controller, the parameters, and
+   *                     where every body sits on it
+   *   macros/M6.nc      one file per macro, plain G-code, editable in any
+   *                     editor and readable without this program
+   *   subprograms/      the files that live in this control between jobs
+   *   bodies/*.stl      the castings themselves
+   *   README.txt        what the above is, for whoever opens it in a year
+   */
+  async exportMachine() {
+    const kin = this.machineView.kinematics;
+    const stem = (kin.name || 'machine').replace(/\s+/g, '-').toLowerCase();
+    const { def, files } = this.machineFiles();
     files.push({
       name: 'README.txt',
       data: [
@@ -645,13 +662,53 @@ export class App {
     try {
       download(`${stem}.zip`, await writeZip(files), 'application/zip');
       const bits = [
-        `${macros.length} ${macros.length === 1 ? 'macro' : 'macros'}`,
-        subprograms.length ? `${subprograms.length} ${subprograms.length === 1 ? 'subprogram' : 'subprograms'}` : null,
-        `${bodies.length} ${bodies.length === 1 ? 'body' : 'bodies'}`,
+        `${def.macros.length} ${def.macros.length === 1 ? 'macro' : 'macros'}`,
+        def.subprograms.length ? `${def.subprograms.length} ${def.subprograms.length === 1 ? 'subprogram' : 'subprograms'}` : null,
+        `${def.bodies.length} ${def.bodies.length === 1 ? 'body' : 'bodies'}`,
       ].filter(Boolean);
       this.notify(`Saved ${stem}.zip — the chain, ${bits.join(', ')}.`, 'ok');
     } catch (err) {
       this.notify(`Could not write the machine: ${err.message}`, 'error');
+    }
+  }
+
+  /**
+   * Save the whole job: the program, the machine, the stock, the fixtures
+   * and the tools, in one file.
+   */
+  async saveProject() {
+    try {
+      const { bytes, name, summary } = await writeProject(this);
+      download(name, bytes, 'application/zip');
+      this.notify(`Saved ${name} — ${summary.program}, ${summary.tools} cutters, ${summary.models} ${summary.models === 1 ? 'model' : 'models'} and the machine.`, 'ok');
+    } catch (err) {
+      this.notify(`Could not write the project: ${err.message}`, 'error');
+    }
+  }
+
+  /** Open a project, or a machine — both are zips, and both say which. */
+  async openProject() {
+    const [file] = await pickFile('.zip,.millsim,.json');
+    if (!file) return;
+    try {
+      if (/\.json$/i.test(file.name)) {
+        await this.applyMachineDefinition(JSON.parse(await file.text()), null, file.name);
+        return;
+      }
+      const entries = await readZip(await file.arrayBuffer());
+      if (!isProject(entries)) {
+        // A machine folder opened from the project page is still a machine;
+        // there is no reason to make somebody find the other button.
+        const machineJson = entries.get('machine.json');
+        if (!machineJson) throw new Error('it holds neither a project.json nor a machine.json');
+        await this.applyMachineDefinition(JSON.parse(new TextDecoder().decode(machineJson)), entries, file.name);
+        return;
+      }
+      const summary = await readProject(this, entries);
+      this.setPage('setup', 'project');
+      this.notify(`Opened ${summary.name || file.name} — ${summary.program} on ${summary.machine}, ${summary.tools} cutters, ${summary.models} ${summary.models === 1 ? 'model' : 'models'}.`, 'ok');
+    } catch (err) {
+      this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
     }
   }
 
