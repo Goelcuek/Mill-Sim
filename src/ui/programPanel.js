@@ -61,16 +61,25 @@ export class ProgramPanel extends Panel {
     if (!this.editor) {
       this.editor = new GcodeEditor(this.editorHost, {
         onInput: (text) => {
+          // While a keystroke is waiting to be read, the editor holds the
+          // newer text and the app holds the older one. Say so, or a redraw
+          // in that window would push the old text back over the typing.
+          this.typing = true;
           clearTimeout(this._debounce);
-          this._debounce = setTimeout(() => this.app.loadProgram(text, this.app.state.programName), 400);
+          this._debounce = setTimeout(() => {
+            this.typing = false;
+            this.app.loadProgram(text, this.app.state.programName);
+          }, 400);
         },
         onSeekLine: (line) => this.app.seekToLine(line),
       });
-      if (this.app.state.source) this.editor.setValue(this.app.state.source);
     } else if (this.editor.wrap.parentNode !== this.editorHost) {
       this.editorHost.appendChild(this.editor.wrap);
     }
-    if (this.app.state.program) this.editor.setMarkers(this.app.state.program.warnings);
+    this.syncEditor();
+    if (this.app.state.program) {
+      this.editor.setMarkers(this.app.state.program.warnings.filter((w) => !w.source));
+    }
 
     return [bar, this.editorHost];
   }
@@ -136,14 +145,19 @@ export class ProgramPanel extends Panel {
             const current = this.sub;
             if (!current) return;
             current.text = text;
+            this.typingSub = true;
             clearTimeout(this._subDebounce);
-            this._subDebounce = setTimeout(() => this.app.reinterpret(), 400);
+            this._subDebounce = setTimeout(() => {
+              this.typingSub = false;
+              this.app.reinterpret();
+            }, 400);
           },
         });
       } else if (this.subEditor.wrap.parentNode !== this.subHost) {
         this.subHost.appendChild(this.subEditor.wrap);
       }
-      if (this.subEditorFor !== sub.id) {
+      // Either a different file, or the same one loaded from elsewhere.
+      if (!this.typingSub && (this.subEditorFor !== sub.id || this.subEditor.value !== (sub.text || ''))) {
         this.subEditor.setValue(sub.text || '');
         this.subEditorFor = sub.id;
       }
@@ -205,6 +219,21 @@ export class ProgramPanel extends Panel {
     return [this.summaryHost];
   }
 
+  /**
+   * Show whatever program the app is holding.
+   *
+   * The editor keeps its own text across redraws — that is what preserves
+   * the caret and the undo stack — so a program that arrives from anywhere
+   * else has to be put into it: opening a project, loading an example,
+   * anything that calls loadProgram. Typing is the one case where the
+   * editor is ahead of the app, and it says so while it is.
+   */
+  syncEditor() {
+    if (!this.editor || this.typing) return;
+    const source = this.app.state.source || '';
+    if (this.editor.value !== source) this.editor.setValue(source);
+  }
+
   setText(text) {
     if (this.editor) this.editor.setValue(text);
   }
@@ -246,12 +275,13 @@ export class ProgramPanel extends Panel {
 
   /** Called by the app on every re-interpret; harmless when off-screen. */
   refresh() {
-    if (this.page === 'summary') this.render();
-    else if (this.page === 'subs') {
-      // The list says which files ran; only the editor keeps its own state.
+    if (this.page === 'summary' || this.page === 'subs') {
       this.render();
+      return;
     }
-    else if (this.editor && this.app.state.program) {
+    // The program may have been replaced from somewhere else entirely.
+    this.syncEditor();
+    if (this.editor && this.app.state.program) {
       // Only the notes that belong to this text: a warning raised inside a
       // subprogram carries that file's line numbers, not these.
       this.editor.setMarkers(this.app.state.program.warnings.filter((w) => !w.source));
