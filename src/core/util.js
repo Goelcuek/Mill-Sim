@@ -9,6 +9,12 @@ export const lerp = (a, b, t) => a + (b - a) * t;
 export const deg2rad = (d) => (d * Math.PI) / 180;
 export const rad2deg = (r) => (r * 180) / Math.PI;
 
+/** An angle in degrees, brought into (-180, 180]. */
+export const wrapAngle = (d) => {
+  const x = ((Number(d) || 0) + 180) % 360;
+  return (x < 0 ? x + 360 : x) - 180;
+};
+
 /** Round to a sane number of decimals for display. */
 export function fmt(v, decimals = 3) {
   if (!Number.isFinite(v)) return '–';

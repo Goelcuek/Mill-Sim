@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Stock } from '../src/sim/stock.js';
-import { columnFor, meshColumn, describeShape } from '../src/sim/stockShape.js';
+import { columnFor, meshColumn, describeShape, stockGrid, stockAngle } from '../src/sim/stockShape.js';
 import { buildTool, makeTool } from '../src/tools/toolDefs.js';
 import { boxToTriangles } from '../src/io/mesh.js';
 
@@ -178,4 +178,61 @@ test('the rim of a cut is a snappable edge', () => {
   assert.equal(s.rimNear(-25, -25), null);
   // And on a surface with no step in it either.
   assert.equal(new Stock({ origin: [0, 0, 0], size: [20, 20, 5], resolution: 0.25 }).rimNear(10, 10), null);
+});
+
+// ---- a billet turned in the vice ------------------------------------------
+//
+// Clamping a block at an angle is ordinary work, and the columns are
+// axis-aligned whatever the block is doing — so the shape is the rotated
+// rectangle and the grid is the box that holds its corners.
+
+test('a turned block keeps its size and asks for a bigger grid', () => {
+  const spec = { shape: 'box', origin: [-60, -40, -25], size: [120, 80, 25], rotation: 90 };
+  const grid = stockGrid(spec);
+  // Turned square on, the footprint is the same rectangle the other way up.
+  near(grid.size[0], 80, 1e-9, 'grid X');
+  near(grid.size[1], 120, 1e-9, 'grid Y');
+  // And it is still centred where the billet is.
+  near(grid.origin[0] + grid.size[0] / 2, 0, 1e-9, 'centre X');
+  near(grid.origin[1] + grid.size[1] / 2, 0, 1e-9, 'centre Y');
+  // Z is untouched: a turn about Z does not move anything up or down.
+  assert.equal(grid.origin[2], -25);
+  assert.equal(grid.size[2], 25);
+
+  const square = stockGrid({ ...spec, rotation: 0 });
+  assert.deepEqual(square.origin, spec.origin);
+  assert.deepEqual(square.size, spec.size);
+});
+
+test('the shape of a turned block is the turned rectangle', () => {
+  const spec = { shape: 'box', origin: [-60, -40, -25], size: [120, 80, 25], rotation: 45 };
+  const column = columnFor(spec);
+  assert.ok(column, 'a turned block needs a sampler; a square one does not');
+  assert.equal(columnFor({ ...spec, rotation: 0 }), null);
+
+  // The middle is always inside, and the top is the top.
+  assert.equal(column(0, 0), 0);
+  // The corners of the *grid* are outside a block turned 45°.
+  const grid = stockGrid(spec);
+  assert.equal(column(grid.origin[0] + 1, grid.origin[1] + 1), null);
+  // A point 45° out along the long axis is inside, its mirror across is not.
+  const k = Math.SQRT1_2;
+  assert.equal(column(55 * k, 55 * k), 0, 'along the turned length');
+  assert.equal(column(-55 * k, 55 * k), null, 'across the turned width');
+});
+
+test('a turned block holds the metal a turned block holds', () => {
+  const spec = { shape: 'box', origin: [-30, -20, -10], size: [60, 40, 10], rotation: 30 };
+  const grid = stockGrid(spec);
+  const stock = new Stock({ origin: grid.origin, size: grid.size, resolution: 0.2, column: columnFor(spec) });
+  // The volume is the billet's, whatever box the columns were laid out in.
+  near(stock.stockVolume, 60 * 40 * 10, 60 * 40 * 10 * 0.005, 'volume of the turned block');
+});
+
+test('a bar is the same bar however it is turned, and an angle is degrees', () => {
+  near(stockAngle({ rotation: 180 }), Math.PI, 1e-12, '180 degrees');
+  const bar = { shape: 'round', origin: [-40, -40, -20], size: [80, 80, 20], diameter: 80, rotation: 30 };
+  const grid = stockGrid(bar);
+  assert.deepEqual(grid.size, bar.size, 'a circle turned is the same circle');
+  assert.match(describeShape({ shape: 'box', size: [10, 10, 10], rotation: 30 }), /30°/);
 });

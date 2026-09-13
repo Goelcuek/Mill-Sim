@@ -26,8 +26,19 @@ export class SetupPanel extends Panel {
       { id: 'checks', label: 'Checks', icon: 'gouge', hint: 'What counts as a crash: clearances, and what is checked at all', render: SetupPanel.prototype.checksPage },
     ]);
     this.gizmoMode = 'translate';
+    /** Which handles the block gets: Move or Turn. */
+    this.stockGizmoMode = 'translate';
     this.importOpts = { units: 'mm', role: 'fixture', recentre: true };
-    app.models.onChange = () => this.refresh();
+    // A fixture that has been moved is in a different place, and the crash
+    // model has to hear about it: dragging a clamp into the tool's path and
+    // being told nothing is the one thing this page must not do.
+    app.models.onChange = (kind) => {
+      if (kind && kind !== 'select') {
+        app.refreshFixtures();
+        if (kind === 'transform') app.rerunIfFinished();
+      }
+      this.refresh();
+    };
     this.render();
   }
 
@@ -231,6 +242,7 @@ export class SetupPanel extends Panel {
           this.refresh();
         },
       }))),
+      ...this.stockHandles(s),
       detail,
       actionRow([
         { label: 'Move by two points…', onClick: () => app.moveStockByPoints(), hint: 'Click a point on the stock, then click its destination' },
@@ -253,6 +265,50 @@ export class SetupPanel extends Panel {
       info,
       el('div.hint', {}, 'Finer cells give sharper corners and scallops but cost memory. 0.2–0.4 mm suits most parts; 0.025 mm is for inspecting a finish.'),
     ]);
+  }
+
+  /**
+   * Dragging the block rather than typing where it goes.
+   *
+   * The handles are the same ones the fixtures have, with one ring missing:
+   * the simulation is a field of vertical columns, so a block turned in the
+   * vice is exact and a block tipped out of plane is a solid it cannot
+   * hold. Tilting the part is what the machine's rotaries are for.
+   */
+  stockHandles(s) {
+    const app = this.app;
+    const on = !!(app.stockGizmo && app.stockGizmo.attached);
+    const round = s.shape === 'round';
+
+    const modes = el('div.btn-group', {}, [['translate', 'Move'], ['rotate', 'Turn']].map(([mode, label]) => el(`button.btn${this.stockGizmoMode === mode ? '.active' : ''}`, {
+      type: 'button',
+      disabled: !on || (mode === 'rotate' && round),
+      title: mode === 'rotate' && round ? 'A bar is the same bar however it is turned' : '',
+      onclick: () => {
+        this.stockGizmoMode = mode;
+        app.stockGizmo.setMode(mode);
+        this.refresh();
+      },
+    }, label)));
+
+    return [
+      row([
+        modes,
+        button(on ? 'Hide handles' : 'Show handles', () => {
+          if (on) app.clearSelection();
+          else app.selectStock();
+          this.refresh();
+        }, { variant: on ? '' : 'primary' }),
+        round ? null : field('Turned', Number((Number(s.rotation) || 0).toFixed(2)), {
+          step: 5, unit: '°',
+          title: 'How far the billet is turned in the vice, about Z',
+          onChange: (v) => { app.setStock({ rotation: v || 0 }); this.refresh(); },
+        }),
+      ].filter(Boolean)),
+      el('div.hint', {}, round
+        ? 'Click the bar in the viewport to put handles on it and drag it where it is clamped. A bar has no angle to set — it is the same bar however it is turned.'
+        : 'Click the block in the viewport to put handles on it: drag an arrow to slide it, or the ring to turn it in the vice. Only about Z — material runs in columns from the base upwards, so a block tipped out of plane is a solid this simulation cannot hold, and tilting the part is what the machine\u2019s rotaries do. Moving or turning it resets the cut.'),
+    ];
   }
 
   // ---- work offsets ------------------------------------------------------
@@ -326,7 +382,7 @@ export class SetupPanel extends Panel {
     for (const file of files || []) {
       try {
         const model = await app.models.addFromFile(file, this.importOpts);
-        app.models.select(model);
+        app.selectModel(model);
         app.notify(`Imported ${model.name} — ${model.triangles.toLocaleString()} triangles.`, 'ok');
       } catch (err) {
         app.notify(err.message, 'error');
@@ -353,7 +409,7 @@ export class SetupPanel extends Panel {
     }
     for (const m of app.models.models) {
       list.appendChild(el(`div.list-item${app.models.selected === m ? '.selected' : ''}`, {
-        onclick: () => app.models.select(m),
+        onclick: () => app.selectModel(m),
       }, [
         el('div.swatch', { style: { background: `#${MODEL_ROLES[m.role].color.toString(16).padStart(6, '0')}` } }),
         el('div.list-main', {}, [
@@ -416,6 +472,7 @@ export class SetupPanel extends Panel {
       : { x: 0, y: 0, z: 0 };
 
     return section(`Placement · ${m.name}`, [
+      el('div.hint', {}, 'Drag the handles in the viewport, or type the numbers. Clicking another fixture — or the stock — moves the handles to it; clicking nothing, or Escape, puts them away.'),
       row([button('Move by two points…', () => app.moveModelByPoints(), { variant: 'primary' })]),
       el('div.btn-group', {}, GIZMOS.map(([mode, label]) => el(`button.btn${this.gizmoMode === mode ? '.active' : ''}`, {
         type: 'button',
@@ -483,7 +540,7 @@ export class SetupPanel extends Panel {
           this.refresh();
         }),
         button('Export STL', () => app.exportModelStl(m)),
-        button('Deselect', () => app.models.select(null)),
+        button('Deselect', () => app.clearSelection()),
       ]),
     ]);
   }

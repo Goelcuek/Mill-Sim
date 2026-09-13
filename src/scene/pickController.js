@@ -324,6 +324,49 @@ export class PickController {
   }
 
   /**
+   * What is under the cursor, when nobody is asking for a point.
+   *
+   * This is the plain click: the thing being pointed at rather than a
+   * position on it, which is what "click the stock to move it" needs. The
+   * ray is the same ray, in the same frame, so a click that lands on the
+   * block is the same hit a pick would have taken.
+   *
+   * @returns {null | {kind:'stock'|'model', model?:object, point:number[]}}
+   */
+  objectAt(event) {
+    this.rayFor(event);
+    const r = this.workRay;
+    const origin = [r.origin.x, r.origin.y, r.origin.z];
+    const dir = [r.direction.x, r.direction.y, r.direction.z];
+
+    let best = null;
+    const stock = this.ctx.stock();
+    if (stock) {
+      const hit = stock.raycast(origin, dir);
+      if (hit) best = { kind: 'stock', point: hit.point, distance: hit.distance };
+    }
+
+    const models = this.ctx.models();
+    const visible = models ? models.models.filter((m) => m.visible) : [];
+    if (visible.length) {
+      const hits = this.raycaster.intersectObjects(visible.map((m) => m.mesh), false);
+      if (hits.length && (!best || hits[0].distance < best.distance)) {
+        const model = visible.find((m) => m.mesh === hits[0].object);
+        if (model) {
+          const h = hits[0];
+          best = {
+            kind: 'model',
+            model,
+            point: this.toWork([h.point.x, h.point.y, h.point.z]),
+            distance: h.distance,
+          };
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
    * Find the best point under the cursor: the closest snap candidate within
    * the screen radius, else the raw surface hit.
    */

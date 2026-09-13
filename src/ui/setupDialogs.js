@@ -188,7 +188,8 @@ export function openStockDialog(app, panel) {
     body,
     confirm: 'Add stock',
     onConfirm: () => {
-      const patch = { shape: state.shape, model: null };
+      // A new billet starts square to the machine; it can be turned after.
+      const patch = { shape: state.shape, model: null, rotation: 0 };
       if (state.shape === 'round') {
         patch.diameter = state.diameter;
         patch.size = [state.diameter, state.diameter, state.height];

@@ -10,6 +10,39 @@
 // collision, volume, the rendered surface — already works column by column
 // and needs to know nothing about which of the three it is looking at.
 
+/** The rotation this stock is clamped at, in radians about Z. */
+export function stockAngle(spec) {
+  const deg = Number(spec && spec.rotation) || 0;
+  return (deg * Math.PI) / 180;
+}
+
+/** The middle of the billet in plan, which is what it turns about. */
+function centreOf(spec) {
+  return [spec.origin[0] + spec.size[0] / 2, spec.origin[1] + spec.size[1] / 2];
+}
+
+/**
+ * A rectangular billet clamped at an angle.
+ *
+ * Only about Z. A column of material runs from the base upwards, so a block
+ * tipped about X or Y would have air under its low corner and metal above
+ * it, which this model cannot hold — and pretending otherwise would carve
+ * a solid nobody clamped. Turning it in the vice is a different matter:
+ * every column still runs from the base to the top, so it is exact.
+ */
+export function boxColumn({ centre, half, angle, top }) {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return (x, y) => {
+    const dx = x - centre[0];
+    const dy = y - centre[1];
+    // The point in the billet's own frame.
+    const lx = dx * c + dy * s;
+    const ly = -dx * s + dy * c;
+    return Math.abs(lx) <= half[0] && Math.abs(ly) <= half[1] ? top : null;
+  };
+}
+
 /** A round bar: the circle inscribed in the stock's own footprint. */
 export function cylinderColumn({ centre, radius, top }) {
   const r2 = radius * radius;
@@ -131,21 +164,72 @@ export function columnFor(spec) {
     const ox = spec.origin[0] - b.min[0];
     const oy = spec.origin[1] - b.min[1];
     const oz = spec.origin[2] - b.min[2];
-    const fn = (x, y) => {
-      const z = sample(x - ox, y - oy);
-      return z === null ? null : z + oz;
-    };
+    const angle = stockAngle(spec);
+    const [cx, cy] = centreOf(spec);
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const fn = angle === 0
+      ? (x, y) => {
+        const z = sample(x - ox, y - oy);
+        return z === null ? null : z + oz;
+      }
+      : (x, y) => {
+        const dx = x - cx;
+        const dy = y - cy;
+        const z = sample(cx + dx * c + dy * s - ox, cy - dx * s + dy * c - oy);
+        return z === null ? null : z + oz;
+      };
     fn.bounds = b;
     fn.triangles = sample.triangles;
     return fn;
   }
 
+  // A square block needs no sampler at all — every column starts at the top
+  // — and saying so saves an array the size of the grid. Turned in the
+  // vice it is a shape like any other.
+  const angle = stockAngle(spec);
+  if (angle !== 0) {
+    return boxColumn({
+      centre: centreOf(spec),
+      half: [spec.size[0] / 2, spec.size[1] / 2],
+      angle,
+      top,
+    });
+  }
+
   return null;
+}
+
+/**
+ * The grid the simulation needs to hold this stock.
+ *
+ * The columns are axis-aligned whatever the billet is doing, so a block
+ * clamped at an angle needs a grid big enough for its corners. The stock's
+ * own origin and size stay what the shop typed in — the billet — and this
+ * is the box the columns are laid out in.
+ *
+ * @returns {{origin:number[], size:number[]}}
+ */
+export function stockGrid(spec) {
+  const angle = spec.shape === 'round' ? 0 : stockAngle(spec);
+  if (angle === 0) return { origin: [...spec.origin], size: [...spec.size] };
+  const c = Math.abs(Math.cos(angle));
+  const s = Math.abs(Math.sin(angle));
+  const w = spec.size[0] * c + spec.size[1] * s;
+  const h = spec.size[0] * s + spec.size[1] * c;
+  const [cx, cy] = centreOf(spec);
+  return {
+    origin: [cx - w / 2, cy - h / 2, spec.origin[2]],
+    size: [w, h, spec.size[2]],
+  };
 }
 
 /** What to call this shape in the interface. */
 export function describeShape(spec) {
+  const turned = spec.shape !== 'round' && Number(spec.rotation)
+    ? ` · ${Number(spec.rotation).toFixed(Number.isInteger(Number(spec.rotation)) ? 0 : 1)}°`
+    : '';
   if (spec.shape === 'round') return `Ø${spec.diameter ?? Math.min(spec.size[0], spec.size[1])} bar`;
-  if (spec.shape === 'model') return spec.model ? `${spec.model.name}` : 'model';
-  return 'rectangular block';
+  if (spec.shape === 'model') return `${spec.model ? spec.model.name : 'model'}${turned}`;
+  return `rectangular block${turned}`;
 }

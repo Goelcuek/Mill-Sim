@@ -139,6 +139,78 @@ try {
   check(siemens.dialect === 'siemens', 'loading the Siemens example did not set the dialect');
   check(siemens.errors === 0 && siemens.removed > 1000, 'the Siemens program did not read as Siemens');
 
+  // ---- the stock can be dragged where it belongs ------------------------
+  //
+  // The handles are only useful if a plain click puts them on the block and
+  // a drag actually moves it, which is three separate pieces of wiring: the
+  // hit test, the gizmo, and the rebuild on release.
+  {
+    await page.click('.ribbon-tab[data-tab="setup"]');
+    await page.click('.ribbon-page[data-page="stock"]');
+    await page.waitForTimeout(300);
+    const canvas = await page.$('canvas');
+    const box = await canvas.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(400);
+    check(await page.evaluate(() => window.millsim.stockGizmo.attached),
+      'clicking the stock did not put the handles on it');
+    check(await page.evaluate(() => window.millsim.panels.setup.page === 'stock'),
+      'clicking the stock did not open the Stock page');
+
+    const at = await page.evaluate(() => {
+      const app = window.millsim;
+      const v = app.stockGizmo.proxy.getWorldPosition(app.viewer.camera.position.clone());
+      v.project(app.viewer.camera);
+      const r = app.viewer.renderer.domElement.getBoundingClientRect();
+      return { x: r.left + ((v.x + 1) / 2) * r.width, y: r.top + ((1 - v.y) / 2) * r.height };
+    });
+    // Walk out from the middle until a handle lights up under the pointer.
+    let handle = null;
+    for (let d = 12; d < 220 && !handle; d += 4) {
+      await page.mouse.move(at.x + d, at.y);
+      if (await page.evaluate(() => window.millsim.stockGizmo.gizmo.axis)) handle = { x: at.x + d, y: at.y };
+    }
+    check(!!handle, 'no transform handle was found on the stock');
+
+    const before = await page.evaluate(() => [...window.millsim.state.stock.origin]);
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + 60, handle.y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    const after = await page.evaluate(() => ({
+      origin: [...window.millsim.state.stock.origin],
+      grid: [...window.millsim.stock.origin],
+    }));
+    const moved = Math.hypot(after.origin[0] - before[0], after.origin[1] - before[1], after.origin[2] - before[2]);
+    console.log('stock drag:', JSON.stringify({ before, after: after.origin }));
+    check(moved > 1, `dragging the handle moved the stock ${moved.toFixed(3)} mm`);
+    check(Math.abs(after.grid[0] - after.origin[0]) < 1e-6, 'the simulated grid did not follow the block');
+
+    // And turned in the vice: the billet keeps its size, the grid grows to
+    // hold its corners, and the metal in it is the same metal.
+    await page.evaluate(() => window.millsim.setStock({ rotation: 25 }));
+    await page.waitForTimeout(700);
+    const turned = await page.evaluate(() => ({
+      size: [...window.millsim.state.stock.size],
+      grid: [...window.millsim.stock.size],
+      volume: window.millsim.stock.stockVolume,
+      rings: { x: window.millsim.stockGizmo.gizmo.showX, z: window.millsim.stockGizmo.gizmo.showZ },
+    }));
+    console.log('stock turned:', JSON.stringify({ grid: turned.grid.map((v) => +v.toFixed(2)), volume: +turned.volume.toFixed(0) }));
+    check(turned.grid[0] > turned.size[0] && turned.grid[1] > turned.size[1], 'a turned block needs a bigger grid');
+    check(Math.abs(turned.volume - turned.size[0] * turned.size[1] * turned.size[2]) < turned.volume * 0.01,
+      'a turned block holds different metal from the block it is');
+    await page.evaluate(() => window.millsim.setStock({ rotation: 0 }));
+
+    // And they are a setup affordance: leaving the tab puts them away
+    // rather than leaving something standing in front of the part.
+    await page.click('.ribbon-tab[data-tab="program"]');
+    await page.waitForTimeout(400);
+    check(!(await page.evaluate(() => window.millsim.stockGizmo.attached)),
+      'the handles stayed up after leaving the Setup tab');
+  }
+
   // ---- a project saves and opens into a working session -----------------
   await loadExample(page, 0, 'Demo bracket');
   await page.evaluate(() => {

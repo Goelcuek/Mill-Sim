@@ -14,12 +14,13 @@ import { PRESETS, buildPreset } from './machine/presets.js';
 import { Kinematics } from './machine/kinematics.js';
 import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
+import { StockGizmo } from './scene/stockGizmo.js';
 import { MeasureView, circleThrough } from './scene/measureView.js';
 import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
 import { Stock } from './sim/stock.js';
-import { columnFor, describeShape } from './sim/stockShape.js';
+import { columnFor, describeShape, stockGrid } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
@@ -40,10 +41,22 @@ import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
-import { fmt, fmtDuration, clamp, uid, clone } from './core/util.js';
+import { fmt, fmtDuration, clamp, uid, clone, wrapAngle, deg2rad, rad2deg } from './core/util.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
 export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
+
+/** A drag, in the words the Stock page uses: millimetres and degrees. */
+function placementText(move, turn) {
+  const parts = [];
+  const axes = ['X', 'Y', 'Z'];
+  for (let i = 0; i < 3; i++) {
+    if (Math.abs(move[i]) > 5e-4) parts.push(`${axes[i]} ${move[i] > 0 ? '+' : '−'}${fmt(Math.abs(move[i]), 2)} mm`);
+  }
+  const deg = rad2deg(turn);
+  if (Math.abs(deg) > 0.05) parts.push(`turned ${deg > 0 ? '+' : '−'}${fmt(Math.abs(deg), 1)}°`);
+  return parts.join('  ');
+}
 
 const SPEEDS = [
   { value: '0.25', label: '¼×' },
@@ -62,6 +75,14 @@ export class App {
         shape: 'box',
         size: [120, 80, 25],
         origin: [-60, -40, -25],
+        /**
+         * How far the billet is turned in the vice, in degrees about Z.
+         *
+         * Only about Z: material runs in columns from the base upwards, so
+         * a block tipped about X or Y is a solid this model cannot hold.
+         * Tilting the *part* is what the machine's rotaries do.
+         */
+        rotation: 0,
         resolution: 0.28,
         /** Round bar only. */
         diameter: 80,
@@ -256,7 +277,153 @@ export class App {
       },
     });
     this.pick.onUpdate = (s) => this.renderPickBar(s);
+
+    // The block gets handles of its own, like the fixtures have.
+    this.stockGizmo = new StockGizmo(this.viewer, {
+      frame: () => this.machineView.workGroup,
+      onPreview: (move, turn) => this.previewStockPlacement(move, turn),
+      onCommit: (move, turn) => this.commitStockPlacement(move, turn),
+      onChange: (move, turn) => this.showPlacementBar(placementText(move, turn)),
+    });
+    this.bindViewportSelection();
     this.refreshOrigins();
+  }
+
+  /**
+   * Click something to work on it.
+   *
+   * A list is a poor way to say "that one" about a thing you can see. So a
+   * plain click in the viewport selects what it lands on — the block, or a
+   * fixture — puts the handles on it and opens the page that describes it.
+   * A click on nothing puts the handles away.
+   *
+   * A click is only a click when it did not orbit the camera and did not
+   * land on a handle, which is what the two guards below are for.
+   */
+  bindViewportSelection() {
+    const dom = this.viewer.renderer.domElement;
+    let downAt = null;
+    dom.addEventListener('pointerdown', (e) => {
+      downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+    });
+    dom.addEventListener('pointerup', (e) => {
+      const from = downAt;
+      downAt = null;
+      if (!from || e.button !== 0) return;
+      if (this.activeTab !== 'setup') return;            // handles live on Setup
+      if (this.pick.active) return;                      // a pick owns this click
+      if (this.gizmoBusy()) return;                      // that was a handle
+      if (Math.hypot(e.clientX - from.x, e.clientY - from.y) > 4) return;   // an orbit
+      this.selectAt(e);
+    });
+  }
+
+  /** Is a transform handle under the pointer, or being pulled? */
+  gizmoBusy() {
+    const m = this.models.gizmo;
+    return this.stockGizmo.busy || !!(m && (m.dragging || m.axis));
+  }
+
+  selectAt(event) {
+    const hit = this.pick.objectAt(event);
+    if (!hit) { this.clearSelection(); return; }
+    if (hit.kind === 'model') this.selectModel(hit.model);
+    else this.selectStock();
+  }
+
+  /** Put the handles on a fixture and open the page that describes it. */
+  selectModel(model) {
+    this.stockGizmo.detach();
+    this.models.select(model);
+    this.setPage('setup', 'fixtures');
+  }
+
+  /** Put the handles on the block and open the Stock page. */
+  selectStock() {
+    this.models.select(null);
+    this.attachStockGizmo();
+    this.setPage('setup', 'stock');
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+  }
+
+  clearSelection() {
+    const had = this.stockGizmo.attached || !!this.models.selected;
+    this.stockGizmo.detach();
+    this.models.select(null);
+    this.showPlacementBar(null);
+    if (had && this.panels && this.panels.setup) this.panels.setup.refresh();
+  }
+
+  /** Where the handles sit: the middle of the block, turned as it is. */
+  attachStockGizmo() {
+    const s = this.state.stock;
+    this.stockGizmo.attach({
+      centre: [
+        s.origin[0] + s.size[0] / 2,
+        s.origin[1] + s.size[1] / 2,
+        s.origin[2] + s.size[2] / 2,
+      ],
+      rotation: deg2rad(s.rotation || 0),
+    });
+  }
+
+  /**
+   * Show the drag before it is real.
+   *
+   * Moving the stock rebuilds a grid of up to twenty million columns, which
+   * is not something to do sixty times a second — so the drag moves the
+   * picture and the release moves the block.
+   */
+  previewStockPlacement(move, turn) {
+    const g = this.stockView.group;
+    if (!move[0] && !move[1] && !move[2] && !turn) {
+      g.matrixAutoUpdate = true;
+      g.position.set(0, 0, 0);
+      g.rotation.set(0, 0, 0);
+      g.scale.set(1, 1, 1);
+      g.updateMatrix();
+    } else {
+      const s = this.state.stock;
+      const cx = s.origin[0] + s.size[0] / 2;
+      const cy = s.origin[1] + s.size[1] / 2;
+      g.matrixAutoUpdate = false;
+      g.matrix
+        .makeTranslation(cx + move[0], cy + move[1], move[2])
+        .multiply(new THREE.Matrix4().makeRotationZ(turn))
+        .multiply(new THREE.Matrix4().makeTranslation(-cx, -cy, 0));
+    }
+    g.matrixWorldNeedsUpdate = true;
+    this.viewer.invalidate();
+  }
+
+  /** The drag is over: move the block itself. */
+  commitStockPlacement(move, turn) {
+    const s = this.state.stock;
+    // A drag lands on a float; a setup sheet is written in microns. Rounding
+    // here is what keeps "Min X" from reading −51.803870054701065.
+    const round = (v, places) => Number(v.toFixed(places));
+    const origin = [0, 1, 2].map((i) => round(s.origin[i] + move[i], 3));
+    const rotation = round(wrapAngle((Number(s.rotation) || 0) + rad2deg(turn)), 2);
+    this.previewStockPlacement([0, 0, 0], 0);
+    this.showPlacementBar(null);
+    this.setStock({ origin, rotation });
+    this.attachStockGizmo();
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+    this.notify(`Stock ${placementText(move, turn) || 'unchanged'}. The cut was reset.`, 'ok');
+  }
+
+  /** What a drag is doing, while it is doing it. */
+  showPlacementBar(text) {
+    if (!this.pickBar) return;
+    if (this.pick && this.pick.active) return;
+    clear(this.pickBar);
+    if (!text) { this.pickBar.classList.remove('on'); return; }
+    this.pickBar.classList.add('on');
+    this.pickBar.append(
+      el('span.pick-title', {}, 'Stock'),
+      el('span.pick-coord', {}, text),
+      el('span.pick-hint', {}, 'release to move the block'),
+    );
   }
 
   refreshOrigins() {
@@ -339,6 +506,9 @@ export class App {
     if (this.pick && this.pick.active) this.pick.cancel();
     const panel = this.panels[tabId];
     if (!panel) return;
+    // Placement handles belong to the setup. Leaving them standing while a
+    // program runs would only put something in the way of the part.
+    if (tabId !== 'setup' && this.stockGizmo) this.clearSelection();
     this.activeTab = tabId;
     if (pageId) panel.setPage(pageId);
     if (this.panelHost.firstChild !== panel.root) {
@@ -388,6 +558,7 @@ export class App {
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape' && this.pick.active) { this.pick.cancel(); return; }
+      if (e.key === 'Escape') { this.clearSelection(); return; }
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
       else if (e.key === 'ArrowRight') this.stepMove();
@@ -444,13 +615,20 @@ export class App {
       s.size = [d, d, Math.max(s.size[2], 0.2)];
     }
     if (s.shape === 'model' && !(s.model && s.model.positions)) s.shape = 'box';
+    // A bar is the same bar however it is turned, and an angle is an angle.
+    if (s.shape === 'round') s.rotation = 0;
+    else s.rotation = wrapAngle(Number(s.rotation) || 0);
   }
 
   rebuildStock() {
     const s = this.state.stock;
+    // The columns are axis-aligned whatever the billet is doing, so a block
+    // clamped at an angle is simulated in a grid big enough for its corners
+    // while its own size stays what the shop typed in.
+    const grid = stockGrid(s);
     this.stock = new Stock({
-      origin: s.origin,
-      size: s.size,
+      origin: grid.origin,
+      size: grid.size,
       resolution: s.resolution,
       // What shape it starts as. A plain block needs no sampler, and gets
       // none, so nothing changes for the case that is already right.
@@ -463,6 +641,8 @@ export class App {
     this.refreshTarget();
     this.refreshOrigins();
     this.refreshResults();
+    // The handles sit on the middle of the block, which has just moved.
+    if (this.stockGizmo && this.stockGizmo.attached) this.attachStockGizmo();
     // The Stock page describes this block — its shape, its grid, what is
     // left of it — so it is redrawn with it rather than left saying what
     // the last one was.
@@ -1482,7 +1662,7 @@ export class App {
       const model = this.models.add({ name: spec.name, positions: box.positions, role: kind === 'parallels' ? 'fixture' : 'clamp', recentre: false });
       model.source = { file: 'built-in primitive', format: 'box', size: [spec.max[0] - spec.min[0], spec.max[1] - spec.min[1], spec.max[2] - spec.min[2]] };
     }
-    this.notify('Fixture added. Drag it with the gizmo or type exact coordinates.', 'ok');
+    this.notify('Fixture added. Click it in the viewport to put handles on it — drag to move, or the rings to turn it — or type exact coordinates.', 'ok');
   }
 
   dropModelToTable(model) {
