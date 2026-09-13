@@ -8,6 +8,7 @@
 import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
 import { Vars, evaluate, ARGUMENTS } from './macro.js';
+import { resolveDialect } from './dialects.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -268,10 +269,18 @@ export function interpret(text, config = {}) {
    * source ends in a sentinel that returns from the call that entered it —
    * which is also the implicit M99 at the end of a subprogram file.
    */
+  // How this control spells its macros. Everything that reads a block goes
+  // through here, so a machine set to Siemens reads Siemens everywhere —
+  // its subprograms and its own M-code macros included.
+  const dialect = resolveDialect(
+    (cfg.controller && cfg.controller.dialect) || (cfg.controller && cfg.controller.flavour) || 'fanuc',
+    cfg.controller && cfg.controller.syntax,
+  );
+
   const blocks = [];
   const appendSource = (src, body) => {
     const start = blocks.length;
-    for (const b of lex(body)) {
+    for (const b of lex(body, dialect)) {
       b.src = src;
       blocks.push(b);
     }
@@ -531,40 +540,67 @@ export function interpret(text, config = {}) {
   // to the program. Everything that reads a number can read one of these,
   // which is what makes a family of parts one program instead of twenty.
 
-  const vars = new Vars();
+  const vars = new Vars(dialect.locals);
 
-  /** Where an N number is, within the source that asked for it. */
+  /**
+   * Where a jump goes, within the source that asked for it.
+   *
+   * Controls that count lines look for an N number; controls that name
+   * their labels look for the name. Which of the two is the dialect's
+   * business, so both live here.
+   */
   const labelCache = new Map();
-  const findLabel = (from, n) => {
-    const key = `${from.src || ''}\u0000${n}`;
+  const findLabel = (from, target) => {
+    const key = `${from.src || ''}\u0000${target}`;
     if (labelCache.has(key)) return labelCache.get(key);
+    const named = typeof target === 'string';
     let found = -1;
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
-      if ((b.src || null) !== (from.src || null) || !b.words) continue;
+      if ((b.src || null) !== (from.src || null)) continue;
+      if (named) {
+        if (b.macro && b.macro.label && b.macro.label.toUpperCase() === target.toUpperCase()) { found = i; break; }
+        continue;
+      }
+      if (!b.words) continue;
       const label = b.words.find((w) => w.letter === 'N');
-      if (label && Math.round(label.value) === Math.round(n)) { found = i; break; }
+      if (label && Math.round(label.value) === Math.round(target)) { found = i; break; }
     }
     labelCache.set(key, found);
     return found;
   };
 
-  /** The END that closes the loop opened at `idx`, and the other way round. */
+  /**
+   * The block that closes a loop, and the one that opened it.
+   *
+   * Controls disagree about the words — END 1, ENDWHILE, ENDFOR, UNTIL —
+   * but every one of them is a head and a tail with a nesting level
+   * between, so the pairing is one piece of code over a small table.
+   */
+  const TAIL_OF = { while: 'end', do: 'end', for: 'end-for', repeat: 'until' };
+  const HEADS_OF = { end: ['while', 'do'], 'end-for': ['for'], until: ['repeat'] };
+
   const loopCache = new Map();
   const matchLoop = (idx, forward) => {
     const key = `${idx}:${forward}`;
     if (loopCache.has(key)) return loopCache.get(key);
     const from = blocks[idx];
-    const level = from.macro.control.level;
+    const control = from.macro.control;
+    const level = control.level || 0;
+    const tail = forward ? TAIL_OF[control.kind] : control.kind;
+    const heads = forward ? Object.keys(TAIL_OF).filter((k) => TAIL_OF[k] === tail) : HEADS_OF[control.kind] || [];
     let depth = 0;
     let found = -1;
+
     for (let i = idx + (forward ? 1 : -1); forward ? i < blocks.length : i >= 0; i += forward ? 1 : -1) {
       const b = blocks[i];
       if ((b.src || null) !== (from.src || null) || !b.macro || !b.macro.control) continue;
       const c = b.macro.control;
-      if (c.level !== level) continue;
-      if ((forward && (c.kind === 'while' || c.kind === 'do')) || (!forward && c.kind === 'end')) depth++;
-      else if ((forward && c.kind === 'end') || (!forward && (c.kind === 'while' || c.kind === 'do'))) {
+      if ((c.level || 0) !== level) continue;
+      const isHead = heads.includes(c.kind);
+      const isTail = c.kind === tail;
+      if (forward ? isHead : isTail) depth++;
+      else if (forward ? isTail : isHead) {
         if (depth === 0) { found = i; break; }
         depth--;
       }
@@ -681,9 +717,14 @@ export function interpret(text, config = {}) {
         const c = b.macro.control;
         if (c) {
           if (c.kind === 'goto' || (c.kind === 'if-goto' && evaluate(c.cond, vars))) {
-            const n = evaluate(c.target, vars);
-            const at = findLabel(b, n);
-            if (at < 0) { warn(b.line, `GOTO N${n}: there is no such line in this program.`, 'error'); continue; }
+            const target = c.label !== undefined ? c.label : evaluate(c.target, vars);
+            const at = findLabel(b, target);
+            if (at < 0) {
+              warn(b.line, typeof target === 'string'
+                ? `There is no label called ${target} in this program.`
+                : `GOTO N${target}: there is no such line in this program.`, 'error');
+              continue;
+            }
             pc = at;
             continue;
           }
@@ -707,8 +748,39 @@ export function interpret(text, config = {}) {
           }
           if (c.kind === 'end') {
             const head = matchLoop(pc - 1, false);
-            if (head < 0) { warn(b.line, `END ${c.level} has no WHILE or DO ${c.level} above it.`, 'error'); continue; }
+            if (head < 0) { warn(b.line, 'This loop is closed but never opened.', 'error'); continue; }
             pc = head;
+            continue;
+          }
+
+          // FOR runs its counter from where it starts to where it ends.
+          // The head sets the counter; the tail counts and comes back.
+          if (c.kind === 'for') {
+            const end = matchLoop(pc - 1, true);
+            if (end < 0) { warn(b.line, 'FOR has no ENDFOR.', 'error'); continue; }
+            vars.set(evaluate(c.counter.target, vars), evaluate(c.counter.value, vars));
+            if (vars.get(evaluate(c.counter.target, vars)) > evaluate(c.last, vars)) pc = end + 1;
+            continue;
+          }
+          if (c.kind === 'end-for') {
+            const head = matchLoop(pc - 1, false);
+            if (head < 0) { warn(b.line, 'ENDFOR has no FOR above it.', 'error'); continue; }
+            const forControl = blocks[head].macro.control;
+            const n = evaluate(forControl.counter.target, vars);
+            vars.set(n, vars.get(n) + 1);
+            if (vars.get(n) <= evaluate(forControl.last, vars)) pc = head + 1;
+            continue;
+          }
+
+          // REPEAT runs its body and then asks whether to go round again.
+          if (c.kind === 'repeat') {
+            if (matchLoop(pc - 1, true) < 0) { warn(b.line, 'REPEAT has no UNTIL.', 'error'); }
+            continue;
+          }
+          if (c.kind === 'until') {
+            const head = matchLoop(pc - 1, false);
+            if (head < 0) { warn(b.line, 'UNTIL has no REPEAT above it.', 'error'); continue; }
+            if (!evaluate(c.cond, vars)) pc = head + 1;
             continue;
           }
         }
@@ -1233,5 +1305,7 @@ export function interpret(text, config = {}) {
     stats: { rapidDistance, feedDistance, cycleTime, bounds, moveCount: moves.length, blockCount: blocks.length },
     /** What the macro variables came to, for anyone who wants to look. */
     variables: vars.snapshot(),
+    /** How this control writes one, so a readout can say R1 rather than #1. */
+    variablePrefix: dialect.sigil || dialect.letters[0] || '#',
   };
 }

@@ -83,8 +83,9 @@ in metal. Which parts of the assembly are checked at all is a switch, and
 two exceptions live on the fixture itself — a soft jaw being cut can be
 ignored, a fragile one can ask for more room than everything else.
 
-**Macro B.** Variables, arithmetic and control flow, because that is what
-the programs in a real control's memory are made of:
+**Macros, in whatever the control spells.** Variables, arithmetic and
+control flow, because that is what the programs in a real control's memory
+are made of:
 
 ```gcode
 #1 = 0
@@ -97,14 +98,44 @@ WHILE [#1 LT #2] DO 1
 END 1
 ```
 
-Assignment and arithmetic with the usual precedence and the usual
-functions (in degrees, like the control), an expression anywhere a number
-goes, `IF … GOTO`, `IF … THEN`, `WHILE … DO … END`, and `G65` calls whose
-letters arrive as `#1`, `#2`, `#3` — local to that call, so a macro can
-call a macro. A program that uses none of it is read exactly as it was
-before: only blocks with a `#`, a bracket or a keyword take the macro
-path. What a run left in the variables is on **Program › Summary**, which
-is the first place to look when a macro program lands somewhere odd.
+That is Fanuc's spelling. It is not *the* spelling — Siemens writes the
+same job like this:
+
+```gcode
+R1 = 0
+WHILE R1 < R21
+  R4 = 360. * R3 / R21
+  G0 X=R20 * COS(R4) Y=R20 * SIN(R4)
+  R1 = R1 + 1
+ENDWHILE
+```
+
+so the syntax is a table rather than an assumption: which character marks
+a variable (`#`) or which letter introduces one (`R`, `Q`, `V`), which
+brackets group an expression, how the six comparisons are spelled, what
+the control-flow words are called, whether a jump goes to a line number or
+a named label, whether values are written `X100` or `X=100`, whether a
+variable is local to a macro call, and — the one that bites — whether
+round brackets are arithmetic or a remark. Get that last one wrong and
+`X=SIN(30)` becomes a comment.
+
+**Machine › Macros › Reads like** picks the table: Fanuc (also Haas, Mazak
+and Fadal), Siemens 840D, Heidenhain Q parameters, Okuma V. **Edit
+syntax…** changes any of it, which is how a control nobody here has ever
+seen gets described rather than waited for — give it an `@` sigil and
+`LOOP … ENDLOOP` and it reads that from the next block on. The table is
+saved with the machine, so a program that moves between machines is read
+by each of them the way that machine would read it.
+
+Underneath, all of them get the same thing: assignment and arithmetic with
+the usual precedence and the usual functions (in degrees, like the
+control), an expression anywhere a number goes, conditional jumps and
+assignments, `WHILE` loops, `FOR` and `REPEAT` on the controls that have
+them, and macro calls whose letters arrive as arguments. A program that
+uses none of it is read exactly as it was before. What a run left in the
+variables is on **Program › Summary** — written the way that control
+writes them — which is the first place to look when a macro program lands
+somewhere odd.
 
 **Measuring.** A verifier that cannot answer "how deep is that pocket" is
 asking to be trusted and checked somewhere else. **View › Measure** takes
@@ -603,7 +634,7 @@ src/
     icons.js          the stroked icon set
     ...               panels, G-code editor, preview, DOM helpers
   app.js              state, wiring and the frame loop
-examples/             the six example programs
+examples/             the seven example programs
   machines/           a worked machine definition to copy
 scripts/              static server, smoke test, single-file build
 test/                 unit tests (node --test)

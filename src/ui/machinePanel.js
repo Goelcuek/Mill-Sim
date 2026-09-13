@@ -9,8 +9,9 @@ import { el, field, select, checkbox, button, row, section, clear, pickFile, dow
 import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
 import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineDialogs.js';
-import { openMacroDialog, openParameterDialog } from './macroDialogs.js';
+import { openMacroDialog, openParameterDialog, openSyntaxDialog } from './macroDialogs.js';
 import { PARAMETER_HINTS, macroReferences } from '../machine/macros.js';
+import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor } from '../gcode/dialects.js';
 import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
@@ -100,7 +101,7 @@ export class MachinePanel extends Panel {
   }
 
   macrosPage() {
-    return [this.macroSection(), this.machineSubSection(), this.parameterSection()];
+    return [this.syntaxSection(), this.macroSection(), this.machineSubSection(), this.parameterSection()];
   }
 
   /** The body the Assembly page is acting on. */
@@ -544,9 +545,18 @@ export class MachinePanel extends Panel {
         { value: 'fanuc', label: 'Fanuc' },
         { value: 'haas', label: 'Haas' },
         { value: 'fidia', label: 'Fidia' },
+        { value: 'siemens', label: 'Siemens 840D' },
+        { value: 'heidenhain', label: 'Heidenhain' },
+        { value: 'okuma', label: 'Okuma' },
         { value: 'generic', label: 'Generic ISO' },
-      ], c.flavour, (v) => set({ flavour: v })),
-      el('div.hint', {}, 'The five-axis codes read are the Fanuc ones — G68.2, G69, G53.1, G43.4 and G43.5. The flavour is recorded with the machine; it does not yet change how they are interpreted.'),
+      ], c.flavour, (v) => {
+        // The flavour picks which macro table this control starts from,
+        // unless the machine has already been told to read another.
+        const patch = { flavour: v };
+        if (!c.syntax) patch.dialect = FLAVOUR_DIALECT[v] || 'fanuc';
+        set(patch);
+      }),
+      el('div.hint', {}, `The flavour decides how macros are written — see Macros, which reads as ${(DIALECTS[c.dialect || FLAVOUR_DIALECT[c.flavour] || 'fanuc'] || DIALECTS.fanuc).name}. The five-axis codes are the Fanuc ones on every flavour so far: G68.2, G69, G53.1, G43.4 and G43.5.`),
 
       el('div.dialog-section-label', {}, 'Power-up state'),
       row([
@@ -582,6 +592,39 @@ export class MachinePanel extends Panel {
   // what it does when it reads an M code, the subprograms that live in its
   // memory, and the positions those two read. All of it is saved with the
   // machine and arrives with it.
+
+  /**
+   * How this control writes a macro.
+   *
+   * `#100 = [#1 + 2]` is not "macro syntax", it is *Fanuc's*. The reader
+   * takes a table of spellings, so the table is a setting — which is what
+   * lets a shop describe the control in front of them instead of the one
+   * this program happened to be written against.
+   */
+  syntaxSection() {
+    const app = this.app;
+    const c = app.state.machine.controller;
+    const baseId = c.dialect || FLAVOUR_DIALECT[c.flavour] || 'fanuc';
+    const dialect = resolveDialect(baseId, c.syntax);
+    const edited = !!c.syntax;
+
+    return section('Macro syntax', [
+      select('Reads like', Object.values(DIALECTS).map((d) => ({ value: d.id, label: d.name })), baseId, (v) => {
+        c.dialect = v;
+        c.syntax = null;                       // a different control, not an edit of this one
+        // Keep the Controller page's flavour honest: a machine reading
+        // Siemens macros is a Siemens, not a Fanuc with a note.
+        if ((FLAVOUR_DIALECT[c.flavour] || 'fanuc') !== v) c.flavour = v;
+        app.setMachine({ controller: { ...c } });
+        this.render();
+      }),
+      el('div.hint', {}, DIALECTS[baseId] ? DIALECTS[baseId].notes : ''),
+      el('pre.code-sample', {}, sampleFor(dialect)),
+      edited ? el('div.inline-warning', {}, `Edited: this machine does not read quite like a standard ${DIALECTS[baseId].name}. ${describeDialect(dialect)}`) : null,
+      addBar('Edit syntax…', () => openSyntaxDialog(app, this), { hint: 'Change the spellings to match the control in front of you' }),
+      el('div.hint', {}, 'Variables, brackets, comparisons, the control-flow words and what counts as a comment. The arithmetic underneath is the same on every control; only the spelling differs, and it is saved with the machine.'),
+    ]);
+  }
 
   macroSection() {
     const app = this.app;

@@ -297,15 +297,16 @@ export class ProgramPanel extends Panel {
     // program that lands in the wrong place is usually a variable that is
     // not what its author thought, so this is the first place to look.
     if (program.variables && program.variables.length) {
+      const mark = program.variablePrefix || '#';
       const grid = el('div.stat-grid', {}, program.variables.slice(0, 24).map((v) => el('div.stat', {}, [
-        el('div.stat-label', {}, `#${v.n}`),
+        el('div.stat-label', {}, `${mark}${v.n}`),
         el('div.stat-value', {}, fmt(v.value, 4)),
       ])));
       this.summaryHost.appendChild(section(`Macro variables (${program.variables.length})`, [
         grid,
         el('div.hint', {}, program.variables.length > 24
-          ? 'The first 24, as they stood when the program ended. Local variables (#1–#33) belong to whichever macro was running and are not listed.'
-          : 'As they stood when the program ended. Local variables (#1–#33) belong to whichever macro was running and are not listed.'),
+          ? `The first 24, as they stood when the program ended. Anything local to a macro call is not listed.`
+          : 'As they stood when the program ended. Anything local to a macro call is not listed.'),
       ]));
     }
 

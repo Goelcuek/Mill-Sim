@@ -133,6 +133,39 @@ export const EXAMPLES = [
     },
     "file": "examples/macro-family-of-parts.nc",
     "lines": 67
+  },
+  {
+    "name": "Siemens 840D bolt circle",
+    "description": "The same job in the other spelling: R parameters, round brackets for arithmetic, symbol comparisons, ENDWHILE, FOR/ENDFOR and a named label. Loading it sets the machine to read Siemens.",
+    "setup": {
+      "stock": {
+        "size": [
+          80,
+          80,
+          20
+        ],
+        "origin": [
+          -40,
+          -40,
+          -20
+        ],
+        "resolution": 0.25
+      },
+      "machine": {
+        "controller": {
+          "flavour": "siemens",
+          "dialect": "siemens",
+          "syntax": null,
+          "plane": 17,
+          "metric": true,
+          "absolute": true,
+          "arcCentreAbsolute": false,
+          "feedMode": 94
+        }
+      }
+    },
+    "file": "examples/siemens-bolt-circle-840d.nc",
+    "lines": 64
   }
 ];
 

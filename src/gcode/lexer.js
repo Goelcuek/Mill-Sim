@@ -7,6 +7,7 @@
 const WORD_RE = /([A-Za-z])\s*([+-]?(?:\d+\.?\d*|\.\d+))/g;
 
 import { hasMacroSyntax, parseMacroBlock } from './macro.js';
+import { DIALECTS } from './dialects.js';
 
 /**
  * @typedef {{ letter:string, value:number, text:string }} Word
@@ -14,14 +15,23 @@ import { hasMacroSyntax, parseMacroBlock } from './macro.js';
  *             blockDelete:boolean, skipped:boolean, error?:string }} Block
  */
 
-/** Strip comments, returning the cleaned code and the comment texts. */
-export function stripComments(line) {
+/**
+ * Strip comments, returning the cleaned code and the comment texts.
+ *
+ * Which marks are comments is the control's business: most read `( … )` as
+ * a remark, and Siemens reads it as arithmetic and takes only `;`. Getting
+ * that wrong turns `X=SIN(30)` into a comment, so it is asked rather than
+ * assumed.
+ */
+export function stripComments(line, dialect) {
+  const d = dialect || DIALECTS.fanuc;
+  const lineMarks = d.lineComments || [';'];
   const comments = [];
   let out = '';
   let depth = 0;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
-    if (c === '(') {
+    if (c === '(' && d.parenComments !== false) {
       depth++;
       let text = '';
       i++;
@@ -37,8 +47,9 @@ export function stripComments(line) {
       comments.push(text.trim());
       continue;
     }
-    if (c === ';') {
-      comments.push(line.slice(i + 1).trim());
+    const mark = lineMarks.find((m) => line.startsWith(m, i));
+    if (mark) {
+      comments.push(line.slice(i + mark.length).trim());
       break;
     }
     out += c;
@@ -51,13 +62,14 @@ export function stripComments(line) {
  * @param {string} text
  * @returns {Block[]}
  */
-export function lex(text) {
+export function lex(text, dialect) {
+  const d = dialect || DIALECTS.fanuc;
   const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
   const blocks = [];
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    const { code, comments } = stripComments(raw);
+    const { code, comments } = stripComments(raw, d);
     let body = code.trim();
 
     let blockDelete = false;
@@ -75,8 +87,8 @@ export function lex(text) {
     // A block that uses variables, brackets or the macro keywords is read
     // by the macro parser instead. Everything else takes the path it
     // always took, which is most blocks in most programs.
-    if (hasMacroSyntax(body)) {
-      const macro = parseMacroBlock(body);
+    if (hasMacroSyntax(body, d)) {
+      const macro = parseMacroBlock(body, d);
       blocks.push({
         line: i + 1,
         raw,
@@ -84,7 +96,7 @@ export function lex(text) {
         comments,
         blockDelete,
         skipped: false,
-        macro: { assigns: macro.assigns, control: macro.control },
+        macro: { assigns: macro.assigns, control: macro.control, label: macro.label },
         error: macro.error,
       });
       continue;

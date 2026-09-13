@@ -42,6 +42,13 @@ export const DEFAULT_MACHINE = {
    */
   controller: {
     flavour: 'fanuc',
+    /**
+     * How this control writes a macro — see gcode/dialects.js. The flavour
+     * picks the starting table; `syntax` is whatever the shop changed
+     * about it, which is how a control nobody has heard of is described.
+     */
+    dialect: 'fanuc',
+    syntax: null,
     plane: 17,
     metric: true,
     absolute: true,

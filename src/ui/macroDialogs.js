@@ -6,9 +6,10 @@
 // filled in and committed as a whole. A subprogram is not: it is a file,
 // and files are opened, which is why there is no window for one.
 
-import { el, field, select, row, checkbox } from './dom.js';
+import { el, field, select, row, checkbox, button } from './dom.js';
 import { Dialog } from './dialog.js';
 import { MACRO_CATALOGUE, normaliseCode, macroReferences } from '../machine/macros.js';
+import { DIALECTS, FLAVOUR_DIALECT, COMPARISONS, LOGIC, resolveDialect, sampleFor } from '../gcode/dialects.js';
 
 /** A monospace editor box, for the things that are G-code. */
 function codeBox(value, onChange, rows = 12) {
@@ -131,6 +132,110 @@ export function openParameterDialog(app, panel) {
       panel.render();
       return true;
     },
+  });
+  dialog.open();
+  return dialog;
+}
+
+/**
+ * What this control's macro language looks like.
+ *
+ * The syntax is a table, not a parser, so it can be edited: a control
+ * nobody here has ever seen is described rather than waited for. The
+ * fields are the whole description — change the sigil and the reader reads
+ * the new one from the next block on.
+ */
+export function openSyntaxDialog(app, panel) {
+  const controller = app.state.machine.controller;
+  const base = DIALECTS[controller.dialect || FLAVOUR_DIALECT[controller.flavour] || 'fanuc'] || DIALECTS.fanuc;
+  const draft = JSON.parse(JSON.stringify(resolveDialect(base.id, controller.syntax)));
+
+  const sample = el('pre.code-sample');
+  const drawSample = () => { sample.textContent = sampleFor(draft); };
+
+  const text = (label, value, onChange, title) => field(label, value ?? '', {
+    type: 'text', title, onChange: (v) => { onChange(String(v || '').trim()); drawSample(); },
+  });
+
+  const body = el('div.dialog-form', {}, [
+    el('div.hint', {}, base.notes),
+
+    el('div.dialog-section-label', {}, 'Variables'),
+    row([
+      text('Marked by', draft.sigil || '', (v) => { draft.sigil = v || null; }, 'The character in front of a variable, as in #100. Leave it empty for controls that use a letter instead.'),
+      text('Or these letters', draft.letters.join(' '), (v) => { draft.letters = v.split(/[\s,]+/).filter(Boolean).map((x) => x.toUpperCase()); }, 'R for Siemens, Q for Heidenhain, V for Okuma. Separate several with spaces.'),
+    ]),
+    row([
+      select('Grouped with', [{ value: '[]', label: '[ square ]' }, { value: '()', label: '( round )' }],
+        draft.group.join(''), (v) => { draft.group = v === '()' ? ['(', ')'] : ['[', ']']; drawSample(); }),
+      select('Values written', [{ value: 'plain', label: 'X100 — straight after the letter' }, { value: 'equals', label: 'X=100 — with an equals' }],
+        draft.wordEquals ? 'equals' : 'plain', (v) => { draft.wordEquals = v === 'equals'; drawSample(); }),
+    ]),
+
+    el('div.dialog-section-label', {}, 'Comparisons'),
+    row(COMPARISONS.slice(0, 3).map((op) => text(op.toUpperCase(), draft.compare[op], (v) => { draft.compare[op] = v; }))),
+    row(COMPARISONS.slice(3).map((op) => text(op.toUpperCase(), draft.compare[op], (v) => { draft.compare[op] = v; }))),
+    row(LOGIC.map((op) => text(op.toUpperCase(), draft.logic[op], (v) => { draft.logic[op] = v; }))),
+
+    el('div.dialog-section-label', {}, 'Control flow'),
+    el('div.hint', {}, 'Leave a word empty where the control does not have it — Siemens has no THEN and no DO, and closes a loop with ENDWHILE rather than END 1.'),
+    row([
+      text('If', draft.keywords.if, (v) => { draft.keywords.if = v || null; }),
+      text('Then', draft.keywords.then, (v) => { draft.keywords.then = v || null; }),
+      text('Jump', draft.keywords.goto, (v) => { draft.keywords.goto = v || null; }),
+      text('Jump back', draft.keywords.gotoBack, (v) => { draft.keywords.gotoBack = v || null; }),
+    ]),
+    row([
+      text('While', draft.keywords.while, (v) => { draft.keywords.while = v || null; }),
+      text('Do', draft.keywords.do, (v) => { draft.keywords.do = v || null; }),
+      text('End', draft.keywords.end, (v) => { draft.keywords.end = v || null; }),
+      text('End while', draft.keywords.endWhile, (v) => { draft.keywords.endWhile = v || null; }),
+    ]),
+    row([
+      text('For', draft.keywords.for, (v) => { draft.keywords.for = v || null; }),
+      text('To', draft.keywords.to, (v) => { draft.keywords.to = v || null; }),
+      text('End for', draft.keywords.endFor, (v) => { draft.keywords.endFor = v || null; }),
+    ]),
+    row([
+      text('Repeat', draft.keywords.repeat, (v) => { draft.keywords.repeat = v || null; }),
+      text('Until', draft.keywords.until, (v) => { draft.keywords.until = v || null; }),
+      select('Jumps go to', [{ value: 'line', label: 'a line number (N100)' }, { value: 'name', label: 'a named label (MARK1:)' }],
+        draft.labels, (v) => { draft.labels = v; }),
+    ]),
+
+    el('div.dialog-section-label', {}, 'Comments'),
+    row([
+      checkbox('( round brackets ) are a comment', draft.parenComments !== false, (v) => { draft.parenComments = v; }),
+      text('To end of line', (draft.lineComments || []).join(' '), (v) => { draft.lineComments = v.split(/\s+/).filter(Boolean); }),
+    ]),
+    el('div.hint', {}, 'A control that computes with round brackets cannot also read them as a remark — that is how X=SIN(30) turns into a comment.'),
+
+    el('div.dialog-section-label', {}, 'What that reads like'),
+    sample,
+  ]);
+  drawSample();
+
+  const dialog = new Dialog({
+    title: 'Macro syntax',
+    subtitle: `Starting from ${base.name}`,
+    width: 620,
+    body,
+    confirm: 'Apply',
+    onConfirm: () => {
+      controller.dialect = base.id;
+      controller.syntax = draft;
+      app.setMachine({ controller: { ...controller } });
+      panel.render();
+      app.notify('Macro syntax updated; the program was read again.', 'ok');
+      return true;
+    },
+    extra: [button('Back to standard', () => {
+      controller.syntax = null;
+      app.setMachine({ controller: { ...controller } });
+      panel.render();
+      dialog.close(true);
+      app.notify(`Back to ${base.name} as it comes.`, 'ok');
+    })],
   });
   dialog.open();
   return dialog;
