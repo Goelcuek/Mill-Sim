@@ -1056,3 +1056,17 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 /* A body that has been assembled shows a coloured spine; one still waiting
    for an axis shows a grey one. */
 .swatch.on { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06); }
+
+/* ── which colour belongs to which cutter ────────────────────────────── */
+
+.legend { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.legend-item { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.legend-chip {
+  width: 18px;
+  height: 12px;
+  border-radius: 3px;
+  flex: none;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+.legend-name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend-note { color: var(--warn); font-size: 10.5px; margin-left: auto; }

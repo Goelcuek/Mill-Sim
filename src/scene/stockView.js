@@ -31,13 +31,24 @@ export class StockView {
     this.data = null;
     this.stock = null;
     this.lastVersion = -1;
-    // Machined faces read as freshly cut metal; the hue only shifts enough
-    // to tell one tool's work from another's.
+    /**
+     * One colour per cutter, for the question this answers: which tool left
+     * this face?
+     *
+     * That question is only answered if the colours can be told apart at a
+     * glance, on a shaded surface, next to raw stock — so these are eight
+     * hues spread right round the wheel at a similar lightness, rather than
+     * eight shades of the same steel. Blue against orange, green against
+     * purple: pairs that stay distinct for the commonest colour blindness
+     * too, and none of them close to the raw stock grey.
+     */
     this.toolColors = [
-      new THREE.Color('#b6c1d0'), new THREE.Color('#a8c5be'), new THREE.Color('#c8b99f'),
-      new THREE.Color('#b8b0cc'), new THREE.Color('#adc0d8'), new THREE.Color('#d0aea8'),
-      new THREE.Color('#b2cdaa'), new THREE.Color('#cdc4a4'),
+      new THREE.Color('#5b9bd5'), new THREE.Color('#e8933f'), new THREE.Color('#45ab84'),
+      new THREE.Color('#a06cc8'), new THREE.Color('#dcbb46'), new THREE.Color('#d96b63'),
+      new THREE.Color('#4cb9c9'), new THREE.Color('#93a844'),
     ];
+    /** What a machined face looks like when the tool is not being named. */
+    this.cutColor = new THREE.Color('#d5dde8');
     this.uniforms = null;
     this.renderStep = 1;
     this.renderer = null;
@@ -207,6 +218,7 @@ export class StockView {
       /** Below this thickness a column is air, not metal. */
       uMinThick: { value: 1e-4 },
       uStockColor: { value: new THREE.Color('#8e97a6') },
+      uCutColor: { value: this.cutColor },
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
       uSectionZ: { value: 1e9 },
@@ -225,10 +237,11 @@ export class StockView {
           uniform float uBase;
           uniform float uMinThick;
           attribute float aMode;
-          varying float vCut;
           varying float vWorldZ;
           varying vec2 vGridUv;
           varying float vSolid;
+          varying float vTop;
+          varying float vSteep;
         `)
         .replace('#include <beginnormal_vertex>', `
           vec3 objectNormal = vec3( normal );
@@ -242,14 +255,18 @@ export class StockView {
               -( hu - hd ) / ( 2.0 * uStep.y ),
               1.0 ) );
           }
+          // How far this face has tipped off flat: 0 on a floor, 1 on a wall.
+          vSteep = 1.0 - abs( objectNormal.z );
           #ifdef USE_TANGENT
             vec3 objectTangent = vec3( tangent.xyz );
           #endif
         `)
         .replace('#include <begin_vertex>', `
           vec2 hs = texture2D( uHeight, uv ).rg;
-          vCut = hs.g;
           vGridUv = uv;
+          // The machined surface, as opposed to the sides and bottom of the
+          // block, which no tool has been near.
+          vTop = aMode > 1.5 ? 1.0 : 0.0;
           // Whether this corner has metal under it. Interpolated, it is
           // non-zero anywhere on a triangle that touches material, which is
           // what keeps the wall of a round bar — a single quad stretched
@@ -266,33 +283,78 @@ export class StockView {
           uniform sampler2D uHeight;
           uniform float uBase;
           uniform float uMinThick;
+          uniform vec2 uTexel;
+          uniform vec2 uStep;
           uniform vec3 uStockColor;
+          uniform vec3 uCutColor;
           uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
           uniform float uShowTools;
           uniform float uSectionZ;
-          varying float vCut;
           varying float vWorldZ;
           varying vec2 vGridUv;
           varying float vSolid;
+          varying float vTop;
+          varying float vSteep;
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
           if ( vWorldZ > uSectionZ ) discard;
+          // Which column this pixel stands on, and which tool cut it. Read
+          // here rather than at the corners: a cut number interpolated
+          // between two columns is a tool that never ran — halfway between
+          // the first tool and the third is the second — so the wall of a
+          // pocket used to fade through colours nothing had cut.
+          vec2 hs = texture2D( uHeight, vGridUv ).rg;
           // Nothing in this column and nothing on this triangle: outside a
           // round bar or a cast shape, or milled clean through. A flat film
           // across a through-pocket is a lie the eye believes, and the flat
           // sheet outside a bar is another.
-          if ( texture2D( uHeight, vGridUv ).r - uBase <= uMinThick && vSolid < 1e-5 ) discard;
+          if ( hs.r - uBase <= uMinThick && vSolid < 1e-5 ) discard;
+
+          float cutId = hs.g;
+          // A wall belongs to the tool that took the metal away beside it,
+          // not to whatever last touched the rim above. On a steep face the
+          // cut is read from the lower of the neighbouring columns, which is
+          // the floor the wall drops to — otherwise every pocket side and
+          // every drilled hole reads as untouched stock.
+          if ( vTop > 0.5 && vSteep > 0.3 ) {
+            // A wall proper: the drop to the neighbour is longer than the
+            // cell is wide. A face that merely slopes — the flank of a
+            // pocket floor, the side of a dome — is its own tool's work and
+            // keeps its own colour.
+            float lowest = hs.r - max( uStep.x, uStep.y );
+            vec2 n;
+            n = texture2D( uHeight, vGridUv + vec2( uTexel.x, 0.0 ) ).rg;
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            n = texture2D( uHeight, vGridUv - vec2( uTexel.x, 0.0 ) ).rg;
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            n = texture2D( uHeight, vGridUv + vec2( 0.0, uTexel.y ) ).rg;
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            n = texture2D( uHeight, vGridUv - vec2( 0.0, uTexel.y ) ).rg;
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+          }
+
           vec3 surface = uStockColor;
-          if ( vCut > 0.5 ) {
-            int ti = int( clamp( vCut - 1.0, 0.0, ${MAX_TOOL_COLORS - 1}.0 ) );
+          if ( cutId > 0.5 && vTop > 0.5 ) {
+            int ti = int( clamp( cutId - 1.0, 0.0, ${MAX_TOOL_COLORS - 1}.0 ) );
             vec3 machined = uToolColors[ 0 ];
             for ( int k = 0; k < ${MAX_TOOL_COLORS}; k ++ ) {
               if ( k == ti ) machined = uToolColors[ k ];
             }
-            surface = mix( uToolColors[ 0 ], machined, uShowTools );
+            surface = mix( uCutColor, machined, uShowTools );
           }
           diffuseColor.rgb *= surface;
+          float tinted = ( cutId > 0.5 && vTop > 0.5 ) ? uShowTools : 0.0;
+        `)
+        // Steel takes a tint badly: at this metalness most of what the eye
+        // gets back is the light source rather than the surface, which is
+        // right for raw stock and hides the very thing a coloured face is
+        // there to say. So a face that is carrying a tool's colour is
+        // rendered as a duller, less mirror-like metal.
+        .replace('#include <metalnessmap_fragment>', `
+          #include <metalnessmap_fragment>
+          metalnessFactor *= mix( 1.0, 0.55, tinted );
+          roughnessFactor = mix( roughnessFactor, 0.55, tinted );
         `);
 
       this.shader = shader;
@@ -389,6 +451,11 @@ export class StockView {
     } catch (err) {
       this.texture.needsUpdate = true;
     }
+  }
+
+  /** The shade a machined face takes when the tool is not being named. */
+  setCutColor(hex) {
+    if (this.uniforms) this.uniforms.uCutColor.value.set(hex);
   }
 
   setStockColor(hex) {

@@ -100,11 +100,39 @@ export class ViewPanel extends Panel {
             el('span.field-label', {}, 'Raw stock'),
             el('input', { type: 'color', value: d.stockColor, oninput: (e) => app.setDisplay({ stockColor: e.target.value }) }),
           ]),
-          checkbox('Cuts by tool', d.toolColors, (v) => app.setDisplay({ toolColors: v })),
+          checkbox('Cuts by tool', d.toolColors, (v) => { app.setDisplay({ toolColors: v }); this.render(); }),
         ]),
-        el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own shade so you can see which one made which face.'),
+        el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own colour — floors and walls alike — so a face answers which tool made it. Faces nothing has touched stay raw stock.'),
+        d.toolColors ? this.toolLegend() : null,
       ]),
     ];
+  }
+
+  /**
+   * Which colour belongs to which cutter.
+   *
+   * The colours are no use as a key nobody has. This lists the tools the
+   * loaded program actually calls, in the order it calls them, each with
+   * the colour its cuts carry.
+   */
+  toolLegend() {
+    const app = this.app;
+    const program = app.state.program;
+    const used = program ? [...new Set(program.toolChanges.map((t) => t.tool))] : [];
+    if (!used.length) {
+      return el('div.hint', {}, 'The tools a program calls are listed here, each with the colour its cuts carry.');
+    }
+    const colours = app.stockView.toolColors;
+    return el('div.legend', {}, used.map((n) => {
+      const slot = app.slots && app.slots.get(n);
+      const assembly = app.library.assemblyByNumber(n);
+      const colour = colours[(slot ? slot.index : 0) % colours.length];
+      return el('div.legend-item', {}, [
+        el('span.legend-chip', { style: { background: `#${colour.getHexString()}` } }),
+        el('span.legend-name', {}, assembly ? assembly.name : `T${n}`),
+        slot ? null : el('span.legend-note', {}, 'no assembly'),
+      ]);
+    }));
   }
 
   /**
