@@ -1731,7 +1731,10 @@ export class App {
 
     if (!worked && !redrawing) return;
 
-    if (sim.activeSlot) this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
+    if (sim.activeSlot) {
+      this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
+      this.machineView.setGaugeLength(sim.activeSlot.built.gaugeLength);
+    }
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
     const pose = this.jog
       ? this.jogPose()

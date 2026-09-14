@@ -68,6 +68,7 @@ export class ViewPanel extends Panel {
         row([t('Rapid moves', 'rapids'), t('Work origins', 'origins')]),
         row([t('Grid', 'grid'), t('Axes', 'axes')]),
         row([t('Travel envelope', 'showLimits')]),
+        d.showLimits ? el('div.hint', {}, 'Where the tool tip can reach: the machine\u2019s own envelope, which is measured at the spindle gauge line, with the tool in the spindle hanging below it. Change to a longer tool and it comes down, because on the machine it does.') : null,
       ]),
       section('Background', [
         el('div.hint', {}, 'A light part on a light ground has no silhouette, and a machined face reads by its silhouette first. Pick whatever gives the part an edge.'),

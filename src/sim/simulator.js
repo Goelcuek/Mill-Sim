@@ -399,6 +399,20 @@ export class Simulator {
     return { tip: this.onPart(r.tip, spin), dir: this.onPart(r.axis, spin), index };
   }
 
+  /**
+   * The gauge line, given where the tip is and which way the tool points.
+   *
+   * Every machine coordinate in this program is read here — G53, G28, the
+   * travel limits — because that is where a machine reads one: at the
+   * spindle's own face, with whatever is in it hanging below.
+   */
+  gaugePoint(tip, dir) {
+    const gauge = this.gaugeLength;
+    if (!gauge) return tip;
+    const d = dir || UP;
+    return [tip[0] + d[0] * gauge, tip[1] + d[1] * gauge, tip[2] + d[2] * gauge];
+  }
+
   /** The letter that turns the work rather than the machine, or null. */
   get indexer() {
     return (this.program && this.program.indexer) || null;
@@ -709,8 +723,11 @@ export class Simulator {
       }
       // The envelope belongs to the machine and is measured from its home
       // switches, so what is reported is the machine coordinate — which is
-      // the number on the control when the axis stops.
-      const lim = checkLimits(tip, limitsInScene(this.machine), homeOf(this.machine));
+      // the number on the control when the axis stops. The point compared
+      // is the gauge line, a gauge length up the tool from the tip, which
+      // is the same point G53 reads: an envelope is how far the axis goes,
+      // and it does not move when a longer tool goes in the spindle.
+      const lim = checkLimits(this.gaugePoint(tip, dir), limitsInScene(this.machine), homeOf(this.machine));
       if (lim) {
         this.report('limit', {
           line: mv.line,

@@ -414,3 +414,50 @@ test('reference return goes to the same place', () => {
   assert.ok(Math.abs(p.moves[p.moves.length - 1].to[2] - 110) < 1e-9,
     `G28 left the tip at ${p.moves[p.moves.length - 1].to[2]}`);
 });
+
+test('the travel envelope is measured at the gauge line', () => {
+  // A limit is how far the axis goes. Check it at the tip and the whole
+  // envelope moves with every tool change: a long tool cannot reach the
+  // bottom of its own travel and a short one runs past the top of it.
+  const limits = { enabled: true, min: [-100, -100, -100], max: [100, 100, 100] };
+  const home = [0, 0, 0];
+
+  // The tip 150 below the floor of the envelope, with a 200 mm assembly:
+  // the gauge line is at +50, which is inside, and so is the machine.
+  assert.equal(checkLimits([0, 0, 50], limits, home), null);
+  // The same tip with nothing in the spindle is over-travel.
+  const over = checkLimits([0, 0, -150], limits, home);
+  assert.ok(over && over.axis === 'Z', 'a gauge line below the envelope is not over-travel');
+  assert.ok(Math.abs(over.value - -150) < 1e-9, `reported machine Z${over.value}`);
+});
+
+test('the envelope floor is the axis floor, not the tip', () => {
+  // The floor is 50 below home. A tip at -40 is past it and still fine,
+  // because what stops is the axis and the axis is a whole assembly
+  // higher. Checking the tip would report over-travel here for every tool
+  // in the rack.
+  const machine = {
+    limits: { enabled: true, frame: 'home', min: [-200, -200, -50], max: [200, 200, 400] },
+    home: [0, 0, 0],
+  };
+  const run = (stickout, depth) => {
+    const built = buildAssembly({ stickout }, tools[2], holders[0], { spindleDiameter: 90, spindleLength: 80 });
+    const slot = { built, index: 0, spheres: silhouetteSpheres(built.toolPoints) };
+    const program = interpret(['G21 G90 G54', 'G0 X0 Y0 Z10', `G1 Z${depth} F300`, 'M30'].join('\n'),
+      { machineZero: [0, 0, 0], gaugeLength: built.gaugeLength });
+    const sim = new Simulator();
+    sim.load({ program, stock: null, slots: new Map([[1, slot]]), fallbackSlot: slot, machine });
+    sim.runAll();
+    return { limits: sim.collisions.filter((c) => c.type === 'limit'), gauge: built.gaugeLength };
+  };
+
+  const deep = run(45, -40);
+  assert.equal(deep.limits.length, 0, `a tip at -40 with a ${deep.gauge} mm assembly was stopped`);
+
+  // Far enough down that the gauge line itself is through the floor, and
+  // it stops — reported as the machine coordinate, which is the number the
+  // control would be showing.
+  const tooDeep = run(45, -(deep.gauge + 80));
+  assert.equal(tooDeep.limits.length > 0, true, 'the axis went through its own floor unreported');
+  assert.match(tooDeep.limits[0].message, /Z travel limit/);
+});

@@ -162,22 +162,31 @@ export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
 }
 
 /**
- * Travel-limit check for the tool tip.
+ * Travel-limit check, at the gauge line.
+ *
+ * A travel limit is how far the *axis* goes, and an axis position is read
+ * at the gauge line — the spindle's own face — not at the tip of whatever
+ * is in it. So what is compared is the point a gauge length up the tool
+ * from the tip, which is the same point G53 puts on a machine coordinate.
+ * Checking the tip instead moved the whole envelope with every tool
+ * change: a long tool could not reach the bottom of its own travel, and a
+ * short one ran past the top of it.
  *
  * `limits` are scene coordinates — see limitsInScene, which is what turns a
  * machine's own envelope into them. `home` is only used to report the
  * answer the way a control would: as a machine coordinate.
  *
+ * @param {number[]} gauge the gauge point, in the same coordinates
  * @returns {null|{axis:string, value:number, limit:number}}
  */
-export function checkLimits(tip, limits, home = [0, 0, 0]) {
+export function checkLimits(gauge, limits, home = [0, 0, 0]) {
   if (!limits || !limits.enabled) return null;
   const names = ['X', 'Y', 'Z'];
   for (let a = 0; a < 3; a++) {
-    // Compared where the tool is, reported where the control would say it
+    // Compared where the axis is, reported where the control would say it
     // is: the machine coordinate, measured from home.
-    if (tip[a] < limits.min[a] - 1e-6) return { axis: names[a], value: tip[a] - home[a], limit: limits.min[a] - home[a] };
-    if (tip[a] > limits.max[a] + 1e-6) return { axis: names[a], value: tip[a] - home[a], limit: limits.max[a] - home[a] };
+    if (gauge[a] < limits.min[a] - 1e-6) return { axis: names[a], value: gauge[a] - home[a], limit: limits.min[a] - home[a] };
+    if (gauge[a] > limits.max[a] + 1e-6) return { axis: names[a], value: gauge[a] - home[a], limit: limits.max[a] - home[a] };
   }
   return null;
 }

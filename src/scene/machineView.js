@@ -93,6 +93,8 @@ export class MachineView {
     this.config = { ...DEFAULT_MACHINE };
     this.limitBox = null;
     this.assemblyLength = 200;
+    /** Tip to gauge line for the tool in the spindle; see setGaugeLength. */
+    this.gaugeLength = 0;
     this.lastPose = { values: {}, tip: [0, 0, 0], dir: [0, 0, 1] };
 
     this.kinematics = buildPreset(this.config.preset);
@@ -341,7 +343,16 @@ export class MachineView {
     }
     const l = limitsInScene(this.config);
     if (!l || !l.enabled) return;
-    const b = new THREE.Box3(new THREE.Vector3(...l.min), new THREE.Vector3(...l.max));
+    // The envelope is how far the *axis* goes, read at the gauge line, so
+    // the box drawn for it is that envelope with the tool hung below —
+    // which is the question anybody looking at it is asking: can this tool
+    // reach there. It moves down as a longer tool goes in, because on the
+    // machine it does.
+    const drop = this.gaugeLength || 0;
+    const b = new THREE.Box3(
+      new THREE.Vector3(l.min[0], l.min[1], l.min[2] - drop),
+      new THREE.Vector3(l.max[0], l.max[1], l.max[2] - drop),
+    );
     this.limitBox = new THREE.Box3Helper(b, 0x0a84ff);
     this.limitBox.material.transparent = true;
     this.limitBox.material.opacity = 0.35;
@@ -350,6 +361,21 @@ export class MachineView {
   }
 
   setLimitsVisible(v) { if (this.limitBox) this.limitBox.visible = v; }
+
+  /**
+   * How far the tip hangs below the gauge line for the tool in the
+   * spindle, which is what the envelope box is drawn against. Not the same
+   * number as setAssemblyLength: that one is the whole assembly, spindle
+   * nose included, and it is about where the castings go.
+   */
+  setGaugeLength(mm) {
+    const next = Math.max(mm || 0, 0);
+    if (next === this.gaugeLength) return;
+    this.gaugeLength = next;
+    const shown = this.limitBox ? this.limitBox.visible : false;
+    this.buildLimitBox();
+    this.setLimitsVisible(shown);
+  }
 
   /**
    * How far the tool tip sits below the spindle gauge line.
