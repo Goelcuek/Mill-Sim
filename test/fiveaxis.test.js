@@ -307,6 +307,8 @@ function simulate(lines, opts = {}) {
     stock: opts.stock,
     slots: new Map([[1, slot]]),
     fallbackSlot: slot,
+    machine: opts.machine || null,
+    fixtures: opts.fixtures || [],
     kinematics: opts.kinematics || null,
   });
   sim.runAll();
@@ -387,9 +389,13 @@ test('a rotary past its stop is reported as a travel limit', () => {
   ], { stock: blank(0.5), kinematics: machine, gauge: 160 });
 
   const lim = sim.collisions.filter((c) => c.type === 'limit');
-  assert.equal(lim.length, 1, 'one limit reported');
-  assert.match(lim[0].message, /A axis travel limit/);
-  assert.ok(lim[0].depth > 49 && lim[0].depth < 51, `overshoot ${lim[0].depth}`);
+  // Every move made while the axis sits past its stop says so, and the
+  // retract afterwards is one of them: the table does not come back to
+  // where it is allowed to be just because Z moved.
+  assert.ok(lim.length >= 1, 'no limit reported');
+  for (const l of lim) assert.match(l.message, /A axis travel limit/);
+  assert.equal(lim[0].line, 5, 'the move that swings past the stop is the one that reports it');
+  assert.ok(lim.every((l) => l.depth > 49 && l.depth < 51), `overshoot ${lim.map((l) => l.depth).join(', ')}`);
 });
 
 test('travel limits are reported against the machine, not the program', () => {
@@ -467,4 +473,84 @@ test('cutting with the quill is cutting', () => {
   near(byW.floor, -3, 1e-6, 'Z5 then W-8 leaves the same floor');
   near(byW.volume, byZ.volume, 1e-6, 'and takes the same metal out');
   assert.ok(byW.volume > 0);
+});
+
+// ------------------------------------------------- the body follows the head
+//
+// Everything below the spindle nose is carried on the rotaries. An envelope
+// is a profile measured up the tool axis, so probing one at a tip position
+// asks about a tool standing straight up — which is the tool only while the
+// rotaries sit at zero. Leaned over, the checks used to be looking at a
+// phantom upright assembly while the real one swung somewhere else: a
+// holder buried in the part reported nothing at all.
+
+/** A floor at -10 with a wall standing to +100 from x = 60 out. */
+const wall = () => new Stock({
+  origin: [-120, -60, -10], size: [240, 120, 110], resolution: 1,
+  column: (x) => (x >= 60 ? 100 : -10),
+});
+
+/** Lean the head to B degrees over a fixed tip, and see what is reported. */
+const leanBy = (deg, opts = {}) => simulate([
+  'G90 G21 G17 G54', 'T1 M6', 'S6000 M3', 'G43.4 H1',
+  'G0 X0 Y0 Z-5', `G1 B${deg} F2000`, 'M30',
+], { stock: opts.stock === undefined ? wall() : opts.stock, kinematics: buildPreset('headHead'), gauge: 160, ...opts });
+
+test('the holder is checked where the head leans it, not straight up', () => {
+  // Upright, the assembly stands in the clear beside the wall.
+  assert.deepEqual(leanBy(0).collisions.map((c) => c.type), [], 'upright is clear');
+
+  // Leaned into the wall, the tip has not moved a micron and the holder is
+  // through it up to the spindle nose.
+  const into = leanBy(45).collisions.filter((c) => c.type === 'holder');
+  assert.equal(into.length, 1, 'a holder buried in the wall was not reported');
+  assert.ok(into[0].depth > 60, `reported only ${into[0].depth.toFixed(1)} mm of it`);
+  assert.ok(into[0].position[0] > 55, `reported at x${into[0].position[0].toFixed(1)}, nowhere near the wall`);
+
+  // And leaned the other way it is in the clear again: the check follows
+  // the direction the head actually went, rather than alarming on any tilt.
+  assert.deepEqual(leanBy(-45).collisions.map((c) => c.type), [], 'leaning away is clear');
+});
+
+test('a fixture is checked against the leaned assembly too', () => {
+  const post = {
+    id: 'post', name: 'riser', inverse: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    centre: [60, 0, 45], half: [10, 10, 55], scale: 1,
+  };
+  // No stock at all, so the only thing that can be hit is the post.
+  const clear = leanBy(0, { stock: null, fixtures: [post] });
+  assert.deepEqual(clear.collisions.map((c) => c.type), [], 'upright is clear of the post');
+
+  const hit = leanBy(45, { stock: null, fixtures: [post] }).collisions.filter((c) => c.type === 'fixture');
+  assert.equal(hit.length, 1, 'the leaned assembly went through the post unreported');
+  assert.ok(hit[0].depth > 25, `reported only ${hit[0].depth.toFixed(1)} mm of it`);
+});
+
+test('the swing itself is probed, not just the ends of the move', () => {
+  // A tool-axis change over a fixed point moves the tip nowhere, so a
+  // check spaced along the tip path runs once, at the end. Swinging from
+  // one side of the wall to the other passes the holder straight through
+  // it while both ends stand clear.
+  const sim = simulate([
+    'G90 G21 G17 G54', 'T1 M6', 'S6000 M3', 'G43.4 H1',
+    'G0 X0 Y0 Z-5', 'G1 B-60 F2000', 'G1 B60 F2000', 'M30',
+  ], { stock: wall(), kinematics: buildPreset('headHead'), gauge: 160 });
+  const through = sim.collisions.filter((c) => c.type === 'holder');
+  assert.ok(through.length > 0, 'the holder swung through the wall unreported');
+  assert.ok(through[0].count > 1, 'only one pose of the swing was ever checked');
+});
+
+test('the sphere chain agrees with the envelope when the tool stands up', () => {
+  // The two ways of asking must answer the same question, or a program
+  // would change its mind about a crash the moment a rotary reached zero.
+  const s = wall();
+  const built = buildAssembly({ stickout: 60 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  for (const x of [20, 30, 40, 50]) {
+    const tip = [x, 0, 20];
+    const env = s.probeBody(built.holderEnvelope, tip[0], tip[1], tip[2]);
+    const chain = s.probeChain(built.holderSpheres, tip, [0, 0, 1]);
+    assert.equal(!!env, !!chain, `x${x}: envelope says ${!!env}, chain says ${!!chain}`);
+    if (env) near(chain.depth, env.depth, 1.5, `x${x}: depth`);
+  }
 });

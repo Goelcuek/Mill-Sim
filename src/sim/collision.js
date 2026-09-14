@@ -7,6 +7,9 @@
 // was sampled from, so the simulator errs towards reporting a crash rather
 // than missing one.
 
+/** World up, and the tool axis of any machine whose rotaries are at zero. */
+const UP = [0, 0, 1];
+
 /**
  * Sample an assembly silhouette into spheres.
  *
@@ -75,12 +78,15 @@ function applyMatrix(m, x, y, z, out) {
  * @param {Float32Array} spheres  [z0,r0, z1,r1, ...] in tool-local mm
  * @param {[number,number,number]} tip  world position of the tool tip
  * @param {FixtureBox[]} fixtures
+ * @param {number} [skipBelow] ignore the chain below this height up the tool
+ * @param {number} [clearance] room to ask for beyond metal-in-metal
+ * @param {number[]} [dir] unit vector up the tool; world up by default
  * @param {number} [skipBelow]  ignore spheres below this local z (the flutes,
  *                              which are allowed to touch the stock but never
  *                              a clamp — pass 0 to test everything)
  * @returns {null|{fixture:FixtureBox, depth:number, point:[number,number,number], localZ:number}}
  */
-export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance = 0) {
+export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance = 0, dir = UP) {
   if (!fixtures || !fixtures.length || !spheres.length) return null;
   const p = [0, 0, 0];
   let worst = null;
@@ -95,7 +101,12 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance =
       const lz = spheres[i];
       if (lz < skipBelow) continue;
       const r = spheres[i + 1];
-      applyMatrix(f.inverse, tip[0], tip[1], tip[2] + lz, p);
+      // Up the tool, not up the world: the two are the same thing only
+      // while the rotaries sit at zero.
+      const cx = tip[0] + dir[0] * lz;
+      const cy = tip[1] + dir[1] * lz;
+      const cz = tip[2] + dir[2] * lz;
+      applyMatrix(f.inverse, cx, cy, cz, p);
       const d = pointBoxDistance(p[0] - f.centre[0], p[1] - f.centre[1], p[2] - f.centre[2], f.half[0], f.half[1], f.half[2]) * s;
       // Negative gap is metal in metal; a small positive one is the near
       // miss that the operator would have watched with a hand on the feed
@@ -108,7 +119,7 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance =
           gap,
           clearance: want,
           depth: Math.max(-gap, 0),
-          point: [tip[0], tip[1], tip[2] + lz],
+          point: [cx, cy, cz],
           localZ: lz,
         };
       }
@@ -120,22 +131,33 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance =
 /**
  * Test the sphere chain against a horizontal table surface.
  *
- * @returns {null|{depth:number, z:number, localZ:number}}
+ * @param {Float32Array} spheres
+ * @param {[number,number,number]} tip
+ * @param {object} table
+ * @param {number} [clearance]
+ * @param {number[]} [dir] unit vector up the tool; world up by default
+ * @returns {null|{depth:number, z:number, localZ:number, x:number, y:number}}
  */
-export function checkTable(spheres, tip, table, clearance = 0) {
+export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
   if (!table || !table.enabled) return null;
   const { z, xMin, xMax, yMin, yMax } = table;
-  if (tip[0] < xMin || tip[0] > xMax || tip[1] < yMin || tip[1] > yMax) return null;
   const want = Math.max(clearance, 0);
   let worst = null;
-  const consider = (bottom, localZ) => {
+  // Each part of the assembly is asked about where it is, not where the
+  // tip is: leaned over, the holder can be past the edge of the table
+  // while the tip is over it, and the other way about.
+  const consider = (x, y, bottom, localZ) => {
+    if (x < xMin || x > xMax || y < yMin || y > yMax) return;
     const gap = bottom - z;
     if (gap < want && (!worst || gap < worst.gap)) {
-      worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ };
+      worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ, x, y };
     }
   };
-  for (let i = 0; i < spheres.length; i += 2) consider(tip[2] + spheres[i] - spheres[i + 1], spheres[i]);
-  consider(tip[2], 0);                      // the tip itself, which has no radius
+  for (let i = 0; i < spheres.length; i += 2) {
+    const lz = spheres[i];
+    consider(tip[0] + dir[0] * lz, tip[1] + dir[1] * lz, tip[2] + dir[2] * lz - spheres[i + 1], lz);
+  }
+  consider(tip[0], tip[1], tip[2], 0);      // the tip itself, which has no radius
   return worst;
 }
 

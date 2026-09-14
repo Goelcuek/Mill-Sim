@@ -777,6 +777,90 @@ export class Stock {
     return worst;
   }
 
+  /**
+   * Probe a sphere chain hung on the tool axis against the stock.
+   *
+   * probeBody asks the same question of an upright tool and asks it faster,
+   * but it can only ask it about an upright one: an envelope is a profile
+   * measured up the tool axis, so probing it at a tip position takes that
+   * axis to be world Z. The moment the rotaries move it is not, and the
+   * body has to be carried along the axis it actually stands on. A chain of
+   * spheres can be carried like that, and encloses the solid it was sampled
+   * from, so what it reports is a crash on the machine.
+   *
+   * @param {Float32Array} spheres [z0,r0, z1,r1, ...] in tool-local mm
+   * @param {number[]} tip world position of the tool tip
+   * @param {number[]} dir unit vector pointing up the tool from the tip
+   * @returns {null|{x:number, y:number, z:number, depth:number}}
+   */
+  probeChain(spheres, tip, dir) {
+    if (!spheres || !spheres.length) return null;
+    // A collision worth reporting is never a quarter of a millimetre
+    // across, so the survivors are sampled on a physical spacing rather
+    // than per column — the same bargain probeBody makes.
+    const stride = Math.max(1, Math.round(0.25 / this.cell));
+    const ax = dir[0], ay = dir[1], az = dir[2];
+    let worst = null;
+    let prevLz = spheres[0];
+
+    for (let s = 0; s < spheres.length; s += 2) {
+      const r = spheres[s + 1];
+      const lz = spheres[s];
+      // Each ball answers only for its own slice of the tool. A ball hangs
+      // half its diameter below the end of the solid it stands for, so the
+      // nose of a Ø90 spindle would otherwise report a crash 45 mm before
+      // it touched anything; below its slice, the body ends in a face, and
+      // that face is where the underside is.
+      const bandLo = s === 0 ? lz : (prevLz + lz) * 0.5;
+      prevLz = lz;
+      if (r <= 0) continue;
+      const cx = tip[0] + dir[0] * lz;
+      const cy = tip[1] + dir[1] * lz;
+      const cz = tip[2] + dir[2] * lz;
+
+      // One pyramid lookup clears a sphere that is nowhere near material,
+      // which is most of them for most of the program.
+      if (cz - r >= this.maxHeightIn(cx - r, cy - r, cx + r, cy + r)) continue;
+
+      const i0 = Math.max(0, Math.floor((cx - r - this.origin[0]) / this.dx - 0.5));
+      const i1 = Math.min(this.nx - 1, Math.ceil((cx + r - this.origin[0]) / this.dx - 0.5));
+      const j0 = Math.max(0, Math.floor((cy - r - this.origin[1]) / this.dy - 0.5));
+      const j1 = Math.min(this.ny - 1, Math.ceil((cy + r - this.origin[1]) / this.dy - 0.5));
+      if (i0 > i1 || j0 > j1) continue;
+      const r2 = r * r;
+
+      // Where this column's vertical line crosses the plane that closes the
+      // slice off at the bottom. Sideways on, there is no such crossing and
+      // the ball stands unclipped, which errs towards reporting.
+      const cut = Math.abs(az) > 1e-6;
+
+      for (let j = j0; j <= j1; j += stride) {
+        const wy = this.origin[1] + (j + 0.5) * this.dy;
+        const py = wy - cy;
+        const py2 = py * py;
+        if (py2 >= r2) continue;
+        const row = j * this.nx;
+        const qy = (wy - tip[1]) * ay;
+        for (let i = i0; i <= i1; i += stride) {
+          const wx = this.origin[0] + (i + 0.5) * this.dx;
+          const px = wx - cx;
+          const d2 = px * px + py2;
+          if (d2 >= r2) continue;
+          const h = this.height[row + i];
+          if (h <= this.base) continue;
+          let zb = cz - Math.sqrt(r2 - d2);         // the ball's underside here
+          if (cut) {
+            const face = tip[2] + (bandLo - ((wx - tip[0]) * ax + qy)) / az;
+            if (face > zb) zb = face;
+          }
+          const depth = h - zb;
+          if (depth > 0 && (!worst || depth > worst.depth)) worst = { x: wx, y: wy, z: zb, depth };
+        }
+      }
+    }
+    return worst;
+  }
+
   /** Height of the material at a world XY point, or the base when outside. */
   /**
    * Snap candidates on the nominal stock block: corners, edge midpoints and

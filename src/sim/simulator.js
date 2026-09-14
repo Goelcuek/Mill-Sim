@@ -414,6 +414,7 @@ export class Simulator {
     // tip. Padding only ever makes the box bigger, so a segment is never
     // skipped when it should have been sampled.
     let lean = 0;
+    let bodyLean = 0;
     if (this.fiveAxis) {
       const pa = this.poseAt(mv, [ax, ay, az], u);
       const pb = this.poseAt(mv, [bx, by, bz], 1);
@@ -421,6 +422,11 @@ export class Simulator {
       bx = pb.tip[0]; by = pb.tip[1]; bz = pb.tip[2];
       const sin = Math.max(Math.hypot(pa.dir[0], pa.dir[1]), Math.hypot(pb.dir[0], pb.dir[1]));
       lean = sin * Math.max(slot.built.fluteLength, slot.built.cutRadius);
+      // The holder and the spindle nose swing far wider than the flutes do
+      // — the lever is the whole assembly, not the cutting length — and a
+      // box that does not hold them throws the segment away before
+      // anything is asked about where they are.
+      bodyLean = sin * slot.built.totalLength;
     }
 
     // How far to advance before carving. Sweeping means the cost of a chunk
@@ -447,11 +453,24 @@ export class Simulator {
     const zLow = Math.min(az, bz) - (lean > 0 ? slot.built.cutRadius : 0);
 
     let touchesStock = false;
+    let bodyNear = false;
     if (stock) {
       const x0 = Math.min(ax, bx) - rBody, x1 = Math.max(ax, bx) + rBody;
       const y0 = Math.min(ay, by) - rBody, y1 = Math.max(ay, by) + rBody;
       const maxH = stock.maxHeightIn(x0, y0, x1, y1);
       touchesStock = Number.isFinite(maxH) && zLow < maxH + 1e-6;
+      // Nothing to cut, but leaned over the holder can still be standing in
+      // metal a long way from the tip. That is not a carving question and
+      // does not get the carving step size — it gets probed like any other
+      // obstacle.
+      if (!touchesStock && bodyLean > lean) {
+        const rSwing = Math.max(slot.built.bodyRadius, slot.built.cutRadius) + bodyLean;
+        const maxHB = stock.maxHeightIn(
+          Math.min(ax, bx) - rSwing, Math.min(ay, by) - rSwing,
+          Math.max(ax, bx) + rSwing, Math.max(ay, by) + rSwing,
+        );
+        bodyNear = Number.isFinite(maxHB) && zLow < maxHB + 1e-6;
+      }
     }
 
     const hasObstacles = (this.fixtures && this.fixtures.length) || (this.machine && this.machine.table && this.machine.table.enabled);
@@ -464,7 +483,7 @@ export class Simulator {
       if (lean > 0) return { active: true, stepSize: Math.min(chunk, Math.max(r, 1)) };
       return { active: true, stepSize: chunk };
     }
-    if (hasObstacles) {
+    if (bodyNear || hasObstacles) {
       return { active: true, stepSize: 1.5 };
     }
     if (limitsOn) {
@@ -503,6 +522,7 @@ export class Simulator {
     const poseB = this.poseAt(mv, to, u1);
     const tilted = !this.isUpright(poseA.dir) || !this.isUpright(poseB.dir);
     const [x, y, z] = poseB.tip;
+    const poses = this.probePoses(poseA, poseB);
 
     if (stock) {
       const opts = { target: this.target, tolerance: this.gougeTolerance };
@@ -549,8 +569,14 @@ export class Simulator {
 
       // Chunks can be tens of millimetres long, so the body is probed at a
       // fixed spacing along the chunk rather than only where it ends.
-      for (const p of this.probePoints(poseA.tip, poseB.tip)) {
-        const shankHit = stock.probeBody(slot.built.shankEnvelope, p[0], p[1], p[2]);
+      for (const [p, dir] of poses) {
+        // Upright, the envelope probe is the cheaper way to ask; leaned
+        // over, it is asking about a tool that is not there. See
+        // Stock.probeChain.
+        const upright = this.isUpright(dir);
+        const shankHit = upright
+          ? stock.probeBody(slot.built.shankEnvelope, p[0], p[1], p[2])
+          : stock.probeChain(slot.built.shankSpheres, p, dir);
         if (shankHit) {
           this.report('deep', {
             line: mv.line,
@@ -559,7 +585,9 @@ export class Simulator {
             depth: shankHit.depth,
           });
         }
-        const holderHit = stock.probeBody(slot.built.holderEnvelope, p[0], p[1], p[2]);
+        const holderHit = upright
+          ? stock.probeBody(slot.built.holderEnvelope, p[0], p[1], p[2])
+          : stock.probeChain(slot.built.holderSpheres, p, dir);
         if (holderHit) {
           const name = slot.built.holder ? slot.built.holder.def.name : 'Holder';
           this.report('holder', {
@@ -572,13 +600,13 @@ export class Simulator {
       }
     }
 
-    for (const tip of this.probePoints(poseA.tip, poseB.tip)) {
+    for (const [tip, dir] of poses) {
     // How close is too close. Zero means only report metal in metal, which
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
 
     if (this.fixtures && this.fixtures.length) {
-      const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance);
+      const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
       if (f && f.gap < 0) {
         this.report('fixture', {
           line: mv.line,
@@ -598,19 +626,19 @@ export class Simulator {
     }
 
     if (this.machine) {
-      const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance);
+      const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance, dir);
       if (tbl && tbl.gap < 0) {
         this.report('table', {
           line: mv.line,
           message: (d) => `Assembly reaches ${d.toFixed(2)} mm below the table surface.`,
-          position: [x, y, tbl.z],
+          position: [tbl.x, tbl.y, tbl.z],
           depth: tbl.depth,
         });
       } else if (tbl) {
         this.report('near', {
           line: mv.line,
           message: `Passes within ${tbl.gap.toFixed(2)} mm of the table surface — asked for ${tbl.clearance.toFixed(2)} mm.`,
-          position: [x, y, tbl.z],
+          position: [tbl.x, tbl.y, tbl.z],
           depth: tbl.clearance - tbl.gap,
           gap: tbl.gap,
         });
@@ -685,6 +713,43 @@ export class Simulator {
       const t = i / n;
       const tip = [poseA.tip[0] + dx * t, poseA.tip[1] + dy * t, poseA.tip[2] + dz * t];
       out.push([tip, slerp(poseA.dir, poseB.dir, t)]);
+    }
+    return out;
+  }
+
+  /**
+   * Poses along a chunk at which to run the point-wise collision tests.
+   *
+   * The tip is not the whole story once the head can lean. A move that
+   * swings the rotaries without moving the tip at all — a tool-axis change
+   * over a fixed point, which is most of what five-axis positioning is —
+   * drags the holder through an arc metres long at the spindle nose while
+   * the tip stands still, so the swing gets a say in how many poses come
+   * back alongside the distance travelled.
+   *
+   * @returns {Array<[number[], number[]]>} [tip, tool axis] pairs
+   */
+  probePoses(poseA, poseB) {
+    const tips = this.probePoints(poseA.tip, poseB.tip);
+    if (!this.fiveAxis) return tips.map((t) => [t, UP]);
+
+    const swing = Math.acos(Math.max(-1, Math.min(1, poseA.dir[0] * poseB.dir[0]
+      + poseA.dir[1] * poseB.dir[1] + poseA.dir[2] * poseB.dir[2])));
+    // How far the far end of the assembly travels on that swing. The tool
+    // is the thing being swung, so its own length is the lever arm.
+    const reach = this.activeSlot ? this.activeSlot.built.totalLength : 0;
+    const n = Math.max(tips.length, Math.min(512, Math.ceil((swing * reach) / this.probeSpacing)));
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      out.push([
+        [
+          poseA.tip[0] + (poseB.tip[0] - poseA.tip[0]) * t,
+          poseA.tip[1] + (poseB.tip[1] - poseA.tip[1]) * t,
+          poseA.tip[2] + (poseB.tip[2] - poseA.tip[2]) * t,
+        ],
+        slerp(poseA.dir, poseB.dir, t),
+      ]);
     }
     return out;
   }

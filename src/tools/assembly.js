@@ -6,6 +6,7 @@
 //                  reaches this is a crash, not a cut.
 
 import { buildEnvelope, dedupe } from './envelope.js';
+import { silhouetteSpheres } from '../sim/collision.js';
 import { buildTool } from './toolDefs.js';
 import { buildHolder } from './holderDefs.js';
 import { num, uid } from '../core/util.js';
@@ -146,6 +147,13 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
     bodyEnvelope: buildEnvelope(bodyOnly, 2048),
     shankEnvelope: buildEnvelope(shankPoints),
     holderEnvelope: buildEnvelope(abovePoints, 2048),
+    // The same two solids as sphere chains. An envelope is a profile
+    // measured up the tool axis, which is only a shape in space while that
+    // axis is vertical; once the head leans, the body has to be carried
+    // along the axis it actually stands on, and a chain of spheres is what
+    // can be moved like that.
+    shankSpheres: silhouetteSpheres(shankPoints),
+    holderSpheres: silhouetteSpheres(abovePoints),
     shankPoints,
     cutRadius: tool.radius,
     bodyRadius: bodyOnly.reduce((m, p) => Math.max(m, p.r), 0),
