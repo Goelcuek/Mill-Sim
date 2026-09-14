@@ -692,8 +692,18 @@ export function interpret(text, config = {}) {
    * but every one of them is a head and a tail with a nesting level
    * between, so the pairing is one piece of code over a small table.
    */
-  const TAIL_OF = { while: 'end', do: 'end', for: 'end-for', repeat: 'until' };
-  const HEADS_OF = { end: ['while', 'do'], 'end-for': ['for'], until: ['repeat'] };
+  const TAIL_OF = { while: 'end', do: 'end', for: 'end-for', repeat: 'until', times: 'end-times' };
+  const HEADS_OF = { end: ['while', 'do'], 'end-for': ['for'], until: ['repeat'], 'end-times': ['times'] };
+
+  /**
+   * How many times round a counted loop still has to go.
+   *
+   * $REP 4 carries its count on the head and nothing anywhere else, so the
+   * tally lives here, against the block that opened it. It is dropped when
+   * the loop finishes, which is what lets an outer loop run the same $REP
+   * again from the top.
+   */
+  const repsLeft = new Map();
 
   const loopCache = new Map();
   const matchLoop = (idx, forward) => {
@@ -765,6 +775,21 @@ export function interpret(text, config = {}) {
 
   /** A macro that is already running does not call itself again. */
   const macroRunning = (code) => callStack.some((f) => f.macro === code);
+
+  /**
+   * The M code this control comes back out of a called file on.
+   *
+   * Most controls keep the two apart — M99 goes back, M30 ends the run —
+   * but a Fidia writes M30 at the end of every file, the one that called
+   * and the one that was called. Which of the two it means is whether
+   * anything is waiting for it, so that is what decides here. Without this
+   * the first called file ends the program and everything the main one had
+   * left to do — the next face, the retract — silently never happens.
+   */
+  const returnCode = (() => {
+    const m = /^M0*(\d+)$/i.exec((dialect.call && dialect.call.ret) || '');
+    return m ? Number(m[1]) : null;
+  })();
 
   /** Pop one call frame, whether it came from M98, a macro or the file end. */
   const returnFromCall = () => {
@@ -899,6 +924,33 @@ export function interpret(text, config = {}) {
             const n = evaluate(forControl.counter.target, vars);
             vars.set(n, vars.get(n) + 1);
             if (vars.get(n) <= evaluate(forControl.last, vars)) pc = head + 1;
+            continue;
+          }
+
+          // $REP 4 runs its body four times and does not ask anything. The
+          // head counts it out, the tail counts it down.
+          if (c.kind === 'times') {
+            const head = pc - 1;
+            const end = matchLoop(head, true);
+            if (end < 0) {
+              warn(b.line, `${dialect.keywords.rep || 'REP'} has no ${dialect.keywords.repEnd || 'END'}.`, 'error');
+              continue;
+            }
+            if (!repsLeft.has(head)) repsLeft.set(head, Math.floor(evaluate(c.count, vars)));
+            if (repsLeft.get(head) >= 1) continue;         // into the body
+            repsLeft.delete(head);
+            pc = end + 1;
+            continue;
+          }
+          if (c.kind === 'end-times') {
+            const head = matchLoop(pc - 1, false);
+            if (head < 0) {
+              warn(b.line, `${dialect.keywords.repEnd || 'END'} has no ${dialect.keywords.rep || 'REP'} above it.`, 'error');
+              continue;
+            }
+            const left = (repsLeft.get(head) || 0) - 1;
+            if (left >= 1) { repsLeft.set(head, left); pc = head + 1; continue; }
+            repsLeft.delete(head);
             continue;
           }
 
@@ -1241,6 +1293,8 @@ export function interpret(text, config = {}) {
           events.push({ line: b.line, type: 'stop', moveIndex: moves.length, text: code === 0 ? 'Program stop (M00)' : 'Optional stop (M01)' });
           break;
         case 2: case 30:
+          // The end of a called file on a control that ends them this way.
+          if (code === returnCode && callStack.length) { returnFromCall(); break; }
           ended = true;
           events.push({ line: b.line, type: 'end', moveIndex: moves.length, text: `Program end (M${code === 30 ? '30' : '02'})` });
           break;

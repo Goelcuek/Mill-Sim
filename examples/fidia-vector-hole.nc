@@ -42,6 +42,24 @@ X-30 Y0 Z-3
 X30 Y0 Z-3
 >G0 Z10
 
+; ---- $REP: three grooves, one round of the loop each ------------------
+;      $REP counts, it does not ask: everything down to $END runs three
+;      times over, and the G91 step in the middle is what makes each round
+;      land somewhere new. On a real program this is where the toolpath is
+;      called and the rotary indexed a quarter turn between the rounds.
+>G0 X-30 Y-20 Z2
+F900
+$REP 3
+Z-1                     ; down into the metal
+X30                     ; cut across
+>G0 Z2                  ; up
+>G91
+Y6                      ; over one groove
+>G90
+>G0 X-30                ; and back to the start of the next one
+$END
+>G0 Z10
+
 ; ---- an arc, radius written negative ---------------------------------
 >G0 X-20 Y22 Z10
 F700

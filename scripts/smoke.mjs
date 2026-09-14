@@ -319,6 +319,12 @@ try {
       '>U0.0000(ITEM BASLANGIC ACISI)',
       '>M03 S1000',
       '>Z14.173 F8000',
+      // $REP counts: three rounds of one move each, so five moves in all.
+      '$REP 3',
+      '>G91',
+      'Z-2.0',
+      '>G90',
+      '$END',
       'M30',
     ].join('\n');
     await page.evaluate(() => window.millsim.setControl('fanuc'));
@@ -347,7 +353,7 @@ try {
     console.log('wrong control:', JSON.stringify({ before: wrong.errors, after: right.errors, moves: right.moves, table: right.table }));
     check(right.dialect === 'fidia', 'the offer did not change the control');
     check(right.errors === 0, `still ${right.errors} errors after taking the offer`);
-    check(right.moves > 0, 'no toolpath after taking the offer');
+    check(right.moves === 5, `expected 5 moves — two, and three rounds of $REP — and got ${right.moves}`);
     // The tool-table header is skipped rather than read as coordinates,
     // and the summary says so rather than passing over it quietly.
     check(right.table === 3, `${right.table} tool-table lines accounted for, expected 3`);

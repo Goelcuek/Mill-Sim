@@ -300,9 +300,11 @@ test('a Fidia main program reads without a single error', () => {
   assert.ok(p.moves.some((m) => m.source === '2445M92P01_OP110_IT1_HELICAL_DELIK.txt'), 'the called file ran');
   assert.ok(p.moves.some((m) => Math.abs((m.rotTo || {}).A || 0) > 1), 'the tool vector turned the rotaries');
 
-  // U is the indexer on this machine, so U-90 is an index and not a slide.
-  const indexed = p.moves[p.moves.length - 1];
-  assert.ok(Math.abs(indexed.rotTo.U + 90) < 1e-6 || Math.abs(indexed.rotTo.C) > 0, 'U was read as the axis the chain says it is');
+  // And it came back out of it: the retract the main program writes after
+  // the call is the last thing that runs, not the called file's own M30.
+  const last = p.moves[p.moves.length - 1];
+  assert.equal(last.source, undefined, 'the program never came back from the file it called');
+  assert.ok(Math.abs(last.to[0] - -10.59) < 1e-6, `the last move went to X${last.to[0]}`);
 });
 
 test('a program written for another control says so instead of falling apart', () => {
@@ -428,4 +430,79 @@ test('a register is set by naming it and tested with one =', () => {
   ]);
   assert.deepEqual(errs(other), []);
   assert.ok(other.stats.bounds.max[0] < 90);
+});
+
+// ------------------------------------------------------- counting, not testing
+
+test('$REP runs the block under it as many times as it says', () => {
+  // The shape a Fidia program uses to machine four faces: call the
+  // toolpath, index the rotary a quarter turn, and let $REP do the
+  // counting.
+  const p = run([
+    'TP1:', 'ORIGIN 4', '>G90 G21', '>M03 S500', '>M08',
+    '$REP 4',
+    'IPC => CNC C:\\TEI\\TOOLPATH\\123_OP0_DRILLING.txt',
+    '>G91',
+    '>G0 Y-90.',
+    '>G90',
+    '$END',
+    '>G0 X0 Y0',
+    'F500',
+    'X1 Y1 Z-1',
+    '>M05',
+    'M30',
+  ], {
+    subprograms: [{ name: '123_OP0_DRILLING.txt', text: ['>G90 G21', 'F500', 'X1 Y1 Z-1', 'M30'].join('\n') }],
+  });
+  assert.deepEqual(errs(p), []);
+
+  const ran = p.moves.filter((m) => m.source === '123_OP0_DRILLING.txt');
+  assert.equal(ran.length, 4, `the called file ran ${ran.length} times`);
+
+  // The index between the calls went round four times with it, and what
+  // comes after $END ran once.
+  const indexed = p.moves.filter((m) => !m.source && m.kind === 'rapid' && m.to[1] < -80);
+  assert.equal(indexed.length, 4, `the rotary indexed ${indexed.length} times`);
+  assert.equal(p.moves.filter((m) => !m.source && m.kind === 'feed').length, 1, 'the block after $END did not run once');
+});
+
+test('$REP counts from an expression, and zero means skip it', () => {
+  const twice = run([
+    'RG 7 2.0', '>G90 G21', '>G0 X0 Y0 Z0', 'F500',
+    '$REP RG 7', '>G91', 'X10', '>G90', '$END', 'M30',
+  ]);
+  assert.deepEqual(errs(twice), []);
+  assert.ok(Math.abs(twice.stats.bounds.max[0] - 20) < 1e-6, `went to X${twice.stats.bounds.max[0]}`);
+
+  const never = run([
+    '>G90 G21', '>G0 X0 Y0 Z0', 'F500',
+    '$REP 0', '>G91', 'X10', '>G90', '$END',
+    '>G0 X5', 'M30',
+  ]);
+  assert.deepEqual(errs(never), []);
+  assert.ok(Math.abs(never.stats.bounds.max[0] - 5) < 1e-6, `the body ran: X${never.stats.bounds.max[0]}`);
+});
+
+test('$REP nests, and an outer round starts the inner one over', () => {
+  const p = run([
+    '>G90 G21', '>G0 X0 Y0 Z0', 'F500',
+    '$REP 3',
+    '$REP 2',
+    '>G91', 'X1', '>G90',
+    '$END',
+    '$END',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.ok(Math.abs(p.stats.bounds.max[0] - 6) < 1e-6, `three rounds of two should reach X6, reached X${p.stats.bounds.max[0]}`);
+});
+
+test('a $REP with no $END is said out loud', () => {
+  const p = run(['>G90 G21', '>G0 X0 Y0 Z0', 'F500', '$REP 4', '>G91', 'X1', 'M30']);
+  assert.ok(errs(p).some((w) => /\$REP has no \$END/.test(w.message)), errs(p).map((w) => w.message).join(' | '));
+});
+
+test('a $END with no $REP is said out loud', () => {
+  const p = run(['>G90 G21', '>G0 X0 Y0 Z0', '$END', 'M30']);
+  assert.ok(errs(p).some((w) => /\$END has no \$REP/.test(w.message)), errs(p).map((w) => w.message).join(' | '));
 });

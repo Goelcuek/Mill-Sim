@@ -50,6 +50,7 @@ const FANUC = {
     if: 'IF', then: 'THEN', goto: 'GOTO', gotoBack: null,
     while: 'WHILE', do: 'DO', end: 'END', endWhile: null,
     for: null, to: null, endFor: null, repeat: null, until: null,
+    rep: null, repEnd: null,
   },
   locals: 33,
   labels: 'line',
@@ -74,6 +75,7 @@ const SIEMENS = {
     if: 'IF', then: null, goto: 'GOTOF', gotoBack: 'GOTOB',
     while: 'WHILE', do: null, end: null, endWhile: 'ENDWHILE',
     for: 'FOR', to: 'TO', endFor: 'ENDFOR', repeat: 'REPEAT', until: 'UNTIL',
+    rep: null, repEnd: null,
   },
   locals: 0,
   labels: 'name',
@@ -97,6 +99,7 @@ const HEIDENHAIN = {
     if: 'IF', then: 'THEN', goto: 'GOTO', gotoBack: null,
     while: 'WHILE', do: 'DO', end: 'END', endWhile: null,
     for: null, to: null, endFor: null, repeat: null, until: null,
+    rep: null, repEnd: null,
   },
   locals: 0,
   labels: 'line',
@@ -120,6 +123,7 @@ const OKUMA = {
     if: 'IF', then: 'THEN', goto: 'GOTO', gotoBack: null,
     while: 'WHILE', do: 'DO', end: 'END', endWhile: null,
     for: null, to: null, endFor: null, repeat: null, until: null,
+    rep: null, repEnd: null,
   },
   locals: 0,
   labels: 'line',
@@ -160,6 +164,13 @@ const FIDIA = {
     if: '$IF', then: null, goto: '$GOTO', gotoBack: null,
     while: '$WHILE', do: null, end: null, endWhile: '$ENDWHILE',
     for: null, to: null, endFor: null, repeat: null, until: null,
+    /**
+     * Count, rather than test: $REP 4 runs everything down to $END four
+     * times over. It is how a Fidia program says "and the same again on
+     * the next face" — the body calls the toolpath, indexes the rotary a
+     * quarter turn, and $REP does the counting.
+     */
+    rep: '$REP', repEnd: '$END',
   },
   /** Control words wear a $; labels and registers do not. */
   keywordPrefix: '$',

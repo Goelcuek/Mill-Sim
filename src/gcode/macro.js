@@ -526,6 +526,11 @@ export function parseMacroBlock(code, dialect) {
           continue;
         }
         if (p.isWord('endFor')) { p.next(); control = { kind: 'end-for', level: 0 }; continue; }
+
+        // A loop that counts instead of testing: $REP 4 ... $END.
+        if (p.isWord('rep')) { p.next(); control = { kind: 'times', count: p.expression(), level: 0 }; continue; }
+        if (p.isWord('repEnd')) { p.next(); control = { kind: 'end-times', level: 0 }; continue; }
+
         if (p.isWord('repeat')) { p.next(); control = { kind: 'repeat', level: 0 }; continue; }
         if (p.isWord('until')) { p.next(); control = { kind: 'until', cond: p.expression(), level: 0 }; continue; }
 
