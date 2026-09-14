@@ -7,6 +7,7 @@
 // programs with millions of moves.
 
 import { checkFixtures, checkLimits, checkTable } from './collision.js';
+import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
 
 export const COLLISION_TYPES = {
@@ -368,16 +369,34 @@ export class Simulator {
    * @param {number} u  0..1 through the move, for interpolating the swing
    */
   poseAt(mv, point, u) {
-    const index = this.indexer ? this.indexAt(mv, u) : 0;
+    const idx = this.indexer;
+    const index = idx ? this.indexAt(mv, u) : 0;
+    // Who turns the part: the chain, when the machine has been modelled
+    // with the axis, or this, when it has not. Doing it twice puts the cut
+    // at double the angle, and doing it neither leaves the tool going
+    // round with the part instead of standing still.
+    const chainSpins = !!(idx && idx.inChain);
     if (!this.fiveAxis) return { tip: this.onPart(point, index), dir: UP, index };
     const rot = this.rotaryAt(mv, u);
     const gauge = this.gaugeLength;
     const k = this.kinematics;
     if (mv.tcp) {
-      return { tip: this.onPart(point, index), dir: this.onPart(k.toolAxis(rot, gauge), index), index };
+      // Under RTCP the programmed point is the tip, given in the
+      // coordinate system — which is the one that stays still while the
+      // part indexes. The chain is not consulted for it, so nothing has
+      // carried it onto the part yet, whichever way the machine is
+      // modelled; and everything downstream — the cut, the drawn tool —
+      // wants it on the part.
+      const axis = k.toolAxis(rot, gauge);
+      if (chainSpins) {
+        const m = k.indexTransform(k.coordNode(idx.letter), { ...rot });
+        return { tip: m4.transformPoint([0, 0, 0], m, point), dir: m4.normalize(m4.transformDir([0, 0, 0], m, axis)), index };
+      }
+      return { tip: this.onPart(point, index), dir: this.onPart(axis, index), index };
     }
     const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
-    return { tip: this.onPart(r.tip, index), dir: this.onPart(r.axis, index), index };
+    const spin = chainSpins ? 0 : index;
+    return { tip: this.onPart(r.tip, spin), dir: this.onPart(r.axis, spin), index };
   }
 
   /** The letter that turns the work rather than the machine, or null. */

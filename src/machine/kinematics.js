@@ -124,6 +124,10 @@ export class Kinematics {
     this.locals = new Map(this.order.map((n) => [n.id, m4.create()]));
     this.toolPath = this.pathTo(this.toolNode);
     this.workPath = this.pathTo(this.workNode);
+    // Cached against a chain that has just changed shape.
+    this._indexZero = null;
+    this._indexZeroId = null;
+    this._refGauge = null;
     this.toolSet = new Set(this.toolPath.map((n) => n.id));
     this.workSet = new Set(this.workPath.map((n) => n.id));
   }
@@ -360,6 +364,59 @@ export class Kinematics {
       axis,
       matrix: frame,
     };
+  }
+
+  /**
+   * The node the coordinate system hangs off, given the indexer's letter.
+   *
+   * An indexer turns the work without turning the frame the work is
+   * measured in: the offset is a place on the table and it stays there
+   * whatever angle the part is sitting at. So the coordinate frame is
+   * everything the work node carries *except* that rotary, which means
+   * the node above it. A machine with no such axis — or one where that
+   * letter is a real slide — keeps the work node itself.
+   *
+   * @param {string|null} letter
+   */
+  coordNode(letter) {
+    if (!letter) return this.workNode;
+    let id = this.workNode;
+    let guard = 0;
+    while (id && guard++ < 64) {
+      const node = this.byId.get(id);
+      if (!node) break;
+      if (node.letter === letter && node.kind === 'rotary') return node.parent || this.workNode;
+      id = node.parent;
+    }
+    return this.workNode;
+  }
+
+  /**
+   * The transform that carries a point from the coordinate frame onto the
+   * part, for the angles given.
+   *
+   * At the index's zero the two frames are the same point-for-point, which
+   * is what makes this the identity there and a rotation about the
+   * indexer's own axis, through the indexer's own pivot, everywhere else.
+   * It is read off the chain rather than assumed to be a spin about Z: an
+   * indexer bolted on at an angle, or turning about -Z as a Fidia's table
+   * does, is still just whatever its joint says it is.
+   *
+   * @param {string} coordId
+   * @param {Record<string, number>} values
+   * @returns {Float64Array} a 4x4, column major
+   */
+  indexTransform(coordId, values) {
+    const between = (id) => m4.multiply(
+      m4.create(), m4.invertRigid(m4.create(), this.matrixOf(id)), this.matrixOf(this.workNode),
+    );
+    if (!this._indexZero || this._indexZeroId !== coordId) {
+      this.solve({});
+      this._indexZero = between(coordId);
+      this._indexZeroId = coordId;
+    }
+    this.solve(values);
+    return m4.multiply(m4.create(), m4.invertRigid(m4.create(), between(coordId)), this._indexZero);
   }
 
   /**

@@ -769,12 +769,14 @@ try {
         '$END',
         '>G0 Z20', 'M30',
       ].join('\n'), 'indexed-machine.nc');
-      // The chain answers for it now, so the control's stand-in stands down.
+      // The chain answers for it now; the angle is still reported, and
+      // says so.
       return { standIn: app.state.program.indexer };
     });
     await page.waitForTimeout(400);
     check(/U:rotary/.test(built.axis), `the machine's extras are ${built.axis}`);
-    check(loaded.standIn === null, 'the control indexed a machine that indexes itself');
+    check(loaded.standIn && loaded.standIn.inChain === true,
+      `the indexer reads ${JSON.stringify(loaded.standIn)} on a machine that has the axis`);
 
     await runToEnd(page);
     const framed = await page.evaluate(() => {

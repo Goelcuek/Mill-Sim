@@ -183,21 +183,27 @@ function extraLetters(cfg) {
     }
   }
   // The part indexer is read whether or not the machine has been modelled
-  // with one, because it is not one of the machine's axes: see indexerOf.
+  // with one: see indexerOf. What the chain says about a letter it has
+  // stands — this only adds the letter a machine does not name at all.
   const idx = indexerOf(cfg);
-  if (idx) out.set(idx.letter, 'rotary');
+  if (idx && !out.has(idx.letter)) out.set(idx.letter, 'rotary');
   return out;
 }
 
 /**
  * The letter that turns the work rather than the machine.
  *
- * A Fidia's U is the angle the part is sitting at. Nothing on the machine
- * moves to change it — the work turns, and the tool goes on standing where
- * the program put it — so it cannot be an axis in the chain, and a machine
- * that has been modelled with a real U slide keeps that instead.
+ * A Fidia's U is the angle the part is sitting at: the work turns and the
+ * coordinate system it is measured in does not. Which is true whether or
+ * not the machine has been modelled with the axis — a shop that has drawn
+ * its indexer into the chain has one that turns the part through the
+ * chain, and one that has not still writes U in its programs — so the
+ * angle is reported either way and `inChain` says who applies it.
  *
- * @returns {null | {letter:string, axis:string}}
+ * A machine that says its U is a slide is taken at its word: that is a
+ * different machine, and the chain wins.
+ *
+ * @returns {null | {letter:string, axis:string, inChain:boolean}}
  */
 function indexerOf(cfg) {
   const d = resolveDialect(
@@ -208,9 +214,10 @@ function indexerOf(cfg) {
   const idx = d.indexer;
   if (!idx || !idx.letter) return null;
   const kin = cfg && cfg.kinematics;
-  if (kin && typeof kin.extras === 'function'
-    && kin.extras().some((n) => n.letter === idx.letter)) return null;
-  return idx;
+  const node = kin && typeof kin.extras === 'function'
+    ? kin.extras().find((n) => n.letter === idx.letter) : null;
+  if (node && node.kind !== 'rotary') return null;
+  return { ...idx, inChain: !!node };
 }
 
 /**

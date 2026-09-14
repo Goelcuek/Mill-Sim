@@ -22,6 +22,7 @@ import { silhouetteSpheres } from '../src/sim/collision.js';
 import { buildAssembly } from '../src/tools/assembly.js';
 import { makeTool } from '../src/tools/toolDefs.js';
 import { defaultHolders } from '../src/tools/holderDefs.js';
+import * as m4 from '../src/core/mat4.js';
 
 const d = DIALECTS.fidia;
 const trunnion = () => buildPreset('tableTable');
@@ -576,4 +577,61 @@ test('a machine modelled with a real U axis keeps it', () => {
     kinematics: new Kinematics(kin),
   });
   assert.equal(p.indexer, null, 'a machine with its own U had it taken away');
+});
+
+test('under RTCP the tool stands still while the part indexes', () => {
+  // The machine in front of us: X, Y, Z, C and A on the head, and a U
+  // table on the other branch with the part bolted to it. Under RTCP the
+  // programmed point is the tip, given in the coordinate system — which
+  // is the one that does not turn — so the tool has to stay exactly where
+  // the program put it while the work goes round underneath.
+  const kin = new Kinematics({
+    name: 'head with a U table',
+    nodes: [
+      { id: 'base', name: 'Base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+      { id: 'x', name: 'X', letter: 'X', kind: 'linear', parent: 'base', axis: [1, 0, 0], origin: [0, 0, 0] },
+      { id: 'y', name: 'Y', letter: 'Y', kind: 'linear', parent: 'x', axis: [0, 1, 0], origin: [0, 0, 0] },
+      { id: 'z', name: 'Z', letter: 'Z', kind: 'linear', parent: 'y', axis: [0, 0, 1], origin: [0, 0, 300] },
+      { id: 'c', name: 'C', letter: 'C', kind: 'rotary', parent: 'z', axis: [0, 0, 1], origin: [0, 0, -100] },
+      { id: 'a', name: 'A', letter: 'A', kind: 'rotary', parent: 'c', axis: [1, 0, 0], origin: [0, 0, -50] },
+      { id: 'spindle', name: 'Spindle', kind: 'carrier', parent: 'a', origin: [0, 0, 0] },
+      // A Fidia's table turns about -Z, which is the point of reading the
+      // angle off the chain rather than assuming a spin about +Z.
+      { id: 'u', name: 'U table', letter: 'U', kind: 'rotary', parent: 'base', axis: [0, 0, -1], origin: [0, 0, 0] },
+    ],
+    toolNode: 'spindle',
+    workNode: 'u',
+    spindleOffset: [0, 0, 0],
+    tableOffset: [0, 0, 0],
+  });
+
+  const p = run([
+    'RTCP ON', '>G90 G21', 'F500',
+    '>G0 X30 Y0 Z0',
+    '>G91', '>G0 U-90.', '>G90',
+    '>G0 X30 Y0 Z0',
+    'M30',
+  ], { kinematics: kin, gauge: 160 });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.indexer.letter, 'U');
+  assert.equal(p.indexer.inChain, true, 'the machine models the axis, so the chain turns it');
+
+  const sim = new Simulator();
+  sim.load({ program: p, stock: null, slots: new Map(), fallbackSlot: null, kinematics: kin });
+
+  // Where the tool is drawn: the part frame carries the part-frame tip
+  // back out into the world.
+  const drawn = (mv) => {
+    const pose = sim.poseAt(mv, mv.to, 1);
+    kin.solve({ ...mv.rotTo, X: mv.to[0], Y: mv.to[1], Z: mv.to[2] });
+    return { part: pose.tip, world: m4.transformPoint([0, 0, 0], kin.matrixOf(kin.workNode), pose.tip) };
+  };
+  const before = drawn(p.moves[0]);
+  const after = drawn(p.moves[p.moves.length - 1]);
+
+  // The same programmed point, the part turned a quarter underneath it.
+  near(before.part[0], 30, 1e-9, 'the tip on the part before');
+  near(after.part[1], -30, 1e-9, 'the tip on the part after');
+  // And the tool has not moved a micron.
+  for (let i = 0; i < 3; i++) near(after.world[i], before.world[i], 1e-9, `the drawn tool, axis ${i}`);
 });

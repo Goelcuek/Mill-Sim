@@ -228,31 +228,13 @@ export class MachineView {
   }
 
   /**
-   * Which node the coordinate frame hangs off.
-   *
-   * Everything the work node carries, except the indexer. A rotary that
-   * only indexes the part is not part of the coordinate system: the work
-   * offset is a place on the table and it stays there whatever angle the
-   * part is sitting at. Which letter that is, is the control's to say —
-   * see the `indexer` note in gcode/dialects.js — so a machine with a U
-   * that is a real slide, or a control that has no indexer at all, gets
-   * the work node itself and nothing changes.
+   * Which node the coordinate frame hangs off: everything the work node
+   * carries except the indexer. Which letter that is, is the control's to
+   * say — see the `indexer` note in gcode/dialects.js — and the chain
+   * works out the rest.
    */
   coordNode() {
-    const kin = this.kinematics;
-    const letter = this.indexerLetter();
-    if (!letter) return kin.workNode;
-    // From the part up to the root: the first indexer on that path is the
-    // one the coordinate frame has to sit above.
-    let id = kin.workNode;
-    let guard = 0;
-    while (id && guard++ < 64) {
-      const node = kin.byId.get(id);
-      if (!node) break;
-      if (node.letter === letter && node.kind === 'rotary') return node.parent || kin.workNode;
-      id = node.parent;
-    }
-    return kin.workNode;
+    return this.kinematics.coordNode(this.indexerLetter());
   }
 
   /** The letter this machine's control turns the work with, or null. */
