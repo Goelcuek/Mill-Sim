@@ -223,11 +223,15 @@ try {
     window.millsim.reinterpret();
   });
   await page.waitForTimeout(500);
+  await page.evaluate(() => window.millsim.setHome([-12, 7, 305]));
+  await page.waitForTimeout(400);
   const before = await page.evaluate(() => ({
     source: window.millsim.state.source.length,
     blocks: window.millsim.state.program.stats.blockCount,
     subs: window.millsim.state.subprograms.length,
     names: window.millsim.state.subprograms.map((s) => s.name).join('|'),
+    home: [...window.millsim.state.machine.home],
+    limits: [...window.millsim.state.machine.limits.min],
   }));
 
   await page.click('.ribbon-tab[data-tab="setup"]');
@@ -261,6 +265,8 @@ try {
     blocks: window.millsim.state.program.stats.blockCount,
     subs: window.millsim.state.subprograms.length,
     names: window.millsim.state.subprograms.map((s) => s.name).join('|'),
+    home: [...window.millsim.state.machine.home],
+    limits: [...window.millsim.state.machine.limits.min],
     shown: document.querySelector('.editor-area').value.length,
   }));
   console.log('project round trip:', JSON.stringify(after));
@@ -268,6 +274,9 @@ try {
     'the project did not come back with its program');
   check(after.subs === before.subs, 'the project did not come back with its subprograms');
   check(after.names === before.names, `the subprogram names changed: ${before.names} became ${after.names}`);
+  check(JSON.stringify(after.home) === JSON.stringify(before.home)
+    && JSON.stringify(after.limits) === JSON.stringify(before.limits),
+    `home or the envelope did not survive the project: ${JSON.stringify(before.home)}/${JSON.stringify(before.limits)} became ${JSON.stringify(after.home)}/${JSON.stringify(after.limits)}`);
 
   // ---- and a file is found by the name it is saved under ----------------
   const named = await page.evaluate(() => {
@@ -279,6 +288,33 @@ try {
   });
   console.log('call by name:', JSON.stringify(named));
   check(named.errors === 0 && named.ran, 'a subprogram called by its name was not found');
+
+  // ---- G53 and the envelope both measure from home ----------------------
+  await page.click('.ribbon-tab[data-tab="machine"]');
+  await page.click('.ribbon-page[data-page="limits"]');
+  await page.waitForTimeout(300);
+  const labels = await page.$$eval('.panel .field-label', (n) => n.map((x) => x.textContent.trim()));
+  check(labels.some((t) => t.startsWith('Home X')), 'the Travels page has no home position');
+
+  const g53At = async (home) => page.evaluate((h) => {
+    const app = window.millsim;
+    app.setHome(h);
+    app.loadProgram('G21 G90 G54\nG0 X0 Y0 Z0\nG53 G0 Z-50\nM30\n', 'g53.nc');
+    const moves = app.state.program.moves;
+    return {
+      tip: moves[moves.length - 1].to[2],
+      ceiling: app.machineView.config.limits.max[2],
+      stored: app.state.machine.limits.max[2],
+    };
+  }, home);
+  const low = await g53At([0, 0, 250]);
+  const high = await g53At([0, 0, 400]);
+  console.log('home:', JSON.stringify({ low: low.tip, high: high.tip, stored: high.stored }));
+  check(Math.abs(low.tip - 200) < 1e-6 && Math.abs(high.tip - 350) < 1e-6,
+    `G53 Z-50 did not follow home: ${low.tip} then ${high.tip}`);
+  check(low.stored === high.stored, 'the stored envelope should not change when home moves');
+  await page.evaluate(() => window.millsim.setHome([0, 0, 250]));
+  await page.waitForTimeout(300);
 
   // ---- moving a pivot does not move the machine -------------------------
   //

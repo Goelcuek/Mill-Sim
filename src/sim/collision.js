@@ -141,14 +141,21 @@ export function checkTable(spheres, tip, table, clearance = 0) {
 
 /**
  * Travel-limit check for the tool tip.
+ *
+ * `limits` are scene coordinates — see limitsInScene, which is what turns a
+ * machine's own envelope into them. `home` is only used to report the
+ * answer the way a control would: as a machine coordinate.
+ *
  * @returns {null|{axis:string, value:number, limit:number}}
  */
-export function checkLimits(tip, limits) {
+export function checkLimits(tip, limits, home = [0, 0, 0]) {
   if (!limits || !limits.enabled) return null;
   const names = ['X', 'Y', 'Z'];
   for (let a = 0; a < 3; a++) {
-    if (tip[a] < limits.min[a] - 1e-6) return { axis: names[a], value: tip[a], limit: limits.min[a] };
-    if (tip[a] > limits.max[a] + 1e-6) return { axis: names[a], value: tip[a], limit: limits.max[a] };
+    // Compared where the tool is, reported where the control would say it
+    // is: the machine coordinate, measured from home.
+    if (tip[a] < limits.min[a] - 1e-6) return { axis: names[a], value: tip[a] - home[a], limit: limits.min[a] - home[a] };
+    if (tip[a] > limits.max[a] + 1e-6) return { axis: names[a], value: tip[a] - home[a], limit: limits.max[a] - home[a] };
   }
   return null;
 }

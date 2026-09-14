@@ -7,6 +7,7 @@
 // programs with millions of moves.
 
 import { checkFixtures, checkLimits, checkTable } from './collision.js';
+import { homeOf, limitsInScene } from '../machine/config.js';
 
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
@@ -614,11 +615,14 @@ export class Simulator {
           gap: tbl.gap,
         });
       }
-      const lim = checkLimits(tip, this.machine.limits);
+      // The envelope belongs to the machine and is measured from its home
+      // switches, so what is reported is the machine coordinate — which is
+      // the number on the control when the axis stops.
+      const lim = checkLimits(tip, limitsInScene(this.machine), homeOf(this.machine));
       if (lim) {
         this.report('limit', {
           line: mv.line,
-          message: `${lim.axis} travel limit exceeded: ${lim.value.toFixed(2)} vs ${lim.limit.toFixed(2)} mm.`,
+          message: `${lim.axis} travel limit exceeded: machine ${lim.axis}${lim.value.toFixed(2)} vs ${lim.limit.toFixed(2)} mm.`,
           position: tip.slice(),
           depth: Math.abs(lim.value - lim.limit),
         });

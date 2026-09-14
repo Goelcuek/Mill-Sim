@@ -11,6 +11,7 @@ import { openFixtureDialog, openStockDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
 import { fmt } from '../core/util.js';
 import { describeShape } from '../sim/stockShape.js';
+import { homeOf } from '../machine/config.js';
 import { RESOLUTIONS } from '../app.js';
 
 const AXES = ['X', 'Y', 'Z'];
@@ -365,11 +366,12 @@ export class SetupPanel extends Panel {
           onClick: () => { const st = app.stock; app.applyWcs(editing, [st.origin[0] + st.size[0] / 2, st.origin[1] + st.size[1] / 2, st.top]); },
         },
       ]),
-      row([
-        field('Home / G28 Z', app.state.machineZero[2], {
-          step: 10, unit: 'mm',
-          onChange: (v) => app.setMachineZero([app.state.machineZero[0], app.state.machineZero[1], v || 0]),
-        }),
+      // Machine zero is the machine's, not the job's: it is where the home
+      // switches are, and the travel limits are measured from it too. Both
+      // live together on Machine > Travels rather than half here.
+      el('div.hint', {}, `G53 and G28 measure from machine zero, which is at ${homeOf(app.state.machine).map((v) => fmt(v, 2)).join(', ')}. ${editing} zero sits ${homeOf(app.state.machine).map((v, i) => fmt(wcs[editing][i] - v, 2)).join(', ')} from it in machine coordinates.`),
+      actionRow([
+        { label: 'Machine zero and travels…', hint: 'On Machine \u203a Travels, with the envelope it measures', onClick: () => app.setPage('machine', 'limits') },
       ]),
     ]);
   }

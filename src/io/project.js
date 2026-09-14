@@ -22,6 +22,7 @@
 
 import { writeZip, readZip } from './zip.js';
 import { writeSTL, parseSTL } from './stl.js';
+import { homeOf } from '../machine/config.js';
 
 export const PROJECT_VERSION = 1;
 
@@ -116,7 +117,12 @@ export async function writeProject(app) {
     stock,
     wcs: JSON.parse(JSON.stringify(state.wcs)),
     wcsEdit: state.wcsEdit,
-    machineZero: [...state.machineZero],
+    /**
+     * Machine zero, which is the machine's own — machine/machine.json
+     * carries it too. Written here as well because that is where every
+     * project written so far has kept it.
+     */
+    machineZero: [...homeOf(state.machine)],
     gougeTolerance: state.gougeTolerance,
     checks: JSON.parse(JSON.stringify(state.checks)),
     activeAssemblyId: state.activeAssemblyId,
@@ -220,7 +226,11 @@ export async function readProject(app, entries) {
 
   if (def.wcs) app.state.wcs = JSON.parse(JSON.stringify(def.wcs));
   if (def.wcsEdit) app.state.wcsEdit = def.wcsEdit;
-  if (Array.isArray(def.machineZero)) app.state.machineZero = def.machineZero.map(Number);
+  // The machine folder has already been read, home included; a project that
+  // states it as well is the older layout and still means it.
+  if (Array.isArray(def.machineZero) && def.machineZero.length === 3) {
+    app.state.machine.home = def.machineZero.map(Number);
+  }
   if (Number.isFinite(def.gougeTolerance)) app.state.gougeTolerance = def.gougeTolerance;
   if (def.checks) {
     Object.assign(app.state.checks, def.checks);

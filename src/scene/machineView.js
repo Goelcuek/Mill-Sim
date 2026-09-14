@@ -22,7 +22,7 @@ import { Kinematics } from '../machine/kinematics.js';
 import { buildPreset, PRESETS } from '../machine/presets.js';
 import { TONES, buildCasting } from './castings.js';
 import { DEFAULT_PARAMETERS, defaultMacros } from '../machine/macros.js';
-import { DEFAULT_MACHINE, MACHINE_SETTINGS } from '../machine/config.js';
+import { DEFAULT_MACHINE, MACHINE_SETTINGS, limitsInScene } from '../machine/config.js';
 
 export { DEFAULT_MACHINE, MACHINE_SETTINGS };
 
@@ -97,7 +97,12 @@ export class MachineView {
     this.config = {
       ...DEFAULT_MACHINE,
       ...cfg,
-      limits: { ...DEFAULT_MACHINE.limits, ...(cfg && cfg.limits) },
+      // A limits object that does not say what it is measured from is an
+      // old one, in scene coordinates. Saying so beats inheriting a frame
+      // from the defaults and reading it as something it is not.
+      limits: cfg && cfg.limits
+        ? { ...DEFAULT_MACHINE.limits, ...cfg.limits, frame: cfg.limits.frame || 'work' }
+        : { ...DEFAULT_MACHINE.limits },
       table: { ...DEFAULT_MACHINE.table, ...(cfg && cfg.table) },
       parameters: { ...DEFAULT_PARAMETERS, ...(cfg && cfg.parameters) },
       macros: (cfg && Array.isArray(cfg.macros)) ? cfg.macros : defaultMacros((cfg && cfg.controller && cfg.controller.flavour) || 'fanuc'),
@@ -274,7 +279,7 @@ export class MachineView {
       if (this.limitBox.parent) this.limitBox.parent.remove(this.limitBox);
       this.limitBox = null;
     }
-    const l = this.config.limits;
+    const l = limitsInScene(this.config);
     if (!l || !l.enabled) return;
     const b = new THREE.Box3(new THREE.Vector3(...l.min), new THREE.Vector3(...l.max));
     this.limitBox = new THREE.Box3Helper(b, 0x0a84ff);

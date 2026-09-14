@@ -17,6 +17,7 @@ import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
 import { fmt, uid } from '../core/util.js';
+import { homeOf } from '../machine/config.js';
 
 const KINDS = [
   { value: 'linear', label: 'Linear' },
@@ -881,8 +882,30 @@ export class MachinePanel extends Panel {
   travelSection() {
     const app = this.app;
     const m = app.state.machine;
+    const home = homeOf(m);
+    const wcsKey = app.state.wcsEdit;
+    const wcs = app.state.wcs[wcsKey] || [0, 0, 0];
 
     return [
+      // Machine zero. Everything a control says about where it is, it says
+      // from here — so it is one section with the envelope that hangs off
+      // it rather than a lone field on another tab.
+      section('Home position', [
+        el('div.hint', {}, 'Machine zero: where the tip stands with every axis at its home switch. G53 and G28 are measured from here, and so are the travels below — move it and the envelope goes with the machine rather than staying behind in the scene.'),
+        row(TRAVEL_AXES.map((a, i) => field(`Home ${a}`, home[i], {
+          step: 10, unit: 'mm',
+          onChange: (v) => {
+            const next = [...home];
+            next[i] = v || 0;
+            app.setHome(next);
+          },
+        }))),
+        actionRow([
+          { label: 'Pick a point…', variant: 'primary', hint: 'Click where the tip stands at home', onClick: () => app.pickHome() },
+          { label: 'Above the stock', hint: 'Over the middle of the block, clear of it', onClick: () => app.homeAboveStock() },
+        ]),
+        el('div.hint', {}, `${wcsKey} zero reads ${TRAVEL_AXES.map((a, i) => `${a} ${fmt(wcs[i] - home[i], 3)}`).join('  ')} in machine coordinates — the numbers that go on the setup sheet.`),
+      ]),
       section('Travel limits', [
         checkbox('Check travel limits', m.limits.enabled, (v) => {
           app.setMachine({ limits: { ...m.limits, enabled: v } });
@@ -890,6 +913,7 @@ export class MachinePanel extends Panel {
         }),
         m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} min`, m.limits.min[i], {
           step: 10, unit: 'mm',
+          title: `How far the tip can go in −${a} from home`,
           onChange: (v) => {
             const min = [...m.limits.min];
             min[i] = v || 0;
@@ -898,13 +922,15 @@ export class MachinePanel extends Panel {
         }))) : null,
         m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} max`, m.limits.max[i], {
           step: 10, unit: 'mm',
+          title: `How far the tip can go in +${a} from home`,
           onChange: (v) => {
             const max = [...m.limits.max];
             max[i] = v || 0;
             app.setMachine({ limits: { ...m.limits, max } });
           },
         }))) : null,
-        el('div.hint', {}, 'These are the tool tip\u2019s limits in work coordinates. Each rotary has its own travel on the Axes page, and both are checked. View \u203a Show draws the envelope in the viewport.'),
+        m.limits.enabled ? el('div.hint', {}, `Travel: ${TRAVEL_AXES.map((a, i) => `${a} ${fmt(m.limits.max[i] - m.limits.min[i], 1)}`).join(' · ')} mm.`) : null,
+        el('div.hint', {}, 'Machine coordinates, measured from home, which is how a control reads them out and a manual writes them down: at home the tip is at 0, 0, 0 and these say how far it goes from there. Each rotary has its own travel on the Axes page, and both are checked. View \u203a Show draws the envelope in the viewport.'),
       ]),
       section('Table and spindle', [
         checkbox('Check the table surface', m.table.enabled, (v) => app.setMachine({ table: { ...m.table, enabled: v } })),

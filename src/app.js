@@ -8,6 +8,7 @@ import { StockView } from './scene/stockView.js';
 import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE, MACHINE_SETTINGS } from './scene/machineView.js';
+import { homeOf, limitsInScene, normaliseLimits } from './machine/config.js';
 import { defaultMacros, DEFAULT_PARAMETERS, makeMacro, normaliseCode } from './machine/macros.js';
 import { MachineParts } from './machine/parts.js';
 import { PRESETS, buildPreset } from './machine/presets.js';
@@ -91,6 +92,8 @@ export class App {
       },
       machine: {
         ...DEFAULT_MACHINE,
+        home: [...DEFAULT_MACHINE.home],
+        limits: { ...DEFAULT_MACHINE.limits, min: [...DEFAULT_MACHINE.limits.min], max: [...DEFAULT_MACHINE.limits.max] },
         controller: { ...DEFAULT_MACHINE.controller },
         // Fresh copies: editing this machine's macros must not edit the
         // defaults every other machine starts from.
@@ -99,7 +102,6 @@ export class App {
         subprograms: [],
       },
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
-      machineZero: [0, 0, 250],
       /** Which work offset the Setup panel and the placement tools act on. */
       wcsEdit: 'G54',
       display: {
@@ -958,7 +960,7 @@ export class App {
       // full machine is drawn is about the window, not the machine.
       settings: Object.fromEntries(MACHINE_SETTINGS.map((k) => [k, clone(machine[k])])),
       /** Where the home switches are, which is what G28 and G53 mean. */
-      machineZero: [...this.state.machineZero],
+      machineZero: homeOf(this.state.machine),
       macros,
       subprograms,
       bodies,
@@ -1115,9 +1117,16 @@ export class App {
     // them, so that is what it gets back rather than whatever the machine
     // before it happened to be set to.
     if (!def.settings || def.settings.proxies === undefined) this.state.machine.proxies = true;
-    if (Array.isArray(def.machineZero) && def.machineZero.length === 3) {
-      this.state.machineZero = def.machineZero.map(Number);
-    }
+    // Home comes from the top level of machine.json, where it has always
+    // been written, and the envelope is read against the home it was saved
+    // with — a file written before the envelope was relative holds scene
+    // coordinates, and reading those as relative would put the walls a
+    // whole machine height out.
+    const savedHome = Array.isArray(def.machineZero) && def.machineZero.length === 3
+      ? def.machineZero.map(Number)
+      : ((def.settings && def.settings.home) || homeOf(this.state.machine));
+    this.state.machine.home = [...savedHome];
+    this.state.machine.limits = normaliseLimits((def.settings && def.settings.limits) || null, savedHome);
     this.machineView.setConfig(this.state.machine);
     this.machineView.setLimitsVisible(this.state.display.showLimits);
 
@@ -1195,8 +1204,53 @@ export class App {
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
-  setMachineZero(v) {
-    this.state.machineZero = v;
+  /** Point at home rather than typing it. */
+  pickHome() {
+    this.pick.begin({
+      steps: 1,
+      title: 'Machine home',
+      hints: ['Click where the tool tip stands at home'],
+      onDone: ([p]) => {
+        this.setHome(p);
+        this.notify(`Machine zero is now ${p.map((v) => fmt(v, 2)).join(', ')}. G53, G28 and the travel limits all measure from there.`, 'ok');
+      },
+    });
+    this.buildRibbon();
+  }
+
+  /**
+   * Home over the middle of the block, clear of the top of it.
+   *
+   * Not where any real machine homes, but a starting point that puts G28
+   * somewhere harmless while a chain is being built — which beats leaving
+   * machine zero inside the part.
+   */
+  homeAboveStock() {
+    const s = this.state.stock;
+    const top = s.origin[2] + s.size[2];
+    this.setHome([
+      s.origin[0] + s.size[0] / 2,
+      s.origin[1] + s.size[1] / 2,
+      top + Math.max(100, s.size[2]),
+    ]);
+    this.notify('Machine zero put over the middle of the block, clear of the top.', 'ok');
+  }
+
+  /**
+   * Where the machine sits at its home switches.
+   *
+   * Machine zero: G53 and G28 measure from it, and so does the envelope on
+   * Machine > Travels, which is why moving it carries the walls along
+   * rather than leaving them behind in the scene.
+   */
+  setHome(v) {
+    this.state.machine.home = [0, 1, 2].map((i) => Number(Number(v[i] || 0).toFixed(4)));
+    this.machineView.setConfig(this.state.machine);
+    this.machineView.setLimitsVisible(this.state.display.showLimits);
+    this.simulator.retune({ machine: this.state.machine });
+    if (this.panels && this.panels.machine) this.panels.machine.refresh();
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+    this.viewer.invalidate();
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
@@ -1395,8 +1449,8 @@ export class App {
     const program = interpret(text, {
       rapidRate: this.state.machine.rapidRate,
       wcs: this.state.wcs,
-      machineZero: this.state.machineZero,
-      g30: this.state.machineZero,
+      machineZero: homeOf(this.state.machine),
+      g30: homeOf(this.state.machine),
       kinematics: this.machineView ? this.machineView.kinematics : null,
       gaugeLength: this.fallbackSlot ? this.fallbackSlot.built.gaugeLength : 0,
       controller: this.state.machine.controller,

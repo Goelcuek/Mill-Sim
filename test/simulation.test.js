@@ -339,3 +339,50 @@ test('the table reports the gap above it as well as the dent in it', () => {
   const hit = checkTable(holder.spheres, [0, 0, -55], table, 0);
   assert.ok(hit && hit.gap < 0 && hit.depth > 0);
 });
+
+// ---- the envelope is the machine's, measured from its home ---------------
+//
+// A control counts from machine zero: at home the axes read 0, 0, 0 and the
+// travels are how far they go from there. Storing the envelope that way is
+// what lets the machine be moved about the scene without the walls staying
+// behind — and what lets the limit that stopped a move be reported as the
+// number that would be on the control.
+
+test('travel limits are held from home and reported as machine coordinates', async () => {
+  const { homeOf, limitsInScene, normaliseLimits, DEFAULT_MACHINE } = await import('../src/machine/config.js');
+
+  const machine = {
+    home: [0, 0, 250],
+    limits: { enabled: true, frame: 'home', min: [-380, -215, -370], max: [380, 215, 80] },
+  };
+  assert.deepEqual(homeOf(machine), [0, 0, 250]);
+
+  // The walls stand where home puts them.
+  const scene = limitsInScene(machine);
+  assert.deepEqual(scene.min, [-380, -215, -120]);
+  assert.deepEqual(scene.max, [380, 215, 330]);
+
+  // Inside is inside; outside is reported the way the control would say it.
+  assert.equal(checkLimits([0, 0, 0], scene, machine.home), null);
+  const low = checkLimits([0, 0, -200], scene, machine.home);
+  assert.equal(low.axis, 'Z');
+  assert.equal(low.value, -450, 'machine Z, not scene Z');
+  assert.equal(low.limit, -370);
+
+  // Moving home carries the envelope with it rather than leaving it behind.
+  const lifted = limitsInScene({ ...machine, home: [0, 0, 400] });
+  assert.deepEqual(lifted.max, [380, 215, 480], 'home 150 higher, ceiling 150 higher');
+  assert.deepEqual(lifted.min, [-380, -215, 30]);
+
+  // A machine saved before the envelope was relative wrote scene numbers
+  // and said nothing about a frame, so it is converted against its own home.
+  const old = normaliseLimits({ enabled: true, min: [-380, -215, -120], max: [380, 215, 330] }, [0, 0, 250]);
+  assert.equal(old.frame, 'home');
+  assert.deepEqual(old.min, [-380, -215, -370]);
+  assert.deepEqual(old.max, [380, 215, 80]);
+  // And one written since is left alone.
+  assert.deepEqual(normaliseLimits(machine.limits, machine.home).min, machine.limits.min);
+
+  // The machine every session starts from says the same thing both ways.
+  assert.deepEqual(limitsInScene(DEFAULT_MACHINE).min, [-380, -215, -120]);
+});
