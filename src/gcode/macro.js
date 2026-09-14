@@ -300,11 +300,23 @@ class Parser {
 
   comparison() {
     let left = this.logical();
-    while (this.peek().group === 'compare') {
-      const op = this.next().op;
-      left = { op: 'cmp', name: op, left, right: this.logical() };
+    for (;;) {
+      if (this.peek().group === 'compare') {
+        const op = this.next().op;
+        left = { op: 'cmp', name: op, left, right: this.logical() };
+        continue;
+      }
+      // A single = where a test belongs. Controls that spell assignment
+      // without one — see assignEquals — are free to spell equality with
+      // it, and a Fidia does: $IF (RG 50 = 1). Assignments are read before
+      // any expression is, so the two never want the same =.
+      if (this.d.eqCompare && this.is('=')) {
+        this.next();
+        left = { op: 'cmp', name: 'eq', left, right: this.logical() };
+        continue;
+      }
+      return left;
     }
-    return left;
   }
 
   logical() {
@@ -440,7 +452,10 @@ export function parseMacroBlock(code, dialect) {
   const assignment = () => {
     p.expect('#');
     const target = p.primary();
-    p.expect('=');
+    // Some controls name the register and then the value, with nothing in
+    // between: a Fidia writes RG 50 1.00 where a Fanuc writes #50 = 1.
+    if (d.assignEquals === false) p.eat('=');
+    else p.expect('=');
     return { target, value: p.expression() };
   };
 

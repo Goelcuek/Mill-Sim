@@ -129,6 +129,22 @@ export function lex(text, dialect) {
       }
     }
 
+    // A line that fills in one of the machine's own tables — the tool
+    // table, on a Fidia — rather than saying anything about the part. It is
+    // recorded and skipped whole: read word by word it is a page of
+    // nonsense coordinates on a program that is perfectly correct. See the
+    // `settings` note in dialects.js.
+    if (d.settings && d.settings.length) {
+      const set = settingIn(body, d.settings);
+      if (set) {
+        blocks.push({
+          line: i + 1, raw, words: [], comments, names: [], idents: [],
+          setting: set, blockDelete, skipped: false,
+        });
+        continue;
+      }
+    }
+
     // Program start/end markers and O-numbers carry no motion.
     if (body === '%') {
       blocks.push({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
@@ -215,6 +231,25 @@ export function lex(text, dialect) {
   }
 
   return blocks;
+}
+
+/**
+ * A tool-table line, or null.
+ *
+ * Two shapes count: one of the words this dialect names, and anything
+ * written WORD__n — the index form the declaring lines carry. Either way
+ * the rest of the line has to be numbers, so the same word asking a
+ * question keeps the reader it had.
+ */
+function settingIn(body, settings) {
+  const m = /^([A-Za-z][A-Za-z0-9]*)(_{2,}\d+)?\b([^]*)$/.exec(body);
+  if (!m) return null;
+  const name = m[1].toUpperCase();
+  const indexed = !!m[2];
+  if (!indexed && !settings.some((w) => w.toUpperCase() === name)) return null;
+  const tail = m[3].trim();
+  if (tail && !/^[-+\d.\s]+$/.test(tail)) return null;
+  return { name, text: tail, index: indexed ? Number(m[2].replace(/_/g, '')) : null };
 }
 
 /**

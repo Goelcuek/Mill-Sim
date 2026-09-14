@@ -304,6 +304,11 @@ try {
   {
     const main = [
       'TP5:',
+      '; *********** DEFINE TOOLS ***********',
+      'TTYP 7 10',
+      'TDIAM__1 7 0.1969',
+      'TMAXSP 7 20000',
+      'RG 50 1.00',
       'ORIGIN 1',
       'RTCP ON',
       '>M321',
@@ -336,11 +341,17 @@ try {
       dialect: window.millsim.state.machine.controller.dialect,
       errors: window.millsim.state.program.warnings.filter((w) => w.severity === 'error').length,
       moves: window.millsim.state.program.moves.length,
+      table: window.millsim.state.program.settings.length,
+      said: [...document.querySelectorAll('.panel')].map((p) => p.textContent).join(' '),
     }));
-    console.log('wrong control:', JSON.stringify({ before: wrong.errors, after: right.errors, moves: right.moves }));
+    console.log('wrong control:', JSON.stringify({ before: wrong.errors, after: right.errors, moves: right.moves, table: right.table }));
     check(right.dialect === 'fidia', 'the offer did not change the control');
     check(right.errors === 0, `still ${right.errors} errors after taking the offer`);
     check(right.moves > 0, 'no toolpath after taking the offer');
+    // The tool-table header is skipped rather than read as coordinates,
+    // and the summary says so rather than passing over it quietly.
+    check(right.table === 3, `${right.table} tool-table lines accounted for, expected 3`);
+    check(/Machine table/.test(right.said), 'the summary does not say what it skipped');
   }
 
   // ---- a big part can be looked at closely ------------------------------

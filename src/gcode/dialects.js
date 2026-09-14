@@ -183,6 +183,35 @@ const FIDIA = {
   /** Words that are commands in their own right. */
   commands: ['RTCP', 'RTCPTLCN', 'CQAHDW', 'CQA', 'ORIGIN', 'TDIAM', 'TLENGTH'],
   /**
+   * Lines that describe the machine's own tool table rather than the part.
+   *
+   * Every Fidia program opens with a block of them — one group per cutter,
+   * declaring its type, diameter, corner radius, flute count, top speed —
+   * because on the machine these fill in the table the control holds. The
+   * simulator gets its cutters from its own library, so what these say is
+   * already known and what they set is nothing this reads. They are skipped
+   * whole, and counted, rather than picked over word by word: taken as
+   * coordinates they are a page of errors on a program that is perfectly
+   * correct.
+   *
+   * The declaring form may carry an index — TDIAM__1 7 0.1969 is the first
+   * diameter of pot 7 — which is what tells it apart from the same word
+   * asking a question inside an expression: $IF (TDIAM 00 < 0.1) is still
+   * answered from the tool table. See `tables`.
+   *
+   * That index is also the general rule, so the list does not have to be
+   * complete: any word written WORD__n at the head of a line of numbers is
+   * one of these, whether or not it is named here.
+   */
+  settings: [
+    'TTYP', 'TDIAM', 'TLENGTH', 'PREDIAM', 'TRADIUS', 'PRERADIUS',
+    'TCUTNR', 'TMAXSP', 'MAXCUTLEN', 'TTOLLD',
+  ],
+  /** A register is set by naming it: RG 50 1.00, with no = in between. */
+  assignEquals: false,
+  /** And tested with one: $IF (RG 50 = 1). == is accepted as well. */
+  eqCompare: true,
+  /**
    * Questions a program asks about the tool table: TLENGTH 07 is the
    * length of pot 7, and 0 means whatever is in the spindle. A program
    * that checks its tool before it cuts — $IF (TLENGTH 00 < 0.1) — is
@@ -274,6 +303,7 @@ export function resolveDialect(id, overrides) {
     call: { ...base.call, ...(overrides.call || {}) },
     addresses: overrides.addresses || base.addresses,
     commands: overrides.commands || base.commands,
+    settings: overrides.settings || base.settings,
     tables: overrides.tables || base.tables,
     vectorMode: overrides.vectorMode || base.vectorMode,
   };

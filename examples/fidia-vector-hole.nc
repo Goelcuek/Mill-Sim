@@ -9,7 +9,21 @@
 ;   R         is written negative for the arc a Fanuc writes positive
 ;   G92       reads DX/DY/DZ — which way the tool points — and works
 ;             out the rotary positions itself. G93 goes back.
+;   RG 50 1   sets a register; $IF (RG 50 = 1) tests one.
 ; *********************************************************************
+
+; *********** DEFINE TOOLS ***********
+; The block every Fidia program opens with: it fills in the control's own
+; tool table. The simulator cuts with the assembly in the pot the program
+; calls for, so these are read and passed over — the Summary page says how
+; many. TDIAM asking a question inside an expression still gets answered.
+TTYP 2 1
+TDIAM__1 2 10.0
+TRADIUS__1 2 5.0
+TCUTNR__1 2 2
+TMAXSP 2 20000
+
+RG 50 1.00
 
 ORIGIN 1
 >G90 G21
@@ -37,7 +51,7 @@ G03 X20 Y22 R-25
 
 ; ---- vector mode: the block says where the tool points ---------------
 ;      A register the operator sets decides whether this one runs.
-$IF (RG 1 != 0) $GOTO DONE
+$IF (RG 50 = 0) $GOTO DONE
 
 G92
 >G0 X0 Y-22 Z20

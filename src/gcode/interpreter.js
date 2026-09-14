@@ -1595,5 +1595,12 @@ export function interpret(text, config = {}) {
     variablePrefix: dialect.sigil || dialect.letters[0] || '#',
     /** Which control this program looks written for, when it is not this one. */
     suggested,
+    /**
+     * The lines that fill in the machine's own tables and were skipped —
+     * the tool-table block a Fidia program opens with. Kept so the summary
+     * can say what was passed over instead of passing over it quietly.
+     */
+    settings: blocks.filter((b) => b.setting)
+      .map((b) => ({ line: b.line, name: b.setting.name, text: b.setting.text })),
   };
 }

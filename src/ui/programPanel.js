@@ -388,6 +388,16 @@ export class ProgramPanel extends Panel {
       ]));
     }
 
+    // Lines that set the machine's own tables rather than the part. They
+    // are skipped, and saying so here is the difference between skipped
+    // and quietly lost.
+    if (program.settings && program.settings.length) {
+      const names = [...new Set(program.settings.map((x) => x.name))];
+      this.summaryHost.appendChild(section(`Machine table (${program.settings.length} line${program.settings.length === 1 ? '' : 's'})`, [
+        el('div.hint', {}, `${names.join(', ')} — these fill in the control's own tool table. The simulator cuts with the assembly in the pot the program calls for, so they are read and passed over rather than taken as coordinates.`),
+      ]));
+    }
+
     const errors = program.warnings.filter((w) => w.severity === 'error');
     const warns = program.warnings.filter((w) => w.severity !== 'error');
     if (program.warnings.length) {

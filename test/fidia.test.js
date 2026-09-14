@@ -346,3 +346,86 @@ test('a program can ask the machine about its tool', () => {
   const empty = run(src, { tools: {} });
   assert.deepEqual(empty.moves, []);
 });
+
+// ----------------------------------------------- the machine's own tables
+
+test('the tool-table block a program opens with is skipped, not read as coordinates', () => {
+  const p = run([
+    '; *********** DEFINE TOOLS ***********',
+    'TTYP 7 10',
+    'TDIAM__1 7 0.1969',
+    'PREDIAM__1 7 0.1969',
+    'TRADIUS__1 7 0.0984',
+    'PRERADIUS__1 7 0.0984',
+    'TCUTNR__1 7 2',
+    'TMAXSP 7 20000',
+    'MAXCUTLEN__1 7 0.2469',
+    'TTOLLD__1 7 0.010',
+    '>G90 G21 G54',
+    'F500',
+    '>G0 X0 Y0 Z0',
+    'X10 Y0 Z0',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), [], 'a tool-table header should not be a page of errors');
+  assert.equal(p.settings.length, 9, 'the skipped lines are not accounted for');
+  assert.equal(p.settings[0].name, 'TTYP');
+  // Nothing from them reaches the toolpath: a 20000 on a TMAXSP line is a
+  // spindle limit, not twenty metres of travel.
+  assert.deepEqual(p.moves.map((m) => m.kind), ['rapid', 'feed']);
+  // (Z starts at the machine's own park height, which is not the program's.)
+  assert.ok(p.stats.bounds.max[0] <= 10 + 1e-9 && p.stats.bounds.max[1] <= 1e-9,
+    `the table lines moved something: ${p.stats.bounds.max}`);
+});
+
+test('a word ending in __n is a table line whether or not it is named', () => {
+  const p = run(['TSOMETHINGNEW__2 7 0.5', '>G90 G21 G54', '>G0 X1 Y1 Z1', 'M30']);
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.settings.length, 1);
+  assert.equal(p.settings[0].name, 'TSOMETHINGNEW');
+});
+
+test('but a word that means something still means it', () => {
+  // TDIAM declares up in the header and asks a question down in the
+  // program. Which one it is, is where it stands.
+  const p = run([
+    'TDIAM__1 7 0.1969',
+    '>G90 G21 G54',
+    '$IF (TDIAM 00 > 3) $GOTO BIG',
+    '>G0 X1 Y0 Z0',
+    'BIG:',
+    '>G0 X50 Y0 Z0',
+    'M30',
+  ], { tools: { 7: { diameter: 5, length: 100 } }, tool: 7 });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.settings.length, 1, 'the declaration was not skipped');
+  assert.ok(p.stats.bounds.max[0] > 40, 'the question was not answered from the tool table');
+});
+
+test('nonsense is still nonsense', () => {
+  // The rule is narrow on purpose: a line of numbers under a known name,
+  // or the __n form. A typo is neither, and still gets said out loud.
+  const p = run(['>G90 G21 G54', 'TDIAMX 7 0.1969', '>G0 X1 Y0 Z0', 'M30']);
+  assert.ok(errs(p).length > 0, 'a word nobody knows went through quietly');
+});
+
+test('a register is set by naming it and tested with one =', () => {
+  const p = run([
+    'RG 50 1.00',
+    '>G90 G21 G54',
+    '$IF (RG 50 = 1) $GOTO TP1',
+    '>G0 X99 Y0 Z0',
+    'TP1:',
+    '>G0 X5 Y0 Z0',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.ok(p.stats.bounds.max[0] < 90, 'the jump did not fire, so RG 50 never took the value');
+  // == is the same test, for a program that writes it that way.
+  const other = run([
+    'RG 50 1.00', '>G90 G21 G54', '$IF (RG 50 == 1) $GOTO TP1',
+    '>G0 X99 Y0 Z0', 'TP1:', '>G0 X5 Y0 Z0', 'M30',
+  ]);
+  assert.deepEqual(errs(other), []);
+  assert.ok(other.stats.bounds.max[0] < 90);
+});
