@@ -18,7 +18,7 @@ import { defaultMacros, DEFAULT_PARAMETERS } from './macros.js';
  */
 export const MACHINE_SETTINGS = [
   'home', 'tableSize', 'tableZ', 'spindleDiameter', 'spindleLength',
-  'limits', 'table', 'rapidRate', 'maxFeed', 'proxies',
+  'limits', 'table', 'rapidRate', 'maxFeed', 'proxies', 'accent',
 ];
 
 export const DEFAULT_MACHINE = {
@@ -60,6 +60,14 @@ export const DEFAULT_MACHINE = {
    * the way — so a machine started from a bare base turns them off.
    */
   proxies: true,
+  /**
+   * What colour this machine's moving castings are painted.
+   *
+   * null means the one the preset family comes in. A shop that has two of
+   * the same machine and paints them differently, or that just wants its
+   * own machine to look like its own machine, sets it.
+   */
+  accent: null,
   /**
    * The control, not the iron. Which flavour of G-code this machine reads
    * and what modal state it powers up in — see DEFAULT_CONFIG.controller

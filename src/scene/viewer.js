@@ -67,6 +67,15 @@ export function makeStudioEnvironment(renderer) {
   return texture;
 }
 
+/**
+ * Bigger than any machine: a helper drawn to infinity, not a thing to see.
+ *
+ * A hundred metres is four times the longest machine tool ever built, and
+ * the helpers that trip this are out at hundreds of kilometres, so there is
+ * nothing in between to get wrong.
+ */
+const UNBOUNDED = 100000;
+
 export class Viewer {
   /** @param {HTMLElement} container */
   constructor(container) {
@@ -93,8 +102,15 @@ export class Viewer {
     // everything within a centimetre of the camera was cut away.
     this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
     this.camera.position.set(240, -300, 220);
-    /** Roughly how big the thing being looked at is, in millimetres. */
+    /**
+     * How big everything in the scene is and where the middle of it is,
+     * in millimetres. Measured from the scene itself rather than from
+     * whatever was last framed: the far plane has to cover the machine
+     * standing round the part even when it is the part being looked at.
+     */
     this.sceneRadius = 400;
+    this.sceneCentre = new THREE.Vector3();
+    this.boundsDirty = true;
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     // No damping: the viewport should track the pointer exactly and stop
@@ -116,7 +132,7 @@ export class Viewer {
     // in the app changing, so it asks for the redraw itself.
     this.controls.addEventListener('change', () => {
       this.updateClipping();
-      this.invalidate();
+      this.invalidateView();
     });
 
     this.buildEnvironment();
@@ -290,7 +306,11 @@ export class Viewer {
   add(object) { this.scene.add(object); this.invalidate(); }
   remove(object) { this.scene.remove(object); this.invalidate(); }
 
-  invalidate() { this.needsRender = true; }
+  /** The scene changed: redraw it, and remeasure what it fills. */
+  invalidate() { this.boundsDirty = true; this.needsRender = true; }
+
+  /** Only the camera moved: redraw, but the scene is the size it was. */
+  invalidateView() { this.needsRender = true; }
 
   onFrame(fn) { this.callbacks.push(fn); return () => { this.callbacks = this.callbacks.filter((f) => f !== fn); }; }
 
@@ -327,6 +347,7 @@ export class Viewer {
       if (this.controls.enableDamping && this.controls.update()) this.needsRender = true;
       if (!this.needsRender) return;
       this.needsRender = false;
+      if (this.boundsDirty) this.measureScene();
       this.renderer.render(this.scene, this.camera);
       this.frames = (this.frames || 0) + 1;
     };
@@ -353,12 +374,54 @@ export class Viewer {
    */
   updateClipping() {
     const d = this.camera.position.distanceTo(this.controls.target);
-    const far = Math.max(d + this.sceneRadius * 2 + 200, 100);
+    // Far enough to reach the back of the scene from where the camera
+    // stands — which is not the same as twice the size of whatever was
+    // last framed. Fit the view to a 30 mm part inside a three metre
+    // gantry and that difference is the whole machine.
+    const reach = this.camera.position.distanceTo(this.sceneCentre) + this.sceneRadius;
+    const far = Math.max(d + 200, reach + this.sceneRadius * 0.25 + 200, 100);
     const near = Math.min(Math.max(d / 200, far / 100000), Math.max(d * 0.5, 0.02));
     if (near === this.camera.near && far === this.camera.far) return;
     this.camera.near = near;
     this.camera.far = far;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Remeasure what the scene fills.
+   *
+   * Everything in it counts, the grid and the backplot included: a clip
+   * plane that cuts away the thing you are trying to look at is the same
+   * bug whichever object it cuts. It runs on the frames where something
+   * changed, and a scene of a few dozen meshes costs nothing to measure —
+   * each one hands over the bounding box it already has.
+   */
+  measureScene() {
+    this.boundsDirty = false;
+    const box = new THREE.Box3();
+    const one = new THREE.Box3();
+    this.scene.updateMatrixWorld(true);
+    // Only what is on screen, and only what has a size. A drag gizmo hides
+    // a line scaled to a million millimetres inside itself to catch the
+    // pointer with; measured, it puts the middle of the scene fourteen
+    // kilometres away and spends the whole depth buffer getting there.
+    this.scene.traverseVisible((o) => {
+      if (!o.geometry || o.userData.unbounded) return;
+      if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+      if (!o.geometry.boundingBox) return;
+      one.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+      if (one.isEmpty()) return;
+      const size = one.getSize(new THREE.Vector3());
+      if (Math.max(size.x, size.y, size.z) > UNBOUNDED) return;
+      box.union(one);
+    });
+    if (box.isEmpty()) return;
+    box.getCenter(this.sceneCentre);
+    const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
+    if (!Number.isFinite(radius)) return;
+    this.sceneRadius = Math.max(radius, 5);
+    this.controls.maxDistance = Math.max(this.sceneRadius * 40, 4000);
+    this.updateClipping();
   }
 
   /** Frame a bounding box. */
@@ -373,12 +436,11 @@ export class Viewer {
     if (dir.lengthSq() < 1e-6) dir.set(1, -1, 0.8);
     dir.normalize().multiplyScalar(Math.max(dist, 20));
 
-    // How big the job is, which is what the clip planes and the dolly
-    // limits are measured against from here on.
-    this.sceneRadius = radius;
-    this.controls.maxDistance = Math.max(radius * 40, 4000);
+    // Framing something small does not make the scene small: the clip
+    // planes and the dolly limits come from the scene itself.
     this.controls.target.copy(centre);
     this.camera.position.copy(centre).add(dir);
+    this.measureScene();
     this.updateClipping();
     this.controls.update();
     this.invalidate();

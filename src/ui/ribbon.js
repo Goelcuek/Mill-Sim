@@ -95,7 +95,10 @@ export class Ribbon {
   renderBand() {
     const tab = this.currentTab();
     const pages = (tab && tab.pages) || [];
-    const key = `${this.active}#${pages.map((p) => `${p.id}:${p.badge ?? ''}`).join('|')}`;
+    // The label is part of the key, not just the id: a page that names
+    // what it is showing changes its label without changing its identity,
+    // and a row rebuilt only on identity would keep the old name.
+    const key = `${this.active}#${pages.map((p) => `${p.id}:${p.label}:${p.badge ?? ''}`).join('|')}`;
     if (this.bandKey !== key) {
       this.bandKey = key;
       clear(this.band);

@@ -856,6 +856,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   z-index: 1;
 }
 .editor-area:focus { box-shadow: none; }
+/* Showing a file that is not the job's to change — a machine macro. */
+.editor-locked .editor-area { color: var(--text-dim, #8b93a3); font-style: italic; }
+
+/* Which file the editor is showing, and why. */
+.editor-showing {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.editor-showing .name { font-weight: 600; }
+.editor-showing .why { color: var(--text-dim, #8b93a3); }
 .editor-highlight {
   position: absolute;
   left: 0; right: 0;

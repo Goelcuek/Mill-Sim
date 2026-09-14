@@ -26,7 +26,7 @@ export class Panel {
   get pages() {
     return this.pageDefs.map((p) => ({
       id: p.id,
-      label: p.label,
+      label: typeof p.label === 'function' ? p.label() : p.label,
       icon: p.icon,
       hint: p.hint,
       badge: typeof p.badge === 'function' ? p.badge() : p.badge,

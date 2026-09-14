@@ -16,6 +16,7 @@ import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor, 
 import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
+import { MachineParts } from '../machine/parts.js';
 import { fmt, uid } from '../core/util.js';
 import { homeOf } from '../machine/config.js';
 
@@ -252,6 +253,16 @@ export class MachinePanel extends Panel {
           app.setMachine({ proxies: v });
           this.render();
         }, { title: 'Draw a generic shape for an axis that has no body of its own' }),
+      ]),
+      // The colour the moving castings are painted. A shop with two of the
+      // same machine in different colours is not an edge case.
+      el('label.field', {}, [
+        el('span.field-label', {}, 'Machine colour'),
+        el('input', {
+          type: 'color', value: app.machineView.accentColor(),
+          oninput: (e) => { app.machineView.setAccent(e.target.value); app.viewer.invalidate(); },
+          onchange: (e) => app.setMachine({ accent: e.target.value }),
+        }),
       ]),
       el('div.hint', {}, app.state.machine.proxies === false
         ? emptyChainNote(k, app)
@@ -590,6 +601,16 @@ export class MachinePanel extends Panel {
       drop,
       waiting ? el('div.hint', {}, `${waiting} ${waiting === 1 ? 'body is' : 'bodies are'} not on an axis yet, so ${waiting === 1 ? 'it is' : 'they are'} not drawn.`) : null,
       list,
+      app.machineParts.parts.length ? el('label.field', {}, [
+        el('span.field-label', {}, 'Paint them all'),
+        el('input', {
+          type: 'color', value: MachineParts.defaultColor,
+          oninput: (e) => {
+            for (const part of app.machineParts.parts) app.machineParts.paint(part, e.target.value);
+            app.viewer.invalidate();
+          },
+        }),
+      ]) : null,
       actionRow([
         { label: 'Remove all', disabled: !app.machineParts.parts.length, variant: 'warn', onClick: () => { app.machineParts.clear(); this.bodyId = null; app.applyMachineParts(); this.render(); } },
       ]),
@@ -631,6 +652,16 @@ export class MachinePanel extends Panel {
     };
 
     return section(part.name, [
+      // Painting the bodies is how an assembly stops being a silhouette:
+      // saddle, way cover and head are one grey casting until they are
+      // not, and telling them apart is the whole job on this page.
+      el('label.field', {}, [
+        el('span.field-label', {}, 'Colour'),
+        el('input', {
+          type: 'color', value: part.color || MachineParts.defaultColor,
+          oninput: (e) => { app.machineParts.paint(part, e.target.value); app.viewer.invalidate(); },
+        }),
+      ]),
       select('Mounted on', [{ value: '', label: 'not assembled' }, ...carriers], part.nodeId || '', (v) => {
         app.machineParts.assign(part, v || null);
         app.applyMachineParts();
@@ -841,7 +872,7 @@ export class MachinePanel extends Panel {
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'Nothing in the machine'),
-        el('div.hint', {}, 'Files that stay on the control between jobs — probing cycles, pallet routines, the builder\u2019s own programs. Any program loaded on this machine can call them with M98, without carrying a copy. Subprograms that belong to one job go on Program \u203a Subprograms instead.'),
+        el('div.hint', {}, 'Files that stay on the control between jobs — probing cycles, pallet routines, the builder\u2019s own programs. Any program loaded on this machine can call them with M98, without carrying a copy. Subprograms that belong to one job go on Program \u203a Programs instead.'),
       ]));
     }
 

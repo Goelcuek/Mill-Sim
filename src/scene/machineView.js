@@ -143,6 +143,24 @@ export class MachineView {
     this.setNodeModels(new Map());
   }
 
+  /**
+   * Paint the machine's own castings.
+   *
+   * One material is shared by every casting that uses the tone, so this is
+   * a colour change rather than a rebuild — which is what makes it usable
+   * from a picker that fires on every drag of the slider.
+   */
+  setAccent(color) {
+    this.config.accent = color || null;
+    if (color) this.materials.accent.color.set(color);
+    else this.materials.accent.color.setHex(this.kinematics.accent ?? TONES.accent.color);
+  }
+
+  /** The colour the castings are painted now, as a picker writes one. */
+  accentColor() {
+    return `#${this.materials.accent.color.getHexString()}`;
+  }
+
   // ---- the rig -----------------------------------------------------------
 
   rebuild() {
@@ -154,8 +172,10 @@ export class MachineView {
 
     const kin = this.kinematics;
     // Each machine paints its moving castings its own colour, so a glance
-    // at the viewport says which family you are looking at.
-    this.materials.accent.color.setHex(kin.accent ?? TONES.accent.color);
+    // at the viewport says which family you are looking at — the shop's
+    // own colour if it has been set, the family's otherwise.
+    if (this.config.accent) this.materials.accent.color.set(this.config.accent);
+    else this.materials.accent.color.setHex(kin.accent ?? TONES.accent.color);
     for (const node of kin.order) {
       const g = new THREE.Group();
       g.name = node.name || node.id;

@@ -232,6 +232,12 @@ const FIDIA = {
   tables: { TLENGTH: 'length', TDIAM: 'diameter' },
   /** G0, G2 and G3 last one block rather than staying on. */
   modalMotion: false,
+  /**
+   * The feed is written a hundred times over: F80000 is 800 a minute, and
+   * F3000 is 30. Whichever unit is in force — the same programs use G20
+   * and G21 in the same header — it is the same hundred.
+   */
+  feedScale: 0.01,
   /** R is written negative for the arc a Fanuc writes positive. */
   arcRSign: -1,
   /** T0.07 is tool 7. */

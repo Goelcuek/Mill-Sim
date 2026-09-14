@@ -26,8 +26,12 @@ export class MachineParts {
   constructor() {
     /** @type {Array<{id:string, name:string, object:THREE.Object3D, triangles:number, size:number[], nodeId:string|null}>} */
     this.parts = [];
+    /** The enamel a body is painted unless it is given one of its own. */
     this.material = new THREE.MeshStandardMaterial(MATERIAL);
   }
+
+  /** The default colour, as the picker writes one. */
+  static get defaultColor() { return `#${MATERIAL.color.toString(16).padStart(6, '0')}`; }
 
   /**
    * @param {{name:string, positions:Float32Array, units?:'mm'|'in',
@@ -52,7 +56,13 @@ export class MachineParts {
       geometry.computeBoundingBox();
     }
 
-    const mesh = new THREE.Mesh(geometry, this.material);
+    // Each body gets its own material so it can be painted on its own. A
+    // machine assembled from a dozen castings that are all one grey is a
+    // silhouette: which part is the saddle and which is the way cover is
+    // exactly what somebody assembling it needs to see.
+    const material = new THREE.MeshStandardMaterial(MATERIAL);
+    if (spec.color) material.color.set(spec.color);
+    const mesh = new THREE.Mesh(geometry, material);
     mesh.name = spec.name || 'part';
     const size = geometry.boundingBox.getSize(new THREE.Vector3());
 
@@ -68,6 +78,8 @@ export class MachineParts {
       position: [0, 0, 0],
       /** Degrees about X, Y and Z, applied in that order. */
       rotation: [0, 0, 0],
+      material,
+      color: spec.color || MachineParts.defaultColor,
     };
     this.parts.push(part);
     return part;
@@ -119,6 +131,13 @@ export class MachineParts {
     this.applyTransform(part);
   }
 
+  /** Paint one body. */
+  paint(part, color) {
+    if (!part || !color) return;
+    part.color = color;
+    part.material.color.set(color);
+  }
+
   /** Nudge a body by a delta expressed in its own axis's frame. */
   nudge(part, delta) {
     if (!part) return;
@@ -144,6 +163,7 @@ export class MachineParts {
       nodeId: p.nodeId,
       position: [...p.position],
       rotation: [...p.rotation],
+      color: p.color,
     }));
   }
 
@@ -161,6 +181,7 @@ export class MachineParts {
       if (!part) continue;
       part.nodeId = saved.nodeId || null;
       this.place(part, { position: saved.position, rotation: saved.rotation });
+      if (saved.color) this.paint(part, saved.color);
       matched++;
     }
     return matched;
@@ -172,6 +193,7 @@ export class MachineParts {
     this.parts.splice(i, 1);
     if (part.object.parent) part.object.parent.remove(part.object);
     part.object.geometry.dispose();
+    if (part.material) part.material.dispose();
   }
 
   clear() {

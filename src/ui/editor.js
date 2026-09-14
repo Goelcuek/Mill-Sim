@@ -40,6 +40,18 @@ export class GcodeEditor {
 
   get value() { return this.textarea.value; }
 
+  /**
+   * Lock the text.
+   *
+   * A machine's macro is shown here when the run is inside one, and it is
+   * the machine's, not the job's: it can be read where it is running and
+   * changed where it lives.
+   */
+  setReadOnly(on) {
+    this.textarea.readOnly = !!on;
+    this.wrap.classList.toggle('editor-locked', !!on);
+  }
+
   setValue(text) {
     this.textarea.value = text || '';
     this.refreshGutter();

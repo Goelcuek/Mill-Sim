@@ -20,11 +20,48 @@ import { EXAMPLES, loadExample } from '../examples.js';
 import { DIALECTS } from '../gcode/dialects.js';
 import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 
+/**
+ * Which file the machine is in right now.
+ *
+ * A job is several files and the run walks through all of them, so "the
+ * program" is not one text: it is whichever of them the block being
+ * executed came from. Every move carries that with it — nothing for the
+ * main program, the file's name for a subprogram, and "M6 macro" and the
+ * like for something that lives in the machine.
+ *
+ * @returns {{kind:'main'|'sub'|'macro', name:string, sub:object|null}}
+ */
+export function runningFile(app) {
+  const program = app.state.program;
+  const mv = program && program.moves[app.simulator.moveIndex];
+  const src = mv && mv.source;
+  if (!src) return { kind: 'main', name: app.state.programName || 'program.nc', sub: null };
+  const sub = app.state.subprograms.find((x) => x.name === src) || null;
+  return { kind: sub ? 'sub' : 'macro', name: src, sub };
+}
+
+/** The text of that file, or '' when it is one nobody here holds. */
+function textOf(app, showing) {
+  if (showing.kind === 'main') return app.state.source || '';
+  if (showing.sub) return showing.sub.text || '';
+  const macro = (app.state.machine.macros || []).find((m) => showing.name.startsWith(String(m.code)));
+  return macro ? (macro.body || '') : '';
+}
+
 export class ProgramPanel extends Panel {
   constructor(app) {
     super(app, [
-      { id: 'editor', label: 'Main', icon: 'open', hint: 'The program itself: open, edit and re-read it', render: ProgramPanel.prototype.editorPage },
-      { id: 'subs', label: 'Subprograms', icon: 'library', hint: 'The files this program calls with M98', badge: () => app.state.subprograms.length || null, render: ProgramPanel.prototype.subsPage },
+      {
+        id: 'editor',
+        // The tab names the file that is running, because that is the one
+        // underneath it. On a job of four files "Main" was a label that
+        // was wrong three quarters of the time.
+        label: () => runningFile(app).name,
+        icon: 'open',
+        hint: 'The file the machine is in: open, edit and re-read it',
+        render: ProgramPanel.prototype.editorPage,
+      },
+      { id: 'subs', label: 'Programs', icon: 'library', hint: 'Every file in this job — the main program and what it calls', badge: () => app.state.subprograms.length + 1, render: ProgramPanel.prototype.subsPage },
       { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
     ]);
     this.editorHost = el('div.editor-host');
@@ -46,18 +83,52 @@ export class ProgramPanel extends Panel {
     const hostsEditor = this.page === 'editor' || this.page === 'subs';
     this.root.classList.toggle('panel-program', hostsEditor);
     super.render();
+    // The tab is named after the file being shown, and the ribbon is drawn
+    // when a tab changes rather than on every repaint — so when that name
+    // changes underneath it, it is asked for again.
+    const name = runningFile(this.app).name;
+    if (this._tabName !== name) {
+      this._tabName = name;
+      if (this.app.buildRibbon) this.app.buildRibbon();
+    }
   }
 
   // ---- pages -------------------------------------------------------------
 
+  /**
+   * The file the machine is in, in an editor.
+   *
+   * It follows the run rather than staying on the main program: step into
+   * a subprogram and the subprogram is what is shown, with its own line
+   * numbers under its own highlight. That is the only way the highlighted
+   * line means anything once a job is more than one file — before this it
+   * pointed at whatever line of the main program happened to share a
+   * number with the line running inside the called file.
+   */
   editorPage() {
     const app = this.app;
+    const showing = runningFile(app);
+    this.showing = showing;
+    const main = showing.kind === 'main';
+
     const bar = el('div.toolbar', {}, [
       button('Open…', () => this.openFile(), { variant: 'primary' }),
       button('Save', () => this.saveFile(), { disabled: !this.editor || !this.editor.value }),
-      button('Re-read', () => app.loadProgram(this.editor ? this.editor.value : '', app.state.programName), { title: 'Interpret the text as it stands now' }),
+      button('Re-read', () => this.reread(), { title: 'Interpret the text as it stands now' }),
       select('Examples', [{ value: '', label: 'Load an example…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '',
         (v, e) => { if (v === '') return; e.target.value = ''; this.loadExampleAt(Number(v)); }),
+    ]);
+
+    const strip = el('div.editor-showing', {}, [
+      el('span.name', {}, showing.name),
+      el('span.why', {}, main
+        ? 'the main program'
+        : showing.kind === 'sub'
+          ? 'running — called by the main program'
+          : "running — a macro that lives in the machine, so it is read here and changed on Machine \u203a Macros"),
+      showing.kind === 'macro'
+        ? button('Machine \u203a Macros', () => app.setPage('machine', 'macros'), { title: 'Where this one is kept' })
+        : null,
     ]);
 
     if (!this.editor) {
@@ -70,20 +141,39 @@ export class ProgramPanel extends Panel {
           clearTimeout(this._debounce);
           this._debounce = setTimeout(() => {
             this.typing = false;
-            this.app.loadProgram(text, this.app.state.programName);
+            this.commitEdit(text);
           }, 400);
         },
-        onSeekLine: (line) => this.app.seekToLine(line),
+        onSeekLine: (line) => { if (this.showing.kind === 'main') this.app.seekToLine(line); },
       });
     } else if (this.editor.wrap.parentNode !== this.editorHost) {
       this.editorHost.appendChild(this.editor.wrap);
     }
+    this.editor.setReadOnly(showing.kind === 'macro');
     this.syncEditor();
-    if (this.app.state.program) {
-      this.editor.setMarkers(this.app.state.program.warnings.filter((w) => !w.source));
+    if (app.state.program) {
+      // Only the notes that belong to this text: a warning raised inside a
+      // subprogram carries that file's line numbers, not these.
+      this.editor.setMarkers(app.state.program.warnings.filter((w) => (w.source || null) === (main ? null : showing.name)));
     }
 
-    return [bar, this.editorHost];
+    return [bar, strip, this.editorHost];
+  }
+
+  /** Put an edit back where the text came from. */
+  commitEdit(text) {
+    const showing = this.showing || runningFile(this.app);
+    if (showing.kind === 'sub' && showing.sub) {
+      showing.sub.text = text;
+      this.app.reinterpret();
+      return;
+    }
+    if (showing.kind === 'macro') return;          // the machine's, not the job's
+    this.app.loadProgram(text, this.app.state.programName);
+  }
+
+  reread() {
+    this.commitEdit(this.editor ? this.editor.value : '');
   }
 
   // ---- subprograms -------------------------------------------------------
@@ -105,12 +195,31 @@ export class ProgramPanel extends Panel {
 
     const bar = el('div.toolbar', {}, [
       button('Open…', () => this.openSubs(), { variant: 'primary', title: 'One file or several' }),
-      button('New', () => this.newSub(), { title: 'Start an empty subprogram' }),
+      button('New main…', () => this.newMain(), { title: 'Start an empty main program' }),
+      button('New sub…', () => this.newSub(), { title: 'Start an empty subprogram' }),
       button('Save', () => this.saveSub(), { disabled: !this.sub }),
       button('Remove', () => this.deleteSub(), { disabled: !this.sub, variant: 'warn' }),
     ]);
 
     const list = el('div.list');
+
+    // The main program is a file in this job like any other, so it is in
+    // the list with the rest of them rather than on a page of its own.
+    const mainLines = String(app.state.source || '').split('\n').length;
+    const running = runningFile(app);
+    list.appendChild(el(`div.list-item${this.subId === null ? '.selected' : ''}`, {
+      onclick: () => { this.subId = null; this.render(); },
+    }, [
+      el('div.swatch', { style: { background: running.kind === 'main' ? '#0a7cff' : '#d0d4db' } }),
+      el('div.list-main', {}, [
+        el('div.list-title', {}, [el('span.tnum', {}, 'main'), app.state.programName || 'program.nc']),
+        el('div.list-sub', {}, [
+          `${mainLines} ${mainLines === 1 ? 'line' : 'lines'}`,
+          running.kind === 'main' ? 'running' : 'the program that starts the job',
+        ].join(' \u00b7 ')),
+      ]),
+    ]));
+
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'No subprograms'),
@@ -143,6 +252,13 @@ export class ProgramPanel extends Panel {
     ])];
 
     const sub = this.sub;
+    if (this.subId === null) {
+      out.push(actionRow([
+        { label: 'Open the main program', variant: 'primary', onClick: () => this.app.setPage('program', 'editor') },
+        { label: 'Save', onClick: () => this.saveFile() },
+      ]));
+      out.push(el('div.hint', {}, 'The main program is edited on its own page, which follows the run: step into a subprogram and that file is what the page shows.'));
+    }
     if (sub) {
       if (!this.subEditor) {
         this.subEditor = new GcodeEditor(this.subHost, {
@@ -221,6 +337,33 @@ export class ProgramPanel extends Panel {
   }
 
   /**
+   * Start a main program from nothing.
+   *
+   * The same window as a new subprogram, because it is the same act: a
+   * name, and whatever the control needs at the top of a file. The only
+   * difference is where it lands, and that an existing program is not
+   * thrown away without being asked about.
+   */
+  newMain() {
+    const app = this.app;
+    const had = (app.state.source || '').trim();
+    openNewSubprogramDialog(app, {
+      title: 'New main program',
+      subtitle: 'The file the job starts in',
+      defaultName: 'program.nc',
+      names: [app.state.programName, ...app.state.subprograms.map((sx) => sx.name)].filter(Boolean),
+      numbers: app.state.subprograms.map((sx) => programNumber(sx.text)),
+      from: 1,
+      onCreate: (file) => {
+        if (had && !window.confirm(`Replace ${app.state.programName || 'the main program'}? What is in it now is not saved anywhere else.`)) return;
+        app.loadProgram(file.text || '', file.name);
+        this.subId = null;
+        app.setPage('program', 'editor');
+      },
+    });
+  }
+
+  /**
    * Rename a file.
    *
    * The name is not decoration: a program that calls this file by name asks
@@ -265,16 +408,33 @@ export class ProgramPanel extends Panel {
    */
   syncEditor() {
     if (!this.editor || this.typing) return;
-    const source = this.app.state.source || '';
-    if (this.editor.value !== source) this.editor.setValue(source);
+    const showing = this.showing || runningFile(this.app);
+    const text = textOf(this.app, showing);
+    if (this.editor.value !== text) this.editor.setValue(text);
   }
 
   setText(text) {
     if (this.editor) this.editor.setValue(text);
   }
 
-  setActiveLine(line) {
-    if (this.editor) this.editor.setActiveLine(line);
+  /**
+   * Highlight the line that is running — in the file it is running in.
+   *
+   * @param {number} line
+   * @param {string|null} source which file that line was counted in
+   */
+  setActiveLine(line, source = null) {
+    if (!this.editor || this.page !== 'editor') return;
+    const showing = this.showing || runningFile(this.app);
+    const shown = showing.kind === 'main' ? null : showing.name;
+    // The run has moved into another file: show that one instead. A
+    // redraw mid-keystroke would push the old text over the typing, so a
+    // page being typed into is left alone until the typing stops.
+    if ((source || null) !== shown) {
+      if (!this.typing) this.render();
+      return;
+    }
+    this.editor.setActiveLine(line);
   }
 
   async openFile() {
@@ -314,12 +474,21 @@ export class ProgramPanel extends Panel {
       this.render();
       return;
     }
+    // A different file is running: the page names it and shows it, so it
+    // is drawn again rather than patched.
+    const showing = runningFile(this.app);
+    if (!this.showing || this.showing.kind !== showing.kind || this.showing.name !== showing.name) {
+      this.render();
+      return;
+    }
     // The program may have been replaced from somewhere else entirely.
+    this.showing = showing;
     this.syncEditor();
     if (this.editor && this.app.state.program) {
       // Only the notes that belong to this text: a warning raised inside a
       // subprogram carries that file's line numbers, not these.
-      this.editor.setMarkers(this.app.state.program.warnings.filter((w) => !w.source));
+      const shown = showing.kind === 'main' ? null : showing.name;
+      this.editor.setMarkers(this.app.state.program.warnings.filter((w) => (w.source || null) === shown));
     }
   }
 

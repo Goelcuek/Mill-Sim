@@ -64,7 +64,7 @@ function freeNumber(taken, from) {
 export function openNewSubprogramDialog(app, opts) {
   const dialect = machineDialect(app);
   const state = {
-    name: freeName(opts.names || [], 'subprogram.nc'),
+    name: freeName(opts.names || [], opts.defaultName || 'subprogram.nc'),
     by: 'name',
     number: freeNumber(opts.numbers || [], opts.from || 1000),
   };
@@ -105,7 +105,7 @@ export function openNewSubprogramDialog(app, opts) {
   );
 
   const dialog = new Dialog({
-    title: 'New subprogram',
+    title: opts.title || 'New subprogram',
     subtitle: opts.subtitle || 'A file this program can call',
     width: 460,
     body: form,

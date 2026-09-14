@@ -558,6 +558,7 @@ export class App {
       button('⏮', () => this.reset(), { title: 'Back to the start (R)' }),
       this.playBtn,
       button('⏭', () => this.stepMove(), { title: 'Advance one move (→)' }),
+      button('⇥', () => this.stepBlock(), { title: 'Single block — run to the end of this block (N)' }),
       button('⏭⏭', () => this.runToEnd(), { title: 'Simulate the whole program now' }),
       button('⤢', () => this.fitToScene(), { title: 'Fit the job in the view (F)' }),
       this.scrub,
@@ -577,6 +578,7 @@ export class App {
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
       else if (e.key === 'ArrowRight') this.stepMove();
+      else if (e.key === 'n' || e.key === 'N') this.stepBlock();
       else if (e.key === 'f' || e.key === 'F') this.fitToScene();
     });
   }
@@ -1621,6 +1623,32 @@ export class App {
     this.refreshResults();
   }
 
+  /**
+   * Single block: run to the end of the block that is running.
+   *
+   * Not the same as one move. A canned cycle is one block and a dozen
+   * moves — rapid over, peck, peck, peck, retract — and a machinist
+   * stepping through a program in single block expects the whole cycle to
+   * go by on one press, because that is what the machine does. So the
+   * yardstick is the line, not the move: run until the program is on a
+   * different one.
+   */
+  stepBlock() {
+    if (!this.state.program) return;
+    this.pause();
+    const sim = this.simulator;
+    const lineNow = () => {
+      const mv = this.state.program.moves[sim.moveIndex];
+      return mv ? mv.line : -1;
+    };
+    const from = lineNow();
+    let guard = 0;
+    while (!sim.finished && lineNow() === from && guard++ < 20000) sim.run(Infinity, 8);
+    this.stockView.sync();
+    this.updateTransport();
+    this.refreshResults();
+  }
+
   runToEnd() {
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
@@ -1802,7 +1830,12 @@ export class App {
     this.timeLabel.textContent = `${fmtDuration(sim.time)} / ${fmtDuration(total)}`;
     const mv = this.state.program && this.state.program.moves[sim.moveIndex];
     this.lineLabel.textContent = mv ? `line ${mv.line}` : 'line –';
-    if (this.panels && this.activeTab === 'program' && mv) this.panels.program.setActiveLine(mv.line);
+    // The line and the file it is counted in: a subprogram's line 12 is
+    // not the main program's line 12, and highlighting one for the other
+    // is how the editor used to point at a block nobody was running.
+    if (this.panels && this.activeTab === 'program' && mv) {
+      this.panels.program.setActiveLine(mv.line, mv.source || null);
+    }
   }
 
   /**

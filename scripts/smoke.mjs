@@ -500,6 +500,97 @@ try {
   console.log('call by name:', JSON.stringify(named));
   check(named.errors === 0 && named.ran, 'a subprogram called by its name was not found');
 
+  // ---- the page shows the file that is running --------------------------
+  //
+  // A job is several files. "Main" was a tab label that was wrong as soon
+  // as the run stepped into one of the others, and the highlighted line
+  // was a line of the main program that happened to share a number with
+  // the line running inside the called file.
+  {
+    await page.click('.ribbon-tab[data-tab="program"]');
+    await page.click('.ribbon-page[data-page="editor"]');
+    await page.waitForTimeout(400);
+    const named = () => page.evaluate(() => ({
+      tab: [...document.querySelectorAll('.ribbon-page')].find((b) => b.dataset.page === 'editor').textContent.trim(),
+      showing: document.querySelector('.editor-showing .name').textContent,
+      text: document.querySelector('.editor-area').value.length,
+      source: (() => {
+        const mv = window.millsim.state.program.moves[window.millsim.simulator.moveIndex];
+        return (mv && mv.source) || null;
+      })(),
+    }));
+    const atStart = await named();
+    check(/named\.nc/.test(atStart.tab), `the tab should name the running file and says "${atStart.tab}"`);
+
+    // Seek into the called file and the page goes with it.
+    await page.evaluate(() => {
+      const app = window.millsim;
+      const i = app.state.program.moves.findIndex((m) => m.source === 'finishing pass.nc');
+      const sim = app.simulator;
+      let guard = 0;
+      while (!sim.finished && sim.moveIndex < i && guard++ < 20000) sim.run(Infinity, 8);
+      app.updateTransport();
+      app.panels.program.refresh();
+    });
+    await page.waitForTimeout(500);
+    const inside = await named();
+    console.log('follows the run:', JSON.stringify({ from: atStart.showing, to: inside.showing, source: inside.source }));
+    check(inside.source === 'finishing pass.nc', `the run is in ${inside.source}, so this proves nothing`);
+    check(inside.showing === 'finishing pass.nc', `the page is showing ${inside.showing}`);
+    check(/finishing pass/.test(inside.tab), `the tab says "${inside.tab}"`);
+    check(inside.text !== atStart.text, 'the editor is still showing the same text');
+  }
+
+  // ---- single block ------------------------------------------------------
+  {
+    const step = await page.evaluate(() => {
+      const app = window.millsim;
+      app.reset();
+      const lineNow = () => {
+        const mv = app.state.program.moves[app.simulator.moveIndex];
+        return mv ? `${mv.source || 'main'}:${mv.line}` : 'none';
+      };
+      const before = lineNow();
+      document.querySelector('.transport button[title^="Single block"]').click();
+      return { before, after: lineNow() };
+    });
+    console.log('single block:', JSON.stringify(step));
+    check(step.before !== step.after, `single block stayed on ${step.before}`);
+  }
+
+  // ---- a small part inside a big machine is not clipped ------------------
+  //
+  // The far plane used to be measured from whatever was last framed, so
+  // framing the part cut the machine standing round it in half.
+  {
+    await page.evaluate(() => {
+      window.millsim.setMachine({ preset: 'headHead', mode: 'machine' });
+      window.millsim.setStock({ shape: 'box', size: [60, 40, 20], origin: [-30, -20, -20], resolution: 0.5 });
+    });
+    await page.waitForTimeout(900);
+    await page.evaluate(() => window.millsim.viewer.fit(window.millsim.stockView.boundingBox()));
+    await page.waitForTimeout(500);
+    const clip = await page.evaluate(() => {
+      const v = window.millsim.viewer;
+      const box = window.millsim.machineView.boundingBox();
+      // The farthest corner of the machine from where the camera stands.
+      const c = v.camera.position;
+      let worst = 0;
+      for (const x of [box.min.x, box.max.x]) {
+        for (const y of [box.min.y, box.max.y]) {
+          for (const z of [box.min.z, box.max.z]) {
+            worst = Math.max(worst, Math.hypot(x - c.x, y - c.y, z - c.z));
+          }
+        }
+      }
+      return { far: v.camera.far, near: v.camera.near, worst, radius: v.sceneRadius };
+    });
+    console.log('clipping:', JSON.stringify({ far: +clip.far.toFixed(0), needs: +clip.worst.toFixed(0), radius: +clip.radius.toFixed(0) }));
+    check(clip.far >= clip.worst, `the far plane is ${clip.far.toFixed(0)} and the machine reaches ${clip.worst.toFixed(0)}`);
+    check(clip.far / clip.near < 2e5, 'the depth buffer is spread too thin');
+  }
+
+
   // ---- G53 and the envelope both measure from home ----------------------
   await page.click('.ribbon-tab[data-tab="machine"]');
   await page.click('.ribbon-page[data-page="limits"]');
@@ -558,6 +649,27 @@ try {
   console.log('pivot:', JSON.stringify({ held: +pivot.held.toFixed(4), moved: +pivot.moved.toFixed(1) }));
   check(pivot.held < 1e-6, `moving the pivot shifted what hangs on it by ${pivot.held.toFixed(3)} mm`);
   check(pivot.moved > 1, 'with the hold off the branch should move with the pivot, and did not');
+
+  // ---- the machine can be painted ---------------------------------------
+  {
+    await page.click('.ribbon-tab[data-tab="machine"]');
+    await page.click('.ribbon-page[data-page="layout"]');
+    await page.waitForTimeout(300);
+    const has = await page.$$eval('.panel input[type="color"]', (n) => n.length);
+    check(has > 0, 'the Layout page has no colour picker on it');
+    const painted = await page.evaluate(() => {
+      const app = window.millsim;
+      const input = [...document.querySelectorAll('.panel input[type="color"]')][0];
+      input.value = '#ff8800';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return { shown: app.machineView.accentColor(), stored: app.state.machine.accent };
+    });
+    console.log('machine colour:', JSON.stringify(painted));
+    check(painted.shown === '#ff8800', `the castings are ${painted.shown}`);
+    check(painted.stored === '#ff8800', 'the colour was not kept on the machine');
+    await page.evaluate(() => window.millsim.setMachine({ accent: null }));
+  }
 
   // ---- a machine built from nothing looks like nothing ------------------
   //

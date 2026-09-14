@@ -1260,7 +1260,10 @@ export function interpret(text, config = {}) {
       }
     }
 
-    if (f !== undefined) st.feed = toMM(f, st.metric);
+    // A Fidia writes its feed a hundred times over: F80000 is 800 a minute.
+    // It is how the control's own screen reads, so the number in the block
+    // is not the number in the machine — see feedScale.
+    if (f !== undefined) st.feed = toMM(f, st.metric) * (dialect.feedScale || 1);
     if (s !== undefined) st.rpm = s;
     if (t !== undefined) st.pendingTool = t;
 
