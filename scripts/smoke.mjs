@@ -353,7 +353,9 @@ try {
     console.log('wrong control:', JSON.stringify({ before: wrong.errors, after: right.errors, moves: right.moves, table: right.table }));
     check(right.dialect === 'fidia', 'the offer did not change the control');
     check(right.errors === 0, `still ${right.errors} errors after taking the offer`);
-    check(right.moves === 5, `expected 5 moves — two, and three rounds of $REP — and got ${right.moves}`);
+    // Two, three rounds of $REP, and the U0 that sets the item's starting
+    // angle — which is an index move on this control, not a nothing.
+    check(right.moves === 6, `expected 6 moves — two, three rounds of $REP and the index — and got ${right.moves}`);
     // The tool-table header is skipped rather than read as coordinates,
     // and the summary says so rather than passing over it quietly.
     check(right.table === 3, `${right.table} tool-table lines accounted for, expected 3`);
@@ -669,6 +671,64 @@ try {
     check(painted.shown === '#ff8800', `the castings are ${painted.shown}`);
     check(painted.stored === '#ff8800', 'the colour was not kept on the machine');
     await page.evaluate(() => window.millsim.setMachine({ accent: null }));
+  }
+
+  // ---- a body's colour is part of the machine ---------------------------
+  {
+    const kept = await page.evaluate(() => {
+      const app = window.millsim;
+      const part = app.machineParts.add({
+        name: 'probe-body',
+        positions: new Float32Array([0, 0, 0, 10, 0, 0, 0, 10, 0]),
+      });
+      app.machineParts.paint(part, '#123456');
+      const { def } = app.machineFiles();
+      const saved = def.bodies.find((b) => b.name === 'probe-body');
+      // Lose it, then put the file back over the top.
+      app.machineParts.paint(part, '#ffffff');
+      app.machineParts.restorePlacements(def.bodies);
+      const out = { inFile: saved ? saved.color : null, after: part.color, painted: `#${part.material.color.getHexString()}` };
+      app.machineParts.remove(part);
+      return out;
+    });
+    console.log('body colour:', JSON.stringify(kept));
+    check(kept.inFile === '#123456', `the saved machine says the body is ${kept.inFile}`);
+    check(kept.after === '#123456' && kept.painted === '#123456', 'the colour did not come back with the machine');
+  }
+
+  // ---- U turns the work, and nothing else --------------------------------
+  {
+    const indexed = await page.evaluate(async () => {
+      const app = window.millsim;
+      app.setStock({ shape: 'box', size: [100, 100, 20], origin: [-50, -50, -20], resolution: 0.5, rotation: 0 });
+      app.setControl('fidia');
+      app.loadProgram([
+        '>G90 G21', 'F500', '>G0 X0 Y0 Z20',
+        '$REP 4',
+        '>G0 X30 Y0 Z2', 'Z-5', '>G0 Z2',
+        '>G91', '>G0 U-90.', '>G90',
+        '$END',
+        '>G0 Z20', 'M30',
+      ].join('\n'), 'indexed.nc');
+      return { letter: app.state.program.indexer && app.state.program.indexer.letter };
+    });
+    check(indexed.letter === 'U', 'U was not read as the indexer');
+    await runToEnd(page);
+    const cut = await page.evaluate(() => {
+      const app = window.millsim;
+      const at = (x, y) => +app.stock.heightAt(x, y).toFixed(2);
+      return {
+        holes: [at(30, 0), at(0, -30), at(-30, 0), at(0, 30)],
+        middle: at(0, 0),
+        turned: +app.machineView.workGroup.rotation.z.toFixed(3),
+      };
+    });
+    console.log('indexed:', JSON.stringify(cut));
+    check(cut.holes.every((z) => Math.abs(z + 5) < 0.01), `the four holes came out at ${cut.holes.join(', ')}`);
+    check(Math.abs(cut.middle) < 0.01, 'something was cut in the middle');
+    // Four rounds, four quarter turns: the work ends up back where it
+    // started, which is the point of indexing between them.
+    check(Math.abs(Math.abs(cut.turned) - Math.PI * 2) < 0.01, `the work is turned ${cut.turned} rad, not a full turn`);
   }
 
   // ---- a machine built from nothing looks like nothing ------------------

@@ -957,13 +957,9 @@ export class App {
       const pos = part.object.geometry.getAttribute('position');
       const file = `${prefix}bodies/${unique(part.name, '.stl')}`;
       files.push({ name: file, data: writeSTL(pos.array, { name: part.name }) });
-      bodies.push({
-        name: part.name,
-        file,
-        nodeId: part.nodeId,
-        position: [...part.position],
-        rotation: [...part.rotation],
-      });
+      // Everything but the geometry, from the one place that says what
+      // that is — with the file it was just written to.
+      bodies.push({ ...this.machineParts.placementOf(part), file });
     }
 
     const def = {
@@ -1744,7 +1740,11 @@ export class App {
     this.toolpathView.setProgress(sim.progress);
     if (this.state.display.toolpath && this.state.program) {
       const r = sim.activeSlot ? sim.activeSlot.built.cutRadius : 1;
-      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.min(Math.max(r * 0.35, 0.6), 3));
+      // On the part, not in machine terms: the marker rides in the work
+      // frame with the path it is marking, and under an index the two are
+      // not the same point.
+      const at = pose.tip || sim.pos;
+      this.toolpathView.setMarker(at[0], at[1], at[2], Math.min(Math.max(r * 0.35, 0.6), 3));
     } else {
       this.toolpathView.hideMarker();
     }

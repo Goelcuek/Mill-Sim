@@ -345,6 +345,12 @@ export class MachineView {
     this.lastPose = p;
     const kin = this.kinematics;
 
+    // The work indexes without the machine moving: on a control that has
+    // one, a U word says which way round the part is sitting and nothing
+    // in the chain answers for it. So the work frame turns and everything
+    // else — the castings, the slides, the spindle — stands where it was.
+    this.workGroup.rotation.z = (p.index || 0) * Math.PI / 180;
+
     if (this.config.mode !== 'machine') {
       // Part mode: the chain collapses. The work frame is the scene, and
       // the tool is placed straight at the point it reached on the part.

@@ -15,6 +15,13 @@ import { interpret } from '../src/gcode/interpreter.js';
 import { lex } from '../src/gcode/lexer.js';
 import { DIALECTS } from '../src/gcode/dialects.js';
 import { buildPreset } from '../src/machine/presets.js';
+import { Kinematics } from '../src/machine/kinematics.js';
+import { Simulator } from '../src/sim/simulator.js';
+import { Stock } from '../src/sim/stock.js';
+import { silhouetteSpheres } from '../src/sim/collision.js';
+import { buildAssembly } from '../src/tools/assembly.js';
+import { makeTool } from '../src/tools/toolDefs.js';
+import { defaultHolders } from '../src/tools/holderDefs.js';
 
 const d = DIALECTS.fidia;
 const trunnion = () => buildPreset('tableTable');
@@ -505,4 +512,68 @@ test('a $REP with no $END is said out loud', () => {
 test('a $END with no $REP is said out loud', () => {
   const p = run(['>G90 G21', '>G0 X0 Y0 Z0', '$END', 'M30']);
   assert.ok(errs(p).some((w) => /\$END has no \$REP/.test(w.message)), errs(p).map((w) => w.message).join(' | '));
+});
+
+// ------------------------------------------------------ indexing the work
+
+test('U turns the work and moves nothing else', () => {
+  // The same hole, four times, with a quarter turn between: on the part
+  // that is four holes on a circle, and the machine never moved.
+  const p = run([
+    '>G90 G21', 'F500', '>G0 X0 Y0 Z20',
+    '$REP 4',
+    '>G0 X30 Y0 Z2', 'Z-5', '>G0 Z2',
+    '>G91', '>G0 U-90.', '>G90',
+    '$END',
+    '>G0 Z20', 'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.indexer.letter, 'U', 'U was not read as the indexer');
+
+  // Nothing on the machine answers for it: every programmed point is the
+  // same one, at X30.
+  const cutting = p.moves.filter((m) => m.kind === 'feed' && m.to[2] < 0);
+  assert.equal(cutting.length, 4);
+  for (const m of cutting) assert.ok(Math.abs(m.to[0] - 30) < 1e-9 && Math.abs(m.to[1]) < 1e-9, `${m.to}`);
+
+  // And the index went round with the rounds of the loop.
+  assert.deepEqual(cutting.map((m) => m.rotTo.U), [0, -90, -180, -270]);
+});
+
+test('an indexed hole is cut where the part has turned to', () => {
+  const stock = new Stock({ origin: [-50, -50, -20], size: [100, 100, 20], resolution: 0.25 });
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 6, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+
+  const p = run([
+    '>G90 G21', 'F500', '>G0 X0 Y0 Z20',
+    '$REP 4',
+    '>G0 X30 Y0 Z2', 'Z-5', '>G0 Z2',
+    '>G91', '>G0 U-90.', '>G90',
+    '$END',
+    '>G0 Z20', 'M30',
+  ]);
+  const sim = new Simulator();
+  sim.load({ program: p, stock, slots: new Map([[1, slot]]), fallbackSlot: slot });
+  sim.runAll();
+
+  // Four holes on a 30 mm circle, and nothing in the middle.
+  for (const [x, y] of [[30, 0], [0, -30], [-30, 0], [0, 30]]) {
+    near(stock.heightAt(x, y), -5, 1e-6, `the hole at ${x},${y}`);
+  }
+  near(stock.heightAt(0, 0), 0, 1e-9, 'the middle is untouched');
+  near(sim.removedVolume, 4 * Math.PI * 9 * 5, 10, 'four holes of metal');
+});
+
+test('a machine modelled with a real U axis keeps it', () => {
+  // The indexer is what a control does when the machine has no axis for
+  // it. Model one and the chain answers for it instead.
+  const kin = trunnion();
+  kin.nodes.push({ id: 'u', name: 'U', letter: 'U', kind: 'linear', parent: 'base', axis: [0, 0, 1], origin: [0, 0, 0] });
+  const p = interpret('>G90 G21\n>G0 X0 Y0 Z0\nM30', {
+    controller: { flavour: 'fidia', dialect: 'fidia' },
+    kinematics: new Kinematics(kin),
+  });
+  assert.equal(p.indexer, null, 'a machine with its own U had it taken away');
 });

@@ -42,21 +42,22 @@ X-30 Y0 Z-3
 X30 Y0 Z-3
 >G0 Z10
 
-; ---- $REP: three grooves, one round of the loop each ------------------
-;      $REP counts, it does not ask: everything down to $END runs three
-;      times over, and the G91 step in the middle is what makes each round
-;      land somewhere new. On a real program this is where the toolpath is
-;      called and the rotary indexed a quarter turn between the rounds.
->G0 X-30 Y-20 Z2
+; ---- $REP and U: the same cut on four faces --------------------------
+;      $REP counts, it does not ask: everything down to $END runs four
+;      times over. U is what makes each round land somewhere new — it is
+;      not one of the machine's axes and nothing on the machine moves for
+;      it, it says which way round the work is sitting. So the same four
+;      blocks cut four grooves, a quarter turn apart.
+>G0 X-30 Y-14 Z2
 F900
-$REP 3
+$REP 4
 Z-1                     ; down into the metal
 X30                     ; cut across
 >G0 Z2                  ; up
+>G0 X-30                ; back to the start
 >G91
-Y6                      ; over one groove
+>G0 U-90.               ; and the work turns a quarter, on its own
 >G90
->G0 X-30                ; and back to the start of the next one
 $END
 >G0 Z10
 

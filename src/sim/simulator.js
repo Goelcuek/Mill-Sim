@@ -24,6 +24,16 @@ export const COLLISION_TYPES = {
 
 const MAX_COLLISIONS = 400;
 const UP = [0, 0, 1];
+const DEG = Math.PI / 180;
+
+/** Turn a point about Z, which is what indexing the work amounts to. */
+function spinZ(p, deg) {
+  if (!deg) return p;
+  const a = deg * DEG;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return [p[0] * c - p[1] * s, p[0] * s + p[1] * c, p[2]];
+}
 
 /** Interpolate two unit directions along the shorter great-circle arc. */
 function slerp(a, b, t) {
@@ -358,13 +368,42 @@ export class Simulator {
    * @param {number} u  0..1 through the move, for interpolating the swing
    */
   poseAt(mv, point, u) {
-    if (!this.fiveAxis) return { tip: point, dir: UP };
+    const index = this.indexer ? this.indexAt(mv, u) : 0;
+    if (!this.fiveAxis) return { tip: this.onPart(point, index), dir: UP, index };
     const rot = this.rotaryAt(mv, u);
     const gauge = this.gaugeLength;
     const k = this.kinematics;
-    if (mv.tcp) return { tip: point, dir: k.toolAxis(rot, gauge) };
+    if (mv.tcp) {
+      return { tip: this.onPart(point, index), dir: this.onPart(k.toolAxis(rot, gauge), index), index };
+    }
     const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
-    return { tip: r.tip, dir: r.axis };
+    return { tip: this.onPart(r.tip, index), dir: this.onPart(r.axis, index), index };
+  }
+
+  /** The letter that turns the work rather than the machine, or null. */
+  get indexer() {
+    return (this.program && this.program.indexer) || null;
+  }
+
+  /** How far round the work is, part way through a move. */
+  indexAt(mv, u) {
+    const idx = this.indexer;
+    if (!idx) return 0;
+    const a = (mv.rotFrom && mv.rotFrom[idx.letter]) || 0;
+    const b = (mv.rotTo && mv.rotTo[idx.letter]) || 0;
+    return a + (b - a) * u;
+  }
+
+  /**
+   * A point the program gave in machine terms, in the part's own frame.
+   *
+   * Turning the work by a degrees puts a part-frame point q at machine
+   * position Rz(a)q, so a machine position p is at Rz(-a)p on the part.
+   * That is the whole of what indexing does here: the machine stands
+   * still, and the part is somewhere else underneath it.
+   */
+  onPart(p, index) {
+    return index ? spinZ(p, -index) : p;
   }
 
   /**
@@ -377,9 +416,15 @@ export class Simulator {
    */
   currentPose() {
     const point = this.pos.slice();
-    const flat = { values: { X: point[0], Y: point[1], Z: point[2] }, tip: point, dir: UP, rot: ZERO_ROT };
+    const flat = { values: { X: point[0], Y: point[1], Z: point[2] }, tip: point, dir: UP, rot: ZERO_ROT, index: 0 };
     const mv = this.program && this.program.moves[this.moveIndex];
-    if (!this.fiveAxis || !mv) return flat;
+    if (!mv || (!this.fiveAxis && !this.indexer)) return flat;
+    if (!this.fiveAxis) {
+      // Indexed, but otherwise an ordinary three-axis machine: the axes
+      // stand where the program put them and only the work has turned.
+      const pose = this.poseAt(mv, point, Math.max(0, Math.min(1, this.u || 0)));
+      return { values: flat.values, tip: pose.tip, dir: UP, rot: this.rotaryAt(mv, this.u || 0), index: pose.index };
+    }
 
     const u = Math.max(0, Math.min(1, this.u || 0));
     const rot = this.rotaryAt(mv, u);
@@ -389,7 +434,7 @@ export class Simulator {
       const sol = this.kinematics.linearsForTip(pose.tip, rot, this.gaugeLength);
       if (sol) values = { ...rot, ...sol };
     }
-    return { values, tip: pose.tip, dir: pose.dir, rot };
+    return { values, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0 };
   }
 
   /** True when the tool stands close enough to vertical to sweep normally. */

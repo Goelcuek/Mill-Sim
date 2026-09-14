@@ -177,11 +177,40 @@ function auxLinearLetters(cfg) {
 function extraLetters(cfg) {
   const out = new Map();
   const kin = cfg && cfg.kinematics;
-  if (!kin || typeof kin.extras !== 'function') return out;
-  for (const node of kin.extras()) {
-    if (node.letter) out.set(node.letter, node.kind === 'rotary' ? 'rotary' : 'linear');
+  if (kin && typeof kin.extras === 'function') {
+    for (const node of kin.extras()) {
+      if (node.letter) out.set(node.letter, node.kind === 'rotary' ? 'rotary' : 'linear');
+    }
   }
+  // The part indexer is read whether or not the machine has been modelled
+  // with one, because it is not one of the machine's axes: see indexerOf.
+  const idx = indexerOf(cfg);
+  if (idx) out.set(idx.letter, 'rotary');
   return out;
+}
+
+/**
+ * The letter that turns the work rather than the machine.
+ *
+ * A Fidia's U is the angle the part is sitting at. Nothing on the machine
+ * moves to change it — the work turns, and the tool goes on standing where
+ * the program put it — so it cannot be an axis in the chain, and a machine
+ * that has been modelled with a real U slide keeps that instead.
+ *
+ * @returns {null | {letter:string, axis:string}}
+ */
+function indexerOf(cfg) {
+  const d = resolveDialect(
+    (cfg && cfg.controller && cfg.controller.dialect)
+      || (cfg && cfg.controller && cfg.controller.flavour) || 'fanuc',
+    cfg && cfg.controller && cfg.controller.syntax,
+  );
+  const idx = d.indexer;
+  if (!idx || !idx.letter) return null;
+  const kin = cfg && cfg.kinematics;
+  if (kin && typeof kin.extras === 'function'
+    && kin.extras().some((n) => n.letter === idx.letter)) return null;
+  return idx;
 }
 
 /**
@@ -1652,6 +1681,11 @@ export function interpret(text, config = {}) {
     variablePrefix: dialect.sigil || dialect.letters[0] || '#',
     /** Which control this program looks written for, when it is not this one. */
     suggested,
+    /**
+     * The letter that turns the work rather than the machine, when this
+     * control has one and the machine has not been modelled with it.
+     */
+    indexer: indexerOf(cfg),
     /**
      * The lines that fill in the machine's own tables and were skipped —
      * the tool-table block a Fidia program opens with. Kept so the summary

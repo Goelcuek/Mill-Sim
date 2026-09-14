@@ -155,16 +155,27 @@ export class MachineParts {
     o.updateMatrix();
   }
 
+  /**
+   * Everything about one body except its geometry.
+   *
+   * One definition, used by every path that writes a machine out — the
+   * colour was saved by one of them and not the other for exactly as long
+   * as there were two of these.
+   */
+  placementOf(part) {
+    return {
+      name: part.name,
+      file: part.source ? part.source.file : null,
+      nodeId: part.nodeId,
+      position: [...part.position],
+      rotation: [...part.rotation],
+      color: part.color,
+    };
+  }
+
   /** The placement of every body, for saving with the machine. */
   placements() {
-    return this.parts.map((p) => ({
-      name: p.name,
-      file: p.source ? p.source.file : null,
-      nodeId: p.nodeId,
-      position: [...p.position],
-      rotation: [...p.rotation],
-      color: p.color,
-    }));
+    return this.parts.map((p) => this.placementOf(p));
   }
 
   /**

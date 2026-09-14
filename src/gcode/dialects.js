@@ -246,6 +246,17 @@ const FIDIA = {
   vectorMode: { on: 92, off: 93 },
   /** RTCP ON / RTCP OF, in place of G43.4 and G49. */
   rtcp: true,
+  /**
+   * The part indexer.
+   *
+   * U is not a slide and it is not one of the machine's own axes: it says
+   * which way round the work is sitting. U-90 between two calls of the
+   * same toolpath is the next face of the part coming up — the program
+   * says so with U0.0000(ITEM BASLANGIC ACISI), the item's starting angle
+   * — and nothing on the machine moves to do it. So the work turns and
+   * everything else stands exactly where it was.
+   */
+  indexer: { letter: 'U', axis: 'Z' },
   marks: [
     '^\\s*>', '\\bIPC\\s*=>\\s*CNC\\b', '\\bRTCP(TLCN)?\\s+(ON|OF)\\b',
     '\\$IF\\b', '\\$GOTO\\b', '^\\s*ORIGIN\\s+\\d', '^\\s*CQA\\b', '\\bRG\\s*\\d+',
@@ -323,6 +334,7 @@ export function resolveDialect(id, overrides) {
     settings: overrides.settings || base.settings,
     tables: overrides.tables || base.tables,
     vectorMode: overrides.vectorMode || base.vectorMode,
+    indexer: overrides.indexer || base.indexer,
   };
 }
 
