@@ -778,6 +778,10 @@ export class App {
       syntax: null,
     };
     this.state.machine.macros = defaultMacros(flavour);
+    // A preset is described in stand-in castings, so it keeps them. A bare
+    // base is a machine you are about to model yourself, and a generic slab
+    // on every axis you have not got to yet is only in the way.
+    this.state.machine.proxies = !!(preset && PRESETS[preset]);
     this.state.machine.parameters = { ...DEFAULT_PARAMETERS };
     this.state.machine.subprograms = [];
     const def = {
@@ -1017,6 +1021,10 @@ export class App {
         if (def.settings[key] !== undefined) this.state.machine[key] = clone(def.settings[key]);
       }
     }
+    // A machine saved before stand-ins could be turned off was drawn with
+    // them, so that is what it gets back rather than whatever the machine
+    // before it happened to be set to.
+    if (!def.settings || def.settings.proxies === undefined) this.state.machine.proxies = true;
     if (Array.isArray(def.machineZero) && def.machineZero.length === 3) {
       this.state.machineZero = def.machineZero.map(Number);
     }

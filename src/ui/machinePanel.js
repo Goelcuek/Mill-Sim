@@ -142,7 +142,14 @@ export class MachinePanel extends Panel {
         select('Draw', [{ value: 'part', label: 'Part only' }, { value: 'machine', label: 'Full machine' }],
           app.state.machine.mode, (v) => { app.setMachine({ mode: v }); this.render(); },
           { title: 'In full-machine view every casting moves the way the real machine does.' }),
+        checkbox('Stand-in castings', app.state.machine.proxies !== false, (v) => {
+          app.setMachine({ proxies: v });
+          this.render();
+        }, { title: 'Draw a generic shape for an axis that has no body of its own' }),
       ]),
+      el('div.hint', {}, app.state.machine.proxies === false
+        ? emptyChainNote(k, app)
+        : 'A stand-in is a generic slab, table or spindle drawn for an axis that has no body of its own, so a chain is visible before anything is imported. Turn it off while you are assembling real castings — then an axis you have not modelled shows nothing rather than something that is not your machine.'),
       el('div.hint', {}, 'Presets are starting points. Change a pivot, flip a sign, or start from a bare base and build the chain yourself — the simulation follows whatever the chain says.'),
       actionRow([
         { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from a bare base and build the chain yourself' },
@@ -886,6 +893,13 @@ export class MachinePanel extends Panel {
       ]),
     ];
   }
+}
+
+/** With stand-ins off, what is actually drawn for this chain. */
+function emptyChainNote(kin, app) {
+  const empty = kin.order.filter((n) => !app.machineParts.forNode(n.id).length).length;
+  if (!empty) return 'Off — and every place in this chain has a body of its own, so there is nothing to stand in for.';
+  return `Off: ${empty} of the ${kin.order.length} places in this chain ${empty === 1 ? 'has' : 'have'} no body yet, and ${empty === 1 ? 'it is' : 'they are'} drawn as nothing. Bring the castings in on Assembly.`;
 }
 
 function dirLabel(v) {

@@ -195,6 +195,14 @@ export class MachineView {
       return;
     }
 
+    // And a machine that has said it does not want stand-ins draws nothing
+    // for an axis nobody has modelled: an empty place in the chain looks
+    // empty, rather than looking like a casting that is not there.
+    if (this.config.proxies === false) {
+      this.proxies.set(node.id, []);
+      return;
+    }
+
     const parts = [];
     // Named after the joint they belong to, so a click on one says "Table"
     // rather than "model".

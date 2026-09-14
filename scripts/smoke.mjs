@@ -279,6 +279,28 @@ try {
   });
   console.log('call by name:', JSON.stringify(named));
   check(named.errors === 0 && named.ran, 'a subprogram called by its name was not found');
+
+  // ---- a machine built from nothing looks like nothing ------------------
+  //
+  // Stand-in castings are how a preset describes itself; on a machine you
+  // are modelling yourself they are geometry nobody owns.
+  await page.click('.ribbon-tab[data-tab="machine"]');
+  await page.click('.ribbon-page[data-page="layout"]');
+  await page.waitForTimeout(300);
+  const drawn = () => page.evaluate(() => {
+    let n = 0;
+    for (const parts of window.millsim.machineView.proxies.values()) n += parts.length;
+    return { proxies: n, flag: window.millsim.state.machine.proxies };
+  });
+  const preset = await drawn();
+  await page.click('.panel button:has-text("New machine…")');
+  await page.waitForSelector('.dialog');
+  await page.click('.dialog button:has-text("Create")');
+  await page.waitForTimeout(1200);
+  const bare = await drawn();
+  console.log('stand-ins:', JSON.stringify({ preset: preset.proxies, bare: bare.proxies }));
+  check(preset.proxies > 0, 'a preset machine drew no castings at all');
+  check(bare.proxies === 0 && bare.flag === false, `a new machine drew ${bare.proxies} stand-in parts`);
   check(after.shown === after.source, 'the program came back but the editor is empty');
 } catch (err) {
   console.error('SMOKE FAILED:', err.message);

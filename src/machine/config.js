@@ -18,7 +18,7 @@ import { defaultMacros, DEFAULT_PARAMETERS } from './macros.js';
  */
 export const MACHINE_SETTINGS = [
   'travel', 'tableSize', 'tableZ', 'spindleDiameter', 'spindleLength',
-  'limits', 'table', 'rapidRate', 'maxFeed',
+  'limits', 'table', 'rapidRate', 'maxFeed', 'proxies',
 ];
 
 export const DEFAULT_MACHINE = {
@@ -35,6 +35,16 @@ export const DEFAULT_MACHINE = {
   table: { enabled: true, z: -80, xMin: -450, xMax: 450, yMin: -230, yMax: 230 },
   rapidRate: 15000,
   maxFeed: 10000,
+  /**
+   * Draw a stand-in casting for an axis that has no body of its own.
+   *
+   * A preset is described in stand-ins, so they are what a preset machine
+   * looks like. A machine being built from real STLs is a different case:
+   * once some of the castings are the shop's own, a generic slab beside
+   * them is not "the machine we have not modelled yet", it is something in
+   * the way — so a machine started from a bare base turns them off.
+   */
+  proxies: true,
   /**
    * The control, not the iron. Which flavour of G-code this machine reads
    * and what modal state it powers up in — see DEFAULT_CONFIG.controller
