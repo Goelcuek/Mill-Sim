@@ -235,3 +235,66 @@ test('a sixth axis is just another letter in the chain', () => {
   assert.deepEqual(kin.violations({ X: 0, Y: 0, Z: 0, W: -200 }).map((v) => v.axis), ['W']);
   assert.deepEqual(kin.violations({ X: 0, Y: 0, Z: 0, W: -100 }), []);
 });
+
+// ---- moving a pivot -------------------------------------------------------
+//
+// The pivot is where a joint sits in its parent, and for a rotary it is the
+// centre it turns about. Correcting one on an assembled machine used to drag
+// the castings and every joint below with it, which took apart the machine
+// you were trying to describe.
+
+test('moving a pivot leaves everything hanging on it where it was', () => {
+  const kin = new Kinematics({
+    name: 'trunnion',
+    toolNode: 'spindle',
+    workNode: 'table',
+    nodes: [
+      makeAxis({ id: 'base', name: 'Base' }),
+      makeAxis({ id: 'spindle', name: 'Spindle', parent: 'base', origin: [0, 0, 400] }),
+      makeAxis({ id: 'c', letter: 'C', name: 'C axis', parent: 'base', origin: [0, 0, 0] }),
+      makeAxis({ id: 'table', name: 'Table', parent: 'c', origin: [10, 0, 20] }),
+    ],
+  });
+
+  kin.solve({});
+  const before = m4.transformPoint([0, 0, 0], kin.matrixOf('table'), [0, 0, 0]);
+
+  // The C axis really turns about X = 5, not about the middle of the world.
+  const shift = kin.movePivot('c', [5, 0, 0]);
+  kin.solve({});
+  const after = m4.transformPoint([0, 0, 0], kin.matrixOf('table'), [0, 0, 0]);
+  for (let i = 0; i < 3; i++) near(after[i], before[i], 1e-9, `the table stayed put (${i})`);
+
+  // A body on the C axis itself is moved back by the same amount.
+  assert.deepEqual(shift.map((v) => Number(v.toFixed(6))), [-5, -0, -0].map((v) => Number(v.toFixed(6))));
+
+  // And the thing that did change is where it turns: 90° about the new
+  // pivot swings the table somewhere else entirely.
+  kin.solve({ C: 90 });
+  const turned = m4.transformPoint([0, 0, 0], kin.matrixOf('table'), [0, 0, 0]);
+  near(turned[0], 5, 1e-9, 'turned about X = 5');
+  near(turned[1], 5, 1e-9, 'turned about X = 5');
+  near(turned[2], 20, 1e-9, 'Z is untouched by a C move');
+});
+
+test('a pivot moved while the joint is turned still holds the assembly', () => {
+  const kin = new Kinematics({
+    name: 'posed',
+    toolNode: 'spindle',
+    workNode: 'table',
+    nodes: [
+      makeAxis({ id: 'base', name: 'Base' }),
+      makeAxis({ id: 'spindle', name: 'Spindle', parent: 'base', origin: [0, 0, 400] }),
+      makeAxis({ id: 'a', letter: 'A', name: 'A axis', parent: 'base', origin: [0, 0, 0] }),
+      makeAxis({ id: 'table', name: 'Table', parent: 'a', origin: [0, 30, 0] }),
+    ],
+  });
+
+  // Posed 90° over, which is where a trunnion spends half its life.
+  kin.solve({ A: 90 });
+  const before = m4.transformPoint([0, 0, 0], kin.matrixOf('table'), [0, 0, 0]);
+  kin.movePivot('a', [0, 0, -40]);
+  kin.solve({ A: 90 });
+  const after = m4.transformPoint([0, 0, 0], kin.matrixOf('table'), [0, 0, 0]);
+  for (let i = 0; i < 3; i++) near(after[i], before[i], 1e-9, `still where it was (${i})`);
+});

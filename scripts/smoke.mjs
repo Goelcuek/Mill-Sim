@@ -280,6 +280,38 @@ try {
   console.log('call by name:', JSON.stringify(named));
   check(named.errors === 0 && named.ran, 'a subprogram called by its name was not found');
 
+  // ---- moving a pivot does not move the machine -------------------------
+  //
+  // The centre a trunnion turns about is a number you correct on a machine
+  // that is already assembled, so correcting it must not take it apart.
+  const pivot = await page.evaluate(() => {
+    const app = window.millsim;
+    app.setMachine({ preset: 'tableTable', mode: 'machine' });
+    const kin = app.machineView.kinematics;
+    const a = kin.axes().find((n) => n.letter === 'A');
+    const where = () => {
+      const out = {};
+      for (const child of kin.children(a.id)) {
+        const g = app.machineView.nodeGroups.get(child.id);
+        g.updateWorldMatrix(true, false);
+        const e = g.matrixWorld.elements;
+        out[child.id] = [e[12], e[13], e[14]];
+      }
+      return out;
+    };
+    const before = where();
+    app.setAxisPivot(a.id, [0, 25, -85], true);
+    const held = where();
+    app.setAxisPivot(a.id, [0, 60, -150], false);
+    const moved = where();
+    const dist = (x, y) => Math.max(...Object.keys(x).map((k) => Math.hypot(...x[k].map((v, i) => v - y[k][i]))));
+    return { pivot: a.origin, held: dist(before, held), moved: dist(held, moved) };
+  });
+  await page.waitForTimeout(600);
+  console.log('pivot:', JSON.stringify({ held: +pivot.held.toFixed(4), moved: +pivot.moved.toFixed(1) }));
+  check(pivot.held < 1e-6, `moving the pivot shifted what hangs on it by ${pivot.held.toFixed(3)} mm`);
+  check(pivot.moved > 1, 'with the hold off the branch should move with the pivot, and did not');
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you

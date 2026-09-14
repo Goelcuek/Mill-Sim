@@ -57,6 +57,8 @@ export class MachinePanel extends Panel {
     /** What the Macros page is acting on. */
     this.macroId = null;
     this.machineSubId = null;
+    /** Whether moving a pivot leaves the castings hanging on it where they are. */
+    this.holdAssembly = true;
     this.render();
   }
 
@@ -353,12 +355,40 @@ export class MachinePanel extends Panel {
       }
     }
 
+    // The pivot, and the two ways of getting it right. Typing it moves the
+    // number; pointing at it is how anybody with the casting in front of
+    // them would rather say where the middle of a bore is.
+    const pivot = (i, v) => {
+      const next = [...node.origin];
+      next[i] = Number(v) || 0;
+      app.setAxisPivot(node.id, next, this.holdAssembly);
+    };
+    const carried = app.machineParts.forNode(node.id).length + k.children(node.id).length;
     body.push(row([
-      field('Pivot X', node.origin[0], { type: 'number', onChange: (v) => set({ origin: [Number(v), node.origin[1], node.origin[2]] }) }),
-      field('Pivot Y', node.origin[1], { type: 'number', onChange: (v) => set({ origin: [node.origin[0], Number(v), node.origin[2]] }) }),
-      field('Pivot Z', node.origin[2], { type: 'number', onChange: (v) => set({ origin: [node.origin[0], node.origin[1], Number(v)] }) }),
+      field('Pivot X', node.origin[0], { type: 'number', onChange: (v) => pivot(0, v) }),
+      field('Pivot Y', node.origin[1], { type: 'number', onChange: (v) => pivot(1, v) }),
+      field('Pivot Z', node.origin[2], { type: 'number', onChange: (v) => pivot(2, v) }),
     ]));
-    body.push(el('div.hint', {}, 'The pivot is where this joint sits in its parent, so for a rotary it is the centre of rotation.'));
+    body.push(actionRow([
+      {
+        label: 'Pick a point…',
+        variant: 'primary',
+        hint: 'Click the point this joint turns about',
+        onClick: () => app.pickAxisPivot(node.id, { hold: this.holdAssembly }),
+      },
+      {
+        label: 'Centre of a bore…',
+        hint: 'Three clicks round a bore or a boss; its centre becomes the pivot',
+        onClick: () => app.pickAxisPivot(node.id, { circle: true, hold: this.holdAssembly }),
+      },
+    ]));
+    body.push(checkbox('Keep the assembly still', this.holdAssembly, (v) => {
+      this.holdAssembly = v;
+      this.render();
+    }, { title: 'Move the pivot without moving the castings and joints that hang on it' }));
+    body.push(el('div.hint', {}, this.holdAssembly
+      ? `The pivot is where this joint sits in its parent, so for a rotary it is the centre of rotation. Moving it leaves everything that hangs on it — ${carried === 0 ? 'nothing, so far' : `${carried} ${carried === 1 ? 'thing' : 'things'}`} — exactly where it is, and changes only where this joint turns.`
+      : 'The pivot is where this joint sits in its parent. With this off, the whole branch moves with it: the castings on this joint, the joints under it and everything on those. That is what you want while placing a bare chain, and not what you want once the machine is assembled.'));
 
     body.push(select('Casting', partOptions, part ? part.id : '', (v) => {
       const chosen = v ? app.machineParts.byId(v) : null;

@@ -149,6 +149,55 @@ export class Kinematics {
     return this.nodes.filter((n) => n.parent === id);
   }
 
+  /**
+   * Move a joint's pivot without moving what hangs on it.
+   *
+   * The pivot is where the joint sits in its parent, and for a rotary it is
+   * the centre of rotation — so correcting one on a machine that is already
+   * assembled is ordinary work. It used to be impossible: everything inside
+   * the joint is expressed in the joint's own frame, so moving that frame
+   * dragged the casting, its children and their castings along with it, and
+   * the machine you had just got right came apart every time you tried to
+   * say where it turns.
+   *
+   * Moving the frame by d and taking d back off everything inside it leaves
+   * the machine looking exactly as it did and turning about somewhere else,
+   * which is what setting a pivot means. Child joints are compensated here;
+   * the bodies belong to MachineParts, so what they need is returned rather
+   * than applied.
+   *
+   * @param {string} id
+   * @param {number[]} origin the new pivot, in the parent's frame
+   * @returns {number[]} what to add to the position of each body on this node
+   */
+  movePivot(id, origin) {
+    const node = this.byId.get(id);
+    if (!node) return [0, 0, 0];
+    const d = [
+      origin[0] - node.origin[0],
+      origin[1] - node.origin[1],
+      origin[2] - node.origin[2],
+    ];
+    // d is measured in the parent's frame. Inside the joint it is turned by
+    // however far the joint is turned — the identity at home, and not while
+    // the rig is posed, which is why this reads the pose rather than
+    // assuming one.
+    const inv = m4.create();
+    m4.invertRigid(inv, this.localOf(id));
+    const inner = m4.transformDir([0, 0, 0], inv, d);
+
+    node.origin = [origin[0], origin[1], origin[2]];
+    for (const child of this.children(id)) {
+      child.origin = [
+        child.origin[0] - inner[0],
+        child.origin[1] - inner[1],
+        child.origin[2] - inner[2],
+      ];
+    }
+    this.rebuild();
+    return [-inner[0], -inner[1], -inner[2]];
+  }
+
   roots() {
     return this.nodes.filter((n) => !n.parent || !this.byId.has(n.parent));
   }

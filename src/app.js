@@ -750,6 +750,96 @@ export class App {
     this.buildRibbon();
   }
 
+  // ---- pivots --------------------------------------------------------
+  //
+  // Where a joint sits in its parent — and for a rotary, the centre it
+  // turns about. On a machine assembled from real castings this is the
+  // number hardest to type and easiest to point at, so it can be pointed
+  // at, and correcting it does not take the machine apart.
+
+  /**
+   * Put a joint's pivot somewhere.
+   *
+   * @param {string} id
+   * @param {number[]} origin in the parent joint's frame
+   * @param {boolean} [hold] keep everything hanging on this joint where it
+   *   is, so only the centre of rotation changes. Off, the whole branch
+   *   moves with the pivot, which is the old behaviour and what you want
+   *   when there is nothing hung on it yet.
+   */
+  setAxisPivot(id, origin, hold = true) {
+    const kin = this.machineView.kinematics;
+    const node = kin.byId.get(id);
+    if (!node) return;
+    const next = origin.map((v) => (Number.isFinite(v) ? Number(v.toFixed(4)) : 0));
+    if (hold) {
+      const shift = kin.movePivot(id, next);
+      for (const part of this.machineParts.forNode(id)) this.machineParts.nudge(part, shift);
+    } else {
+      node.origin = next;
+      kin.rebuild();
+    }
+    this.applyKinematics();
+    if (this.panels && this.panels.machine) this.panels.machine.render();
+  }
+
+  /**
+   * Point at the pivot instead of typing it.
+   *
+   * One click takes the point itself — a corner, an edge, another joint's
+   * origin. Three clicks take the centre of the circle through them, which
+   * is how you find the middle of a bore or a boss: the thing a rotary
+   * actually turns about, and the one point on a casting that is nowhere on
+   * its surface.
+   *
+   * @param {string} id
+   * @param {{circle?:boolean, hold?:boolean}} [opts]
+   */
+  pickAxisPivot(id, opts = {}) {
+    const kin = this.machineView.kinematics;
+    const node = kin.byId.get(id);
+    if (!node) return;
+    if (this.state.machine.mode !== 'machine') {
+      this.setMachine({ mode: 'machine' });
+      this.notify('Switched to the full machine so there is something to point at.', 'info');
+    }
+    const circle = !!opts.circle;
+    this.pick.begin({
+      steps: circle ? 3 : 1,
+      space: 'world',
+      bodies: true,
+      title: `Pivot of ${node.name}`,
+      hints: circle
+        ? ['Click a point on the bore', 'Click a second point round it', 'Click a third']
+        : ['Click the point this joint turns about'],
+      onDone: (points) => {
+        let world = points[0];
+        if (circle) {
+          const found = circleThrough(points[0], points[1], points[2]);
+          if (!found) {
+            this.notify('Those three points are in a line, so there is no circle through them.', 'error');
+            return;
+          }
+          world = found.centre;
+          this.notify(`Pivot set to the centre of a Ø${fmt(found.radius * 2, 3)} circle.`, 'ok');
+        }
+        // The pivot is a fixed vector in the parent's frame, so the picked
+        // point is brought into that frame whatever pose the rig is in.
+        const parent = node.parent ? this.machineView.nodeGroups.get(node.parent) : this.machineView.group;
+        const v = new THREE.Vector3(world[0], world[1], world[2]);
+        if (parent) {
+          parent.updateWorldMatrix(true, false);
+          v.copy(parent.worldToLocal(v));
+        }
+        this.setAxisPivot(id, [v.x, v.y, v.z], opts.hold !== false);
+        if (!circle) {
+          this.notify(`${node.name} turns about ${fmt(v.x, 2)}, ${fmt(v.y, 2)}, ${fmt(v.z, 2)} in ${node.parent ? (kin.byId.get(node.parent) || {}).name : 'the machine'}.`, 'ok');
+        }
+      },
+    });
+    this.buildRibbon();
+  }
+
   /**
    * Start a machine from nothing: one control, and one base that does not
    * move.
