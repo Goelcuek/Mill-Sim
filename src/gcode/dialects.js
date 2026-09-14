@@ -181,7 +181,15 @@ const FIDIA = {
   /** Addresses of more than one letter, which have to be read before X and Y. */
   addresses: ['DX', 'DY', 'DZ'],
   /** Words that are commands in their own right. */
-  commands: ['RTCP', 'RTCPTLCN', 'CQAHDW', 'CQA', 'ORIGIN'],
+  commands: ['RTCP', 'RTCPTLCN', 'CQAHDW', 'CQA', 'ORIGIN', 'TDIAM', 'TLENGTH'],
+  /**
+   * Questions a program asks about the tool table: TLENGTH 07 is the
+   * length of pot 7, and 0 means whatever is in the spindle. A program
+   * that checks its tool before it cuts — $IF (TLENGTH 00 < 0.1) — is
+   * asking the machine something real, so it is answered from the tool
+   * table rather than read as a register that happens to be zero.
+   */
+  tables: { TLENGTH: 'length', TDIAM: 'diameter' },
   /** G0, G2 and G3 last one block rather than staying on. */
   modalMotion: false,
   /** R is written negative for the arc a Fanuc writes positive. */
@@ -266,6 +274,7 @@ export function resolveDialect(id, overrides) {
     call: { ...base.call, ...(overrides.call || {}) },
     addresses: overrides.addresses || base.addresses,
     commands: overrides.commands || base.commands,
+    tables: overrides.tables || base.tables,
     vectorMode: overrides.vectorMode || base.vectorMode,
   };
 }

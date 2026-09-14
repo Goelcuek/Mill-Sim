@@ -58,20 +58,71 @@ test('rapid and the arcs last one block', () => {
 });
 
 test('an arc radius is written negative for the arc a Fanuc writes positive', () => {
-  const here = run(['>G90 G21 G54', 'F500', 'G01 X0 Y0 Z0', 'G03 X20 Y0 R-10', 'M30']);
-  const there = interpret('G90 G21 G54\nF500\nG01 X0 Y0 Z0\nG03 X20 Y0 R10\nM30', {});
-  const arc = (p) => {
+  // Not a semicircle. With the chord exactly twice the radius the two arcs
+  // are the same arc, so that case cannot tell a minor from a major one —
+  // which is how this went out wrong the first time.
+  const opts = { arcTolerance: 0.0005 };
+  const path = (p) => {
     const m = p.moves.find((x) => x.kind === 'arc');
+    let len = 0;
+    for (let i = 3; i < m.path.length; i += 3) {
+      len += Math.hypot(m.path[i] - m.path[i - 3], m.path[i + 1] - m.path[i - 2]);
+    }
     const mid = Math.floor(m.path.length / 6) * 3;
-    return [m.path[mid], m.path[mid + 1], m.path[mid + 2]];
+    return { len, mid: [m.path[mid], m.path[mid + 1]] };
   };
-  assert.deepEqual(errs(here), []);
-  for (let i = 0; i < 3; i++) near(arc(here)[i], arc(there)[i], 1e-9, `the same arc (${i})`);
+
+  for (const [g, dir] of [['G03', 3], ['G02', 2]]) {
+    const here = run([">G90 G21 G54", 'F500', 'G01 X0 Y0 Z0', `${g} X12 Y0 R-10`, 'M30'], opts);
+    const there = interpret(`G90 G21 G54\nF500\nG01 X0 Y0 Z0\n${g} X12 Y0 R10\nM30`, opts);
+    assert.deepEqual(errs(here), []);
+    const a = path(here);
+    const b = path(there);
+    near(a.len, b.len, 1e-6, `${g}: the same arc length`);
+    near(a.mid[0], b.mid[0], 1e-6, `${g}: the same way round (x)`);
+    near(a.mid[1], b.mid[1], 1e-6, `${g}: the same way round (y)`);
+
+    // And it really is the short way: a minor arc of a 10 mm radius over a
+    // 12 mm chord is 12.6 mm, not the 50 mm the long way round.
+    near(a.len, 10 * 2 * Math.asin(6 / 10), 0.01, `${g}: the short side of the circle`);
+    // The two directions are mirror images, so the midpoint flips sides.
+    assert.ok((dir === 3 ? -1 : 1) * a.mid[1] > 0, `${g}: turns the way it says`);
+  }
 });
 
-test('T0.07 is pot 7', () => {
-  const p = run(['>M06 T0.07', '>M6T.05', 'M30']);
-  assert.deepEqual(p.toolChanges.map((c) => c.tool), [7, 5]);
+test('a machine macro runs in the machine\'s own millimetres', () => {
+  // The body is the machine builder's, written in the units the machine's
+  // positions are kept in. A program in inches does not turn a tool change
+  // position of −320 mm into −320 inches, which put the machine eight
+  // metres out on its way to the carousel.
+  const macros = [{
+    id: 'm6', code: 'M6', enabled: true, name: 'Tool change',
+    body: 'M5\nG91 G28 Z0\nG90 G53 G0 X#toolChangeX Y#toolChangeY',
+  }];
+  const parameters = { toolChangeX: -320, toolChangeY: 210 };
+  const where = (units) => interpret(
+    `${units}\nG90 G54\nG0 X0 Y0 Z0\nM6 T2\nG0 X1 Y1\nM30`,
+    { macros, parameters, machineZero: [0, 0, 250] },
+  ).moves;
+
+  for (const units of ['G21', 'G20']) {
+    const moves = where(units);
+    const atChange = moves.find((m) => m.source === 'M6 macro' && Math.abs(m.to[0] + 320) < 1e-6);
+    assert.ok(atChange, `${units}: the macro went to the change position`);
+    near(atChange.to[1], 210, 1e-6, `${units}: and to the Y of it`);
+  }
+
+  // And the program's own units are still its own afterwards.
+  const inches = where('G20');
+  near(inches[inches.length - 1].to[0], 25.4, 1e-6, 'G20 still applies to the program');
+});
+
+test('the pot number is the digits after the point, not the value', () => {
+  // T0.7 and T0.07 are the same pot on this control and are not the same
+  // number, so reading them as a value times a hundred made one of them
+  // pot 70 — and a tool table with no pot 70 in it.
+  const p = run(['>M06 T0.07', '>M6T.05', '>M06 T0.7', '>M06 T12.03', '>M06 T2', 'M30']);
+  assert.deepEqual(p.toolChanges.map((c) => c.tool), [7, 5, 7, 12, 2]);
 });
 
 test('RTCP holds the tip, ORIGIN picks the offset, the rest is said once', () => {
@@ -263,4 +314,35 @@ test('a program written for another control says so instead of falling apart', (
   // And read by the right one, there is nothing to suggest.
   const p = run(MAIN);
   assert.equal(p.suggested, null);
+});
+
+test('a program can ask the machine about its tool', () => {
+  // TDIAM at the head of a block is a command, not — as it was — an M word
+  // and a stray number, which read as M00 and stopped the program.
+  const src = [
+    '>G21',
+    '>M06 T0.07',
+    'TDIAM 00 5.0',
+    '$IF (TLENGTH 00 < 0.1) $GOTO SHORT',
+    'G01 X10 Y0 Z0 F500',
+    'SHORT:',
+    'M30',
+  ];
+  const tools = { 7: { length: 120, diameter: 5 } };
+
+  const set = run(src, { tools });
+  assert.deepEqual(errs(set), []);
+  assert.equal(set.moves.length, 1, 'a tool that is there is long enough to cut with');
+  assert.ok(!set.events.some((e) => /stop/i.test(e.text)), 'TDIAM is not a program stop');
+
+  // Pot 0 is whatever is in the spindle, and the answer is in the units
+  // the program is asking in — a 120 mm tool is 4.7 inches, still not short.
+  const inches = run(['>G20', ...src.slice(1)], { tools });
+  assert.equal(inches.moves.length, 1);
+  near(inches.moves[0].to[0], 254, 1e-9, 'and the program is still in inches');
+
+  // An empty pot answers zero, so the guard does what it would on the
+  // machine: takes the branch.
+  const empty = run(src, { tools: {} });
+  assert.deepEqual(empty.moves, []);
 });

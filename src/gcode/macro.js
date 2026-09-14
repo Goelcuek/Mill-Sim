@@ -197,6 +197,13 @@ function tokenize(code, d) {
         continue;
       }
 
+      // A question about the tool table: TLENGTH 07, TDIAM 00.
+      if (d.tables && d.tables[word]) {
+        out.push({ kind: 'table', text: word, name: d.tables[word] });
+        i = j;
+        continue;
+      }
+
       // A letter this control counts in — R, Q, V — followed by a number or
       // a bracket is a variable rather than an address.
       const letter = d.letters.find((L) => word === L.toUpperCase());
@@ -341,6 +348,12 @@ class Parser {
       this.next();
       return { op: 'var', left: this.primary() };
     }
+    // TLENGTH 07: what the tool table says about a pot, 0 being whatever
+    // is in the spindle.
+    if (this.is('table')) {
+      const word = this.next();
+      return { op: 'table', name: word.name, left: this.primary() };
+    }
     if (this.is('[')) {
       this.next();
       const inner = this.expression();
@@ -367,6 +380,13 @@ class Parser {
  */
 export function evaluate(node, vars) {
   if (!node) return 0;
+  if (node.op === 'table') {
+    // Answered by whoever built the variables, because only they know what
+    // is in the machine — and in which units the program is asking.
+    return vars && typeof vars.table === 'function'
+      ? Number(vars.table(node.name, evaluate(node.left, vars))) || 0
+      : 0;
+  }
   switch (node.op) {
     case 'num': return node.value;
     case 'var': return vars.get(evaluate(node.left, vars));

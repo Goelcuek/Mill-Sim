@@ -1384,6 +1384,19 @@ export class App {
     this._slotTimer = setTimeout(() => this.refreshSlots(), 180);
   }
 
+  /**
+   * The tool table as a control holds it: pot number to length and
+   * diameter, in millimetres.
+   */
+  toolTable() {
+    const out = {};
+    for (const [n, slot] of this.slots || new Map()) {
+      if (!slot || !slot.built) continue;
+      out[n] = { length: slot.built.gaugeLength, diameter: slot.built.cutRadius * 2 };
+    }
+    return out;
+  }
+
   /** Rebuild the T-number → assembly table the simulator uses. */
   refreshSlots() {
     const machine = this.state.machine;
@@ -1509,6 +1522,9 @@ export class App {
       subprograms: [...this.state.subprograms, ...(this.state.machine.subprograms || [])],
       macros: this.state.machine.macros,
       parameters: this.state.machine.parameters,
+      // What the tool table holds, for a program that asks about its tool
+      // before it cuts with it.
+      tools: this.toolTable(),
     });
     this.state.program = program;
     this.toolpathView.setProgram(program);

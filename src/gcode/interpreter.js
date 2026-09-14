@@ -68,6 +68,12 @@ export const DEFAULT_CONFIG = {
   /** Named numbers a macro body can substitute, such as toolChangeX. */
   parameters: {},
   /**
+   * What the tool table holds, by pot number: `{7: {length, diameter}}` in
+   * millimetres. A program that checks its tool before it cuts asks the
+   * machine this, so the machine has to be able to answer.
+   */
+  tools: {},
+  /**
    * The machine, when one is loaded. Only the 5-axis codes need it: G53.1
    * has to solve the rotaries against a real chain.
    */
@@ -624,6 +630,24 @@ export function interpret(text, config = {}) {
 
   const vars = new Vars(dialect.locals);
 
+  /**
+   * What the tool table says, in the units the program is asking in.
+   *
+   * Pot 0 is whatever is in the spindle, which is what a program means by
+   * TLENGTH 00 straight after a tool change. A pot nothing is set up in
+   * answers zero, and a program that guards on that — "if the tool is
+   * shorter than a tenth, go to the alarm" — then takes the branch it
+   * would on a machine with an empty pot, which is the honest answer.
+   */
+  vars.table = (what, index) => {
+    const table = cfg.tools || {};
+    const asked = Math.round(Number(index) || 0);
+    const pot = asked > 0 ? asked : (st.tool || st.pendingTool || 0);
+    const entry = table[pot];
+    const mm = entry ? Number(entry[what]) || 0 : 0;
+    return st.metric ? mm : mm / MM_PER_INCH;
+  };
+
   // Registers the machine holds between programs, and what the operator
   // dialled into them. A Fidia branches on one — $IF (RG 50 != 5) — so a
   // program is unreadable without a way to say what RG 50 is: a machine
@@ -758,6 +782,7 @@ export function interpret(text, config = {}) {
       // The call's own #1 to #33 go with it, which is what lets one macro
       // call another without the two treading on each other.
       if (frame.macroVars) vars.pop();
+      if (frame.metricWas !== undefined) st.metric = frame.metricWas;
       if (frame.resumeEnded) ended = true;
     }
   };
@@ -773,7 +798,21 @@ export function interpret(text, config = {}) {
       } else {
         // An M30 macro runs with the program already ended, so the end is
         // held on the frame and restored when the macro returns.
-        callStack.push({ ret: pc, remaining: 0, target: call.start, macro: call.code, resumeEnded: ended });
+        //
+        // And it runs in the machine's own units. The body is the machine
+        // builder's, written in the millimetres its positions are kept in;
+        // the program's G20 has nothing to do with it. Reading a tool
+        // change position of −320 as −320 inches sends the machine eight
+        // metres out, which is what it did.
+        callStack.push({
+          ret: pc,
+          remaining: 0,
+          target: call.start,
+          macro: call.code,
+          resumeEnded: ended,
+          metricWas: st.metric,
+        });
+        st.metric = true;
         ended = false;
         pc = call.start;
       }
@@ -978,9 +1017,19 @@ export function interpret(text, config = {}) {
       }
     }
 
-    // A control that writes its pot numbers as a fraction of a hundred —
-    // T0.07 is pot 7 — means the same thing by them as T7 does elsewhere.
-    if (t !== undefined && dialect.toolDecimal && t > 0 && t < 1) t = Math.round(t * 100);
+    // A control that writes its pot number after a decimal point — T0.07,
+    // T.05, T0.7 are pots 7, 5 and 7 — means the same thing by it as T7
+    // does elsewhere. Read from the digits rather than from the value: 0.7
+    // and 0.07 are not the same number but are the same pot, and taking
+    // the value times a hundred made one of them pot 70.
+    if (t !== undefined && dialect.toolDecimal) {
+      const word = b.words.find((w) => w.letter === 'T');
+      const parts = word && /^[Tt]\s*(\d*)\.(\d*)$/.exec(word.text.replace(/\s+/g, ''));
+      if (parts) {
+        const whole = Number(parts[1] || 0);
+        t = whole > 0 ? whole : Number(parts[2] || 0);
+      }
+    }
 
     // ---- Non-modal and modal G codes -------------------------------------
     let motionThisBlock = null;
@@ -1391,7 +1440,7 @@ export function interpret(text, config = {}) {
       const tilted = st.tilt && !machineCoords;
       const from = tilted ? st.tiltLocalPrev : st.pos;
       const to = tilted ? st.tiltLocal : target;
-      const center = arcCentre(b.line, to, words, warn, from, tilted ? [0, 0, 0] : null);
+      const center = arcCentre(b.line, to, words, warn, from, tilted ? [0, 0, 0] : null, ccw);
       if (!center) {
         emitLinear(b.line, 'feed', target, feed);
       } else if (tilted) {
@@ -1410,7 +1459,7 @@ export function interpret(text, config = {}) {
    * `absBase` is where an absolute centre (G90.1) is measured from in that
    * same frame.
    */
-  function arcCentre(line, target, words, warnFn, p0 = st.pos, absBase = null) {
+  function arcCentre(line, target, words, warnFn, p0 = st.pos, absBase = null, ccw = st.motion === 3) {
     const base = absBase || st.offset();
     const ax = st.plane === 18 ? [2, 0] : st.plane === 19 ? [1, 2] : [0, 1];
     const offs = st.plane === 18 ? [words.k, words.i] : st.plane === 19 ? [words.j, words.k] : [words.i, words.j];
@@ -1452,8 +1501,10 @@ export function interpret(text, config = {}) {
       }
       const hgt = Math.sqrt(Math.max(0, disc));
       // Sign selects minor vs major arc; direction selects which side.
-      const ccw = st.motion === 3;
-      let sign = (R < 0) !== ccw ? 1 : -1;
+      // Which direction is the *block's*, not the modal one: on a control
+      // where G2 and G3 last a single block there is no modal one to ask,
+      // and asking anyway put every arc on the long way round.
+      const sign = (R < 0) !== ccw ? 1 : -1;
       const c = p0.slice();
       c[ax[0]] = a0 + da / 2 + (sign * hgt * -db) / chord;
       c[ax[1]] = b0 + db / 2 + (sign * hgt * da) / chord;
