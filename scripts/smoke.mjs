@@ -107,6 +107,70 @@ try {
   check(await page.evaluate(() => document.querySelector('.editor-area').value === window.millsim.state.source),
     'the editor is not showing the loaded program');
 
+  // ---- a hole drilled to size is not a gouge ----------------------------
+  //
+  // The comparison against a reference part looks straight down, and the
+  // hole in a reference model is a polygon inscribed in the circle it
+  // stands for. Drill it with the drill it was drawn for and the two
+  // disagree sideways by a fraction of a grid column — which, measured
+  // vertically, used to read as a gouge the whole depth of the hole. What
+  // must still be reported is a cut that is actually too deep.
+  {
+    const ref = await page.evaluate(async () => {
+      const app = window.millsim;
+      const { latheToTriangles } = await import('/src/io/mesh.js');
+      app.setStock({ shape: 'box', size: [120, 80, 25], origin: [-60, -40, -25], resolution: 0.25, rotation: 0 });
+      // A plate 5 mm down from the top of the block, with the 5 mm hole
+      // the 5 mm drill in pot 7 is there to make.
+      const plate = latheToTriangles([{ r: 2.5, z: -5 }, { r: 40, z: -5 }], { segments: 64 });
+      const model = app.models.add({ name: 'holed-plate', positions: plate.positions, role: 'reference' });
+      app.refreshTarget();
+      return { id: model.id, edges: app.target ? app.target.edgeCells : 0, lateral: app.target ? app.target.lateral : 0 };
+    });
+    check(ref.edges > 0, 'the reference part is all walls and none were marked');
+
+    await page.evaluate((text) => window.millsim.loadProgram(text, 'REFERENCE-CHECK.nc'), [
+      'G21 G17 G40 G49 G80 G90', 'G54',
+      'T7 M06', 'S3000 M03', 'G43 H7',
+      'G00 X0 Y0 Z10',
+      'G01 Z-25 F300',          // the hole, cut to the size it is drawn
+      'G00 Z10',
+      'G00 X20 Y0',
+      'G01 Z-6 F300',           // and a plunge 1 mm into the plate itself
+      'G00 Z10', 'M30',
+    ].join('\n'));
+    await page.waitForTimeout(700);
+    await runToEnd(page);
+
+    const cmp = await page.evaluate(() => {
+      const c = window.millsim.compareToReference();
+      return {
+        max: c.maxGouge, cells: c.gougeCells,
+        skipped: c.skippedCells, compared: c.comparedCells, lateral: c.lateral,
+      };
+    });
+    await page.click('.ribbon-tab[data-tab="results"]');
+    await page.click('.ribbon-page[data-page="compare"]');
+    await page.waitForTimeout(400);
+    const said = await page.evaluate(() => [...document.querySelectorAll('.panel')].map((p) => p.textContent).join(' '));
+    console.log('reference check:', JSON.stringify({
+      maxGouge: +cmp.max.toFixed(3), gouged: cmp.cells, walls: cmp.skipped, judged: cmp.compared,
+    }));
+    check(cmp.max > 0.9 && cmp.max < 1.2, `the deepest gouge should be the 1 mm plunge, and reads ${cmp.max.toFixed(3)} mm`);
+    check(cmp.cells > 0, 'a 1 mm plunge into the reference part went unreported');
+    check(cmp.skipped > 0 && cmp.compared > cmp.skipped, `walls: ${cmp.skipped} skipped of ${cmp.compared + cmp.skipped}`);
+    check(Math.abs(cmp.lateral - 0.25) < 1e-6, `the lateral resolving power should be one column, and reads ${cmp.lateral}`);
+    check(/Walls skipped/.test(said), `the results panel does not say what it left out: ${said.slice(0, 200)}`);
+
+    // Put the bench back: later checks expect nothing but the block.
+    await page.evaluate((id) => {
+      const app = window.millsim;
+      app.models.remove(app.models.models.find((m) => m.id === id));
+      app.refreshTarget();
+    }, ref.id);
+    await page.waitForTimeout(300);
+  }
+
   // ---- the bad program reports every mistake in it ----------------------
   await loadExample(page, 3, 'Crash');
   await runToEnd(page);

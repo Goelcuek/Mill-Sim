@@ -82,6 +82,10 @@ export class ResultsPanel extends Panel {
     const tol = app.state.gougeTolerance;
     const pct = (n) => (cmp.comparedCells ? ((n / cmp.comparedCells) * 100).toFixed(2) : '0.00');
     const clean = cmp.gougeCells === 0;
+    // Walls are not judged from above; say how much of the part that is
+    // rather than quietly passing them. See sim/target.js.
+    const covered = cmp.comparedCells + cmp.skippedCells;
+    const walls = covered ? ((cmp.skippedCells / covered) * 100).toFixed(1) : '0.0';
 
     return section('Against the reference part', [
       el(`div.verdict.${clean ? 'ok' : 'bad'}`, {}, clean
@@ -91,6 +95,7 @@ export class ResultsPanel extends Panel {
         ['Max gouge', `${fmt(cmp.maxGouge, 3)} mm`],
         ['Gouged area', `${pct(cmp.gougeCells)} %`],
         ['Stock left', `${fmt(cmp.maxExcess, 2)} mm`],
+        ['Walls skipped', `${walls} %`],
       ].map(([k, v]) => el('div.stat', {}, [
         el('div.stat-label', {}, k),
         el('div.stat-value', {}, v),
@@ -105,7 +110,8 @@ export class ResultsPanel extends Panel {
           },
         }),
       ]),
-      el('div.hint', {}, 'Cutting deeper than the reference surface by more than this counts as a gouge and is listed with the collisions. "Stock left" is the thickest material still standing above the part.'),
+      el('div.hint', {}, `Cutting deeper than the reference surface by more than this counts as a gouge and is listed with the collisions. "Stock left" is the thickest material still standing above the part.`),
+      el('div.hint', {}, `The check looks straight down, so it can only speak about surfaces it can see: columns standing on a wall — the side of a pocket, the bore of a hole, the outline of the part — are left out, ${walls} % of the part here. That is what keeps a 5 mm drill in a 5 mm reference hole from reading as a gouge the depth of the hole: the reference bore is a polygon inscribed in the circle, so the two disagree sideways by a fraction of a column while the measurement is vertical. The price is that sideways error up to about ${fmt(cmp.lateral, 3)} mm — one grid column — can hide at a wall. Finer stock resolution narrows it.`),
     ]);
   }
 

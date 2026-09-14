@@ -17,8 +17,10 @@
  *
  * @param {import('./stock.js').Stock} stock
  * @param {Array<{positions:Float32Array}>} parts world-space triangle soups
- * @returns {null | Float32Array} height per column, -Infinity where the
- *   reference part does not cover the stock at all
+ * @returns {null | {map:Float32Array, edge:Uint8Array, edgeCells:number,
+ *   lateral:number}} the surface height per column, -Infinity where the
+ *   reference does not cover the stock, and which columns stand on an edge
+ *   of it — see markEdges.
  */
 export function buildTargetMap(stock, parts) {
   if (!stock || !parts || !parts.length) return null;
@@ -87,32 +89,102 @@ export function buildTargetMap(stock, parts) {
     }
   }
 
-  return covered ? map : null;
+  if (!covered) return null;
+  const { edge, edgeCells } = markEdges(stock, map);
+  return { map, edge, edgeCells, lateral: Math.max(stock.dx, stock.dy) };
+}
+
+/**
+ * Which columns stand on an edge of the reference, and cannot be judged
+ * from above.
+ *
+ * This is the whole difficulty with comparing a cut to a design surface in
+ * a field of vertical columns, and it is not a rounding error: it is the
+ * shape of the model. Drill a 5 mm hole with a 5 mm drill and the drill is
+ * round while the reference hole is a polygon — twenty-four flats, say,
+ * inscribed in the circle, so every flat sits two hundredths *inside* the
+ * true bore. A column whose centre falls in that sliver is material as far
+ * as the reference is concerned and air as far as the drill is; the
+ * difference between them is not two hundredths but the whole depth of the
+ * hole, because the disagreement is sideways and the measurement is
+ * vertical. The same thing happens at the wall of every pocket and round
+ * the outline of every part, and it is what made a correctly drilled hole
+ * report a gouge the depth of itself.
+ *
+ * So a column within one cell of a step in the reference — a missing
+ * neighbour, or one more than a couple of cells higher or lower — is left
+ * out of the comparison. What remains is every surface a top-down
+ * comparison can actually speak about. The cost is stated rather than
+ * hidden: the walls are not checked, and how much lateral error could hide
+ * there is the width of a column.
+ */
+function markEdges(stock, map) {
+  const nx = stock.nx;
+  const ny = stock.ny;
+  const edge = new Uint8Array(nx * ny);
+  // What counts as a step rather than a slope: more than a couple of cells
+  // of fall across one cell, which is steeper than about 60 degrees.
+  const step = Math.max(stock.dx, stock.dy) * 2;
+  let edgeCells = 0;   // covered columns only
+
+  for (let j = 0; j < ny; j++) {
+    const row = j * nx;
+    for (let i = 0; i < nx; i++) {
+      const k = row + i;
+      const here = map[k];
+      let mark = here === -Infinity;
+      if (!mark) {
+        for (let dj = -1; dj <= 1 && !mark; dj++) {
+          const jj = j + dj;
+          if (jj < 0 || jj >= ny) { mark = true; break; }
+          for (let di = -1; di <= 1; di++) {
+            const ii = i + di;
+            if (ii < 0 || ii >= nx) { mark = true; break; }
+            const there = map[jj * nx + ii];
+            if (there === -Infinity || Math.abs(there - here) > step) { mark = true; break; }
+          }
+        }
+      }
+      if (mark) {
+        edge[k] = 1;
+        // Only columns the reference actually covers are worth counting:
+        // the rest are outside the part and were never compared anyway.
+        if (here > -Infinity) edgeCells++;
+      }
+    }
+  }
+  return { edge, edgeCells };
 }
 
 /**
  * Compare the cut stock against the reference surface.
  *
  * @param {import('./stock.js').Stock} stock
- * @param {Float32Array} target
+ * @param {{map:Float32Array, edge:Uint8Array}} target
  * @param {number} tolerance mm the cut may pass the surface before it counts
  * @returns {{gougeCells:number, maxGouge:number, excessCells:number,
- *            maxExcess:number, comparedCells:number, gougeAt:number[]|null}}
+ *            maxExcess:number, comparedCells:number, skippedCells:number,
+ *            lateral:number, gougeAt:number[]|null}}
  */
 export function compareToTarget(stock, target, tolerance = 0.02) {
   const out = {
     gougeCells: 0, maxGouge: 0, excessCells: 0, maxExcess: 0,
-    comparedCells: 0, gougeAt: null,
+    comparedCells: 0, skippedCells: 0, gougeAt: null,
+    lateral: target ? target.lateral : 0,
   };
   if (!target) return out;
+  const map = target.map;
+  const edge = target.edge;
 
   const h = stock.height;
   for (let j = 0; j < stock.ny; j++) {
     const row = j * stock.nx;
     for (let i = 0; i < stock.nx; i++) {
       const k = row + i;
-      const want = target[k];
+      const want = map[k];
       if (want === -Infinity) continue;
+      // A wall cannot be judged from above; see markEdges.
+      if (edge[k]) { out.skippedCells++; continue; }
       out.comparedCells++;
       const d = want - h[k];
       if (d > tolerance) {

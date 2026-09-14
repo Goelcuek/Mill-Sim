@@ -300,9 +300,11 @@ export class Stock {
    * @param {number[]} from  [x, y, z] tool tip at the start
    * @param {number[]} to    [x, y, z] tool tip at the end
    * @param {number} [toolIndex]
-   * @param {{target?:Float32Array, tolerance?:number}} [opts]
+   * @param {{target?:{map:Float32Array, edge:Uint8Array}, tolerance?:number}} [opts]
    *   `target` is a reference-part heightmap on this same grid; cutting
-   *   below it by more than `tolerance` is a gouge.
+   *   below it by more than `tolerance` is a gouge. Columns flagged in
+   *   `edge` stand on a wall of the reference and cannot be judged from
+   *   above, so they are left out — see sim/target.js.
    * @returns {{volume:number, gouge:null|{depth:number,x:number,y:number,z:number}}}
    */
   carveSweep(env, from, to, toolIndex = 0, opts = {}) {
@@ -347,6 +349,8 @@ export class Stock {
     const dd = dx * dx + dy * dy;                 // squared XY length
     const flatOnly = env.flatR2 >= rMax2 - 1e-12; // a flat-bottomed cutter
     const target = opts.target || null;
+    const targetMap = target ? target.map : null;
+    const targetEdge = target ? target.edge : null;
     const tolerance = opts.tolerance || 0;
 
     const le = (r2) => {
@@ -447,8 +451,8 @@ export class Stock {
         height[k] = zt < base ? base : zt;
         cutBy[k] = flag;
 
-        if (target !== null) {
-          const want = target[k];
+        if (targetMap !== null && targetEdge[k] === 0) {
+          const want = targetMap[k];
           if (want > -Infinity) {
             const depth = want - height[k];
             if (depth > tolerance && (gouge === null || depth > gouge.depth)) {
@@ -500,7 +504,7 @@ export class Stock {
    * @param {number[]} dir   unit vector pointing up the tool from the tip
    * @param {number} fluteLength
    * @param {number} [toolIndex]
-   * @param {{target?:Float32Array, tolerance?:number}} [opts]
+   * @param {{target?:{map:Float32Array, edge:Uint8Array}, tolerance?:number}} [opts]
    */
   carveTilted(env, tip, dir, fluteLength, toolIndex = 0, opts = {}) {
     const none = { volume: 0, gouge: null };
@@ -539,6 +543,8 @@ export class Stock {
     const tileDirty = this.tileDirty;
     const flag = Math.min(255, toolIndex + 1);
     const target = opts.target || null;
+    const targetMap = target ? target.map : null;
+    const targetEdge = target ? target.edge : null;
     const tolerance = opts.tolerance || 0;
 
     const le = (r2) => {
@@ -672,8 +678,8 @@ export class Stock {
         height[cell] = zt < base ? base : zt;
         cutBy[cell] = flag;
 
-        if (target !== null) {
-          const want = target[cell];
+        if (targetMap !== null && targetEdge[cell] === 0) {
+          const want = targetMap[cell];
           if (want > -Infinity) {
             const depth = want - height[cell];
             if (depth > tolerance && (gouge === null || depth > gouge.depth)) {

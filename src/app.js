@@ -1475,7 +1475,7 @@ export class App {
     this.simulator.target = this.target;
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     if (parts.length && this.target) {
-      this.notify(`Reference surface mapped in ${(performance.now() - started).toFixed(0)} ms — cuts past it will be reported as gouges.`, 'ok');
+      this.notify(`Reference surface mapped in ${(performance.now() - started).toFixed(0)} ms — cuts past it will be reported as gouges. Walls are left out of the check; Results says how much of the part that is.`, 'ok');
     }
     this.refreshResults();
   }
