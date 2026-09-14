@@ -697,6 +697,10 @@ try {
   }
 
   // ---- U turns the work, and nothing else --------------------------------
+  //
+  // Twice over: on a machine that has no such axis, and on one where the
+  // indexer is modelled and the part is bolted to it. Either way the part
+  // goes round and the coordinate system it is measured in does not.
   {
     const indexed = await page.evaluate(async () => {
       const app = window.millsim;
@@ -720,7 +724,9 @@ try {
       return {
         holes: [at(30, 0), at(0, -30), at(-30, 0), at(0, 30)],
         middle: at(0, 0),
-        turned: +app.machineView.workGroup.rotation.z.toFixed(3),
+        // The part turns; the coordinate frame it is measured in does not.
+        turned: +app.machineView.partGroup.rotation.z.toFixed(3),
+        coord: +app.machineView.workGroup.rotation.z.toFixed(3),
       };
     });
     console.log('indexed:', JSON.stringify(cut));
@@ -729,6 +735,74 @@ try {
     // Four rounds, four quarter turns: the work ends up back where it
     // started, which is the point of indexing between them.
     check(Math.abs(Math.abs(cut.turned) - Math.PI * 2) < 0.01, `the work is turned ${cut.turned} rad, not a full turn`);
+    check(cut.coord === 0, `the coordinate frame turned to ${cut.coord} rad`);
+  }
+
+  // ---- ...and on a machine that has the indexer modelled -----------------
+  {
+    const built = await page.evaluate(async () => {
+      const app = window.millsim;
+      // A plain mill with a U rotary carrying the table, which is where
+      // the part is bolted.
+      app.setMachine({ preset: 'vmc3', mode: 'machine' });
+      const def = JSON.parse(JSON.stringify(app.machineView.kinematics.toJSON()));
+      const table = def.nodes.find((n) => n.id === 'table');
+      def.nodes.splice(def.nodes.indexOf(table), 0, {
+        id: 'u', name: 'U indexer', letter: 'U', kind: 'rotary', parent: table.parent,
+        axis: [0, 0, 1], origin: [0, 0, 0],
+      });
+      table.parent = 'u';
+      await app.applyMachineDefinition(def, null, 'u-machine');
+      app.setStock({ shape: 'box', size: [100, 100, 20], origin: [-50, -50, -20], resolution: 0.5, rotation: 0 });
+      return { axis: app.machineView.kinematics.extras().map((n) => `${n.letter}:${n.kind}`).join(',') };
+    });
+    // Let the machine settle: changing one re-rigs the tool table on a
+    // timer, and that reload would cancel the run started under it.
+    await page.waitForTimeout(1200);
+    const loaded = await page.evaluate(() => {
+      const app = window.millsim;
+      app.loadProgram([
+        '>G90 G21', 'F500', '>G0 X0 Y0 Z20',
+        '$REP 3',
+        '>G0 X30 Y0 Z2', 'Z-5', '>G0 Z2',
+        '>G91', '>G0 U-90.', '>G90',
+        '$END',
+        '>G0 Z20', 'M30',
+      ].join('\n'), 'indexed-machine.nc');
+      // The chain answers for it now, so the control's stand-in stands down.
+      return { standIn: app.state.program.indexer };
+    });
+    await page.waitForTimeout(400);
+    check(/U:rotary/.test(built.axis), `the machine's extras are ${built.axis}`);
+    check(loaded.standIn === null, 'the control indexed a machine that indexes itself');
+
+    await runToEnd(page);
+    const framed = await page.evaluate(() => {
+      const app = window.millsim;
+      const spin = (o) => {
+        o.updateWorldMatrix(true, false);
+        const e = o.matrixWorld.elements;
+        return Math.round((Math.atan2(e[1], e[0]) * 180) / Math.PI);
+      };
+      const at = (x, y) => +app.stock.heightAt(x, y).toFixed(2);
+      return {
+        coord: spin(app.machineView.workGroup),
+        part: spin(app.machineView.partGroup),
+        path: spin(app.toolpathView.group),
+        holes: [at(30, 0), at(0, 30), at(-30, 0), at(0, -30)],
+        middle: at(0, 0),
+      };
+    });
+    console.log('modelled indexer:', JSON.stringify(framed));
+    // Three quarter turns of the part; the coordinate system has not moved.
+    check(Math.abs(framed.part) === 90 || Math.abs(framed.part) === 270, `the part is at ${framed.part} degrees`);
+    check(framed.coord === 0, `the coordinate frame turned to ${framed.coord} degrees`);
+    check(framed.path === 0, `the backplot turned to ${framed.path} degrees`);
+    // Three rounds, so three of the four quarters are drilled and the
+    // fourth — the one the part never came round to — is not.
+    check(framed.holes.filter((z) => Math.abs(z + 5) < 0.01).length === 3,
+      `the holes came out at ${framed.holes.join(', ')}`);
+    check(Math.abs(framed.middle) < 0.01, 'something was cut in the middle');
   }
 
   // ---- a machine built from nothing looks like nothing ------------------

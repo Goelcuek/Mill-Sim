@@ -106,40 +106,19 @@ export class ToolpathView {
     const total = program.stats.cycleTime || program.moves.length;
     let acc = 0;
 
-    // The backplot hangs in the work frame, so it turns with the part. On
-    // a control that indexes the work, the path has to be drawn on the
-    // part rather than in the machine terms it was written in — otherwise
-    // every line ever cut swings round together each time the next face
-    // comes up, and only the last one is ever in the right place.
-    const indexer = program.indexer ? program.indexer.letter : null;
-    const spun = [0, 0, 0];
-    const onPart = (path, i, deg) => {
-      if (!deg) { spun[0] = path[i]; spun[1] = path[i + 1]; spun[2] = path[i + 2]; return spun; }
-      const r = -deg * (Math.PI / 180);
-      const c = Math.cos(r);
-      const s2 = Math.sin(r);
-      spun[0] = path[i] * c - path[i + 1] * s2;
-      spun[1] = path[i] * s2 + path[i + 1] * c;
-      spun[2] = path[i + 2];
-      return spun;
-    };
-
+    // The backplot is where the tool was sent, in the coordinates it was
+    // sent in — it hangs in the work frame, which stays still when the
+    // part indexes underneath it.
     for (const mv of program.moves) {
       const k = mv.kind === 'rapid' ? 0 : mv.kind === 'arc' ? 2 : 1;
       const p = mv.path;
       const segCount = p.length / 3 - 1;
       if (segCount < 1) { acc += mv.time; continue; }
       const step = mv.kind === 'arc' ? stride : 1;
-      const a0 = indexer ? (mv.rotFrom && mv.rotFrom[indexer]) || 0 : 0;
-      const a1 = indexer ? (mv.rotTo && mv.rotTo[indexer]) || 0 : 0;
-      const angleAt = (i) => (a0 === a1 ? a0 : a0 + (a1 - a0) * (i / segCount));
       for (let i = 0; i < segCount; i += step) {
         const j = Math.min(i + step, segCount);
         const t = (acc + mv.time * (j / segCount)) / (total || 1);
-        const from = onPart(p, i * 3, angleAt(i));
-        const fx = from[0], fy = from[1], fz = from[2];
-        const to = onPart(p, j * 3, angleAt(j));
-        pos.push(fx, fy, fz, to[0], to[1], to[2]);
+        pos.push(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], p[j * 3], p[j * 3 + 1], p[j * 3 + 2]);
         kind.push(k, k);
         tval.push(t, t);
         tool.push(mv.tool, mv.tool);

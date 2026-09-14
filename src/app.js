@@ -241,10 +241,11 @@ export class App {
     this.toolpathView = new ToolpathView();
     this.models = new ModelsView(this.viewer);
 
-    // Everything expressed in work coordinates rides on the machine table.
-    this.machineView.workGroup.add(this.stockView.group);
+    // What is bolted to the table goes round with it when it indexes; the
+    // coordinate system it is measured in does not. See MachineView.
+    this.machineView.partGroup.add(this.stockView.group);
+    this.machineView.partGroup.add(this.models.group);
     this.machineView.workGroup.add(this.toolpathView.group);
-    this.machineView.workGroup.add(this.models.group);
 
     this.originView = new OriginView();
     this.machineView.workGroup.add(this.originView.group);
@@ -1740,11 +1741,10 @@ export class App {
     this.toolpathView.setProgress(sim.progress);
     if (this.state.display.toolpath && this.state.program) {
       const r = sim.activeSlot ? sim.activeSlot.built.cutRadius : 1;
-      // On the part, not in machine terms: the marker rides in the work
-      // frame with the path it is marking, and under an index the two are
-      // not the same point.
-      const at = pose.tip || sim.pos;
-      this.toolpathView.setMarker(at[0], at[1], at[2], Math.min(Math.max(r * 0.35, 0.6), 3));
+      // In machine terms, like the path it is marking: the backplot is
+      // drawn where the tool was sent, and that is not where the part had
+      // turned to underneath it.
+      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.min(Math.max(r * 0.35, 0.6), 3));
     } else {
       this.toolpathView.hideMarker();
     }

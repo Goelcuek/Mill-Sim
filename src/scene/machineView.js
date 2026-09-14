@@ -23,6 +23,7 @@ import { buildPreset, PRESETS } from '../machine/presets.js';
 import { TONES, buildCasting } from './castings.js';
 import { DEFAULT_PARAMETERS, defaultMacros } from '../machine/macros.js';
 import { DEFAULT_MACHINE, MACHINE_SETTINGS, limitsInScene } from '../machine/config.js';
+import { resolveDialect } from '../gcode/dialects.js';
 
 export { DEFAULT_MACHINE, MACHINE_SETTINGS };
 
@@ -53,9 +54,23 @@ export class MachineView {
     this.group = new THREE.Group();
     this.group.name = 'machine';
 
-    /** Everything expressed in work coordinates hangs off this. */
+    /**
+     * The frame the program's numbers live in: work zero, the grid, the
+     * origin markers and the backplot.
+     *
+     * It rides the table, because on a machine whose table moves the work
+     * coordinates move with it — but it does not turn with an indexer.
+     * Indexing is the part being turned round under a coordinate system
+     * that stays exactly where it was; see partGroup.
+     */
     this.workGroup = new THREE.Group();
     this.workGroup.name = 'work';
+    /**
+     * What is bolted to the face that turns: the stock, the fixtures, the
+     * reference part. These go round with the index; nothing else does.
+     */
+    this.partGroup = new THREE.Group();
+    this.partGroup.name = 'part';
     /** The spindle end of the chain; the tool assembly rides here. */
     this.toolGroup = new THREE.Group();
     this.toolGroup.name = 'spindle';
@@ -189,11 +204,19 @@ export class MachineView {
     }
 
     // The two ends of the chain carry the scene's own contents.
+    //
+    // The part hangs off the deepest work node, so whatever turns it turns
+    // it. The coordinate frame hangs off the last node above the indexer,
+    // so the grid, work zero and the backplot stay where they are while
+    // the part goes round — which is what indexing is.
     const work = this.nodeGroups.get(kin.workNode) || this.group;
-    work.add(this.workGroup);
+    work.add(this.partGroup);
+    const coord = this.nodeGroups.get(this.coordNode()) || work;
+    coord.add(this.workGroup);
     const tool = this.nodeGroups.get(kin.toolNode) || this.group;
     tool.add(this.toolGroup);
     this.workGroup.position.set(...kin.tableOffset);
+    this.partGroup.position.set(0, 0, 0);
     this.toolGroup.position.set(...kin.spindleOffset);
 
     for (const node of kin.order) this.buildNodeParts(node);
@@ -202,6 +225,41 @@ export class MachineView {
     this.setMode(this.config.mode);
     this.group.visible = this.config.visible;
     this.update(this.lastPose);
+  }
+
+  /**
+   * Which node the coordinate frame hangs off.
+   *
+   * Everything the work node carries, except the indexer. A rotary that
+   * only indexes the part is not part of the coordinate system: the work
+   * offset is a place on the table and it stays there whatever angle the
+   * part is sitting at. Which letter that is, is the control's to say —
+   * see the `indexer` note in gcode/dialects.js — so a machine with a U
+   * that is a real slide, or a control that has no indexer at all, gets
+   * the work node itself and nothing changes.
+   */
+  coordNode() {
+    const kin = this.kinematics;
+    const letter = this.indexerLetter();
+    if (!letter) return kin.workNode;
+    // From the part up to the root: the first indexer on that path is the
+    // one the coordinate frame has to sit above.
+    let id = kin.workNode;
+    let guard = 0;
+    while (id && guard++ < 64) {
+      const node = kin.byId.get(id);
+      if (!node) break;
+      if (node.letter === letter && node.kind === 'rotary') return node.parent || kin.workNode;
+      id = node.parent;
+    }
+    return kin.workNode;
+  }
+
+  /** The letter this machine's control turns the work with, or null. */
+  indexerLetter() {
+    const c = this.config.controller || {};
+    const d = resolveDialect(c.dialect || c.flavour || 'fanuc', c.syntax);
+    return (d.indexer && d.indexer.letter) || null;
   }
 
   /** Proxy geometry for one axis, or the user's model in its place. */
@@ -345,11 +403,11 @@ export class MachineView {
     this.lastPose = p;
     const kin = this.kinematics;
 
-    // The work indexes without the machine moving: on a control that has
-    // one, a U word says which way round the part is sitting and nothing
-    // in the chain answers for it. So the work frame turns and everything
-    // else — the castings, the slides, the spindle — stands where it was.
-    this.workGroup.rotation.z = (p.index || 0) * Math.PI / 180;
+    // The part turns and the coordinate system does not. On a machine
+    // that has been modelled with the indexer the chain has already turned
+    // it — partGroup hangs off that node — and this is zero; on one that
+    // has not, this is the whole of it.
+    this.partGroup.rotation.z = this.nodeGroups.has(this.indexNodeId()) ? 0 : (p.index || 0) * Math.PI / 180;
 
     if (this.config.mode !== 'machine') {
       // Part mode: the chain collapses. The work frame is the scene, and
@@ -359,8 +417,15 @@ export class MachineView {
         g.matrixWorldNeedsUpdate = true;
       }
       this.workGroup.position.set(0, 0, 0);
+      this.partGroup.position.set(0, 0, 0);
       this.toolGroup.position.set(0, 0, 0);
-      return { tip: p.tip.slice(), dir: p.dir.slice() };
+      // The tool is given on the part, and in part view the part frame is
+      // the scene — except for the index, which is the one thing that
+      // still separates the two.
+      this.group.updateMatrixWorld(true);
+      const spun = new THREE.Vector3(p.tip[0], p.tip[1], p.tip[2]).applyMatrix4(this.partGroup.matrixWorld);
+      const spunDir = new THREE.Vector3(p.dir[0], p.dir[1], p.dir[2]).transformDirection(this.partGroup.matrixWorld).normalize();
+      return { tip: [spun.x, spun.y, spun.z], dir: [spunDir.x, spunDir.y, spunDir.z] };
     }
 
     // The part is clamped to the table at a fixed place and stays there.
@@ -394,11 +459,21 @@ export class MachineView {
     this.group.updateMatrixWorld(true);
 
     // The tool is drawn where the part says it is, so it lands on the cut
-    // even if the machine could not quite reach the pose.
-    const world = this.workGroup.matrixWorld;
+    // even if the machine could not quite reach the pose. The part frame,
+    // not the coordinate frame: under an index the two are a rotation
+    // apart, and the cut is on the part.
+    const world = this.partGroup.matrixWorld;
     const tip = new THREE.Vector3(p.tip[0], p.tip[1], p.tip[2]).applyMatrix4(world);
     const dir = new THREE.Vector3(p.dir[0], p.dir[1], p.dir[2]).transformDirection(world).normalize();
     return { tip: [tip.x, tip.y, tip.z], dir: [dir.x, dir.y, dir.z] };
+  }
+
+  /** The chain node that indexes the work, when the machine has one. */
+  indexNodeId() {
+    const letter = this.indexerLetter();
+    if (!letter) return null;
+    const node = this.kinematics.order.find((n) => n.letter === letter && n.kind === 'rotary');
+    return node ? node.id : null;
   }
 
   /** 'part' or 'machine'. */
