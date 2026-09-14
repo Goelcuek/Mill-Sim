@@ -279,6 +279,48 @@ try {
     check(right.moves > 0, 'no toolpath after taking the offer');
   }
 
+  // ---- a big part can be looked at closely ------------------------------
+  //
+  // The clip planes follow the camera rather than being picked once from
+  // the size of the job. Picked once they are a wall: on a two metre frame
+  // everything within a centimetre of the lens was cut away, so pushing in
+  // to look at a corner dissolved it.
+  {
+    await page.evaluate(() => {
+      window.millsim.setStock({ shape: 'box', size: [2000, 1200, 400], origin: [-1000, -600, -400], resolution: 2 });
+      window.millsim.fitToScene();
+    });
+    await page.waitForTimeout(900);
+    const canvas = await page.$('canvas');
+    const area = await canvas.boundingBox();
+    await page.mouse.move(area.x + area.width * 0.5, area.y + area.height * 0.45);
+    for (let i = 0; i < 60; i++) await page.mouse.wheel(0, -240);
+    await page.waitForTimeout(400);
+    const close = await page.evaluate(() => {
+      const v = window.millsim.viewer;
+      return {
+        dist: v.camera.position.distanceTo(v.controls.target),
+        near: v.camera.near,
+        far: v.camera.far,
+      };
+    });
+    console.log('zoomed in:', JSON.stringify({ dist: +close.dist.toFixed(2), near: +close.near.toFixed(4) }));
+    check(close.dist < 10, `the wheel stopped ${close.dist.toFixed(1)} mm out on a 2 m part`);
+    check(close.near < close.dist * 0.6, `the near plane (${close.near.toFixed(3)}) would cut away what the camera is looking at`);
+    check(close.far / close.near < 2e5, 'the depth buffer is spread too thin');
+
+    // Double-click puts the turning point on what was clicked.
+    await page.evaluate(() => window.millsim.fitToScene());
+    await page.waitForTimeout(600);
+    const was = await page.evaluate(() => window.millsim.viewer.controls.target.toArray());
+    await page.mouse.dblclick(area.x + area.width * 0.32, area.y + area.height * 0.6);
+    await page.waitForTimeout(400);
+    const now = await page.evaluate(() => window.millsim.viewer.controls.target.toArray());
+    const moved = Math.hypot(now[0] - was[0], now[1] - was[1], now[2] - was[2]);
+    console.log('focus moved:', +moved.toFixed(1), 'mm');
+    check(moved > 1, 'a double-click did not move the turning point');
+  }
+
   // ---- the axes can be wound by hand ------------------------------------
   await page.click('.ribbon-tab[data-tab="machine"]');
   await page.click('.ribbon-page[data-page="jog"]');

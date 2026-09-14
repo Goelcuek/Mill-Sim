@@ -308,6 +308,16 @@ export class App {
     dom.addEventListener('pointerdown', (e) => {
       downAt = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
     });
+    // Double-click puts the orbit point on whatever was clicked. On a
+    // two metre frame, turning and zooming about the middle of it is how
+    // you look at everything except the thing you wanted to look at.
+    dom.addEventListener('dblclick', (e) => {
+      if (this.pick.active) return;
+      if (this.gizmoBusy()) return;
+      const hit = this.pick.objectAt(e, { bodies: true });
+      if (!hit) return;
+      this.viewer.focusOn(hit.world || this.pick.toWorld(hit.point));
+    });
     dom.addEventListener('pointerup', (e) => {
       const from = downAt;
       downAt = null;

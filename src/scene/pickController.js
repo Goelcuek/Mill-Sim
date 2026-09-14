@@ -333,7 +333,7 @@ export class PickController {
    *
    * @returns {null | {kind:'stock'|'model', model?:object, point:number[]}}
    */
-  objectAt(event) {
+  objectAt(event, opts = {}) {
     this.rayFor(event);
     const r = this.workRay;
     const origin = [r.origin.x, r.origin.y, r.origin.z];
@@ -363,7 +363,35 @@ export class PickController {
         }
       }
     }
+
+    // The machine itself, when the caller cares where it is rather than
+    // which part of the job was clicked. Looking at a casting is a reason
+    // to point at one; selecting it is not.
+    if (opts.bodies && this.ctx.bodies) {
+      const meshes = this.ctx.bodies();
+      const hits = meshes.length ? this.raycaster.intersectObjects(meshes, false) : [];
+      if (hits.length && (!best || hits[0].distance < best.distance)) {
+        const h = hits[0];
+        best = {
+          kind: 'machine',
+          point: this.toWork([h.point.x, h.point.y, h.point.z]),
+          world: [h.point.x, h.point.y, h.point.z],
+          distance: h.distance,
+        };
+      }
+    }
     return best;
+  }
+
+  /** A point this controller produced, back in world coordinates. */
+  toWorld(point) {
+    const frame = this.frameObject();
+    const v = new THREE.Vector3(point[0], point[1], point[2]);
+    if (frame) {
+      frame.updateWorldMatrix(true, false);
+      v.applyMatrix4(frame.matrixWorld);
+    }
+    return [v.x, v.y, v.z];
   }
 
   /**

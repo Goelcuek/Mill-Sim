@@ -86,23 +86,38 @@ export class Viewer {
     this.scene = new THREE.Scene();
     this.scene.background = null;
 
-    // A 1 mm near plane against a 8 km far plane spends almost all of the
-    // depth buffer on the first few centimetres, which is what makes two
-    // touching castings flicker against each other. Nothing is ever this
-    // close to the camera anyway — the orbit controls stop at 5.
-    this.camera = new THREE.PerspectiveCamera(42, 1, 4, 6000);
+    // The clip planes are not fixed: they follow how close the camera is
+    // standing, so the same viewport works on a 30 mm insert and on a two
+    // metre frame. See updateClipping — a near plane picked once for the
+    // whole session is what used to stop a big part being examined, since
+    // everything within a centimetre of the camera was cut away.
+    this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
     this.camera.position.set(240, -300, 220);
+    /** Roughly how big the thing being looked at is, in millimetres. */
+    this.sceneRadius = 400;
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     // No damping: the viewport should track the pointer exactly and stop
     // dead when it does. Inertia looks smooth in a demo and gets in the way
     // when you are lining up on a corner.
     this.controls.enableDamping = false;
-    this.controls.maxDistance = 4000;
-    this.controls.minDistance = 5;
+    // The wheel goes towards what the pointer is on rather than towards the
+    // middle of whatever was last framed. On anything bigger than a palm
+    // that is the difference between being able to look at a feature and
+    // not: the middle of a two metre frame is a metre from every corner of
+    // it, and zooming at the middle only ever gets you to the middle.
+    this.controls.zoomToCursor = true;
+    // How near and how far the camera may stand. Both follow the size of
+    // the job rather than being numbers picked for a palm-sized part; the
+    // near plane is what keeps the camera out of the metal now.
+    this.controls.minDistance = 0.02;
+    this.controls.maxDistance = 20000;
     // Orbiting is the one thing that changes the picture without anything
     // in the app changing, so it asks for the redraw itself.
-    this.controls.addEventListener('change', () => this.invalidate());
+    this.controls.addEventListener('change', () => {
+      this.updateClipping();
+      this.invalidate();
+    });
 
     this.buildEnvironment();
     this.buildLights();
@@ -183,6 +198,10 @@ export class Viewer {
    * @param {number} span the work area's largest dimension, mm
    */
   setGridExtent(span) {
+    // The job just changed size, so the clip planes have a new floor to
+    // work from even if nobody re-frames the view.
+    this.sceneRadius = Math.max(this.sceneRadius, span * 0.75);
+    this.updateClipping();
     const size = Math.max(100, Math.min(Math.ceil((span * 1.8) / 50) * 50, 2000));
     if (size === this.gridSpan) return;
     this.gridSpan = size;
@@ -319,6 +338,29 @@ export class Viewer {
     if (this.frameHandle) cancelAnimationFrame(this.frameHandle);
   }
 
+  /**
+   * Where the clip planes go, given where the camera is standing.
+   *
+   * A near plane is a wall in front of the lens: anything closer is cut
+   * away. Picked once — from the size of the job, or from a number in the
+   * source — it is either far too close on a small part, where the depth
+   * buffer is spent on the first centimetre and two touching castings
+   * flicker, or far too far on a big one, where pushing in to look at a
+   * corner dissolves it. So it follows the camera instead, always a small
+   * fraction of the distance to what is being looked at, and the far plane
+   * covers the job from wherever that is. The ratio between them is capped,
+   * because that ratio is what the depth buffer's precision is spent on.
+   */
+  updateClipping() {
+    const d = this.camera.position.distanceTo(this.controls.target);
+    const far = Math.max(d + this.sceneRadius * 2 + 200, 100);
+    const near = Math.min(Math.max(d / 200, far / 100000), Math.max(d * 0.5, 0.02));
+    if (near === this.camera.near && far === this.camera.far) return;
+    this.camera.near = near;
+    this.camera.far = far;
+    this.camera.updateProjectionMatrix();
+  }
+
   /** Frame a bounding box. */
   fit(box, factor = 1.6) {
     if (!box || box.isEmpty()) return;
@@ -331,11 +373,34 @@ export class Viewer {
     if (dir.lengthSq() < 1e-6) dir.set(1, -1, 0.8);
     dir.normalize().multiplyScalar(Math.max(dist, 20));
 
+    // How big the job is, which is what the clip planes and the dolly
+    // limits are measured against from here on.
+    this.sceneRadius = radius;
+    this.controls.maxDistance = Math.max(radius * 40, 4000);
     this.controls.target.copy(centre);
     this.camera.position.copy(centre).add(dir);
-    this.camera.near = Math.max(0.1, dist / 400);
-    this.camera.far = dist * 20 + 2000;
-    this.camera.updateProjectionMatrix();
+    this.updateClipping();
+    this.controls.update();
+    this.invalidate();
+  }
+
+  /**
+   * Put the orbit point on something.
+   *
+   * Turning a big part round its own middle swings whatever you were
+   * looking at off the screen; turning it round the corner you are looking
+   * at is what a person means by "look at this". The camera keeps its
+   * distance and its direction, so the picture does not jump.
+   *
+   * @param {number[]} point in world coordinates
+   */
+  focusOn(point) {
+    const p = new THREE.Vector3(point[0], point[1], point[2]);
+    const offset = this.camera.position.clone().sub(this.controls.target);
+    if (offset.lengthSq() < 1e-9) offset.set(1, -1, 0.8);
+    this.controls.target.copy(p);
+    this.camera.position.copy(p).add(offset);
+    this.updateClipping();
     this.controls.update();
     this.invalidate();
   }
@@ -346,7 +411,7 @@ export class Viewer {
     const dist = this.camera.position.distanceTo(this.controls.target) || 300;
     const v = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize().multiplyScalar(dist);
     this.camera.position.copy(this.controls.target).add(v);
-    this.camera.updateProjectionMatrix();
+    this.updateClipping();
     this.controls.update();
     this.invalidate();
   }

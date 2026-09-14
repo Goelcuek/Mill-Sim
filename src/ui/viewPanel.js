@@ -40,7 +40,7 @@ export class ViewPanel extends Panel {
   cameraPage() {
     const app = this.app;
     return section('Camera', [
-      el('div.hint', {}, 'Drag to orbit, right-drag or two fingers to pan, wheel to zoom.'),
+      el('div.hint', {}, 'Drag to orbit, right-drag or two fingers to pan, wheel to zoom. The wheel goes towards whatever the pointer is on, and a double-click puts the turning point there — which is what makes a big part workable: the middle of a two metre frame is a metre away from everything you want to look at.'),
       actionRow([
         { label: 'Isometric', variant: 'primary', onClick: () => app.viewer.setView('iso') },
         { label: 'Fit the job', onClick: () => app.fitToScene(), hint: 'F' },
