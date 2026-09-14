@@ -54,6 +54,8 @@ const FANUC = {
   locals: 33,
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
+  /** What a program written for this control looks like from the outside. */
+  marks: ['#\\d+\\s*=', '\\bM98\\s*P\\d', '\\bG65\\s*P\\d', '\\bWHILE\\s*\\[', '\\bG68\\.2\\b', '\\bG43\\.4\\b'],
 };
 
 const SIEMENS = {
@@ -76,6 +78,7 @@ const SIEMENS = {
   locals: 0,
   labels: 'name',
   call: { code: null, program: 'CALL', ret: 'M17' },
+  marks: ['\\bGOTOF\\b', '\\bGOTOB\\b', '\\bENDWHILE\\b', '\\bR\\d+\\s*=', '\\bMSG\\s*\\(', '\\bCYCLE\\d+', '\\bTRANS\\b'],
 };
 
 const HEIDENHAIN = {
@@ -98,6 +101,7 @@ const HEIDENHAIN = {
   locals: 0,
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
+  marks: ['\\bQ\\d+\\s*=', '\\bFN\\s*\\d'],
 };
 
 const OKUMA = {
@@ -120,6 +124,7 @@ const OKUMA = {
   locals: 0,
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
+  marks: ['\\bVC\\d+\\s*=', '\\bCALL\\s+O\\d'],
 };
 
 /**
@@ -187,6 +192,11 @@ const FIDIA = {
   vectorMode: { on: 92, off: 93 },
   /** RTCP ON / RTCP OF, in place of G43.4 and G49. */
   rtcp: true,
+  marks: [
+    '^\\s*>', '\\bIPC\\s*=>\\s*CNC\\b', '\\bRTCP(TLCN)?\\s+(ON|OF)\\b',
+    '\\$IF\\b', '\\$GOTO\\b', '^\\s*ORIGIN\\s+\\d', '^\\s*CQA\\b', '\\bRG\\s*\\d+',
+    '\\bDX-?[\\d.]+\\s+DY',
+  ],
 };
 
 export const DIALECTS = {
@@ -286,4 +296,44 @@ export function sampleFor(d) {
     lines.push(`${k.end} 1`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Which control a program was written for, judged by the program itself.
+ *
+ * A program read against the wrong control does not produce a slightly
+ * wrong toolpath — it produces a hundred and fifty errors and no path at
+ * all, which is a question ("which machine is this for?") wearing the
+ * costume of a fault. So the question gets asked directly: every dialect
+ * carries the marks a program written for it wears, and this counts them.
+ *
+ * Only a clear answer is an answer. A tie, or a handful of coincidences,
+ * returns null rather than a guess — the machine's own control is the
+ * better guess in that case, and it is already what is being used.
+ *
+ * @param {string} text
+ * @returns {string|null} a dialect id
+ */
+export function detectDialect(text) {
+  const src = String(text || '');
+  if (!src.trim()) return null;
+
+  const scored = Object.values(DIALECTS).map((d) => {
+    let hits = 0;
+    let kinds = 0;
+    for (const mark of d.marks || []) {
+      const found = src.match(new RegExp(mark, 'gim'));
+      if (found && found.length) {
+        kinds += 1;
+        hits += found.length;
+      }
+    }
+    return { id: d.id, hits, kinds };
+  }).sort((a, b) => b.hits - a.hits || b.kinds - a.kinds);
+
+  const best = scored[0];
+  const next = scored[1];
+  if (!best || best.kinds < 2 || best.hits < 3) return null;
+  if (next && next.hits > best.hits * 0.6) return null;
+  return best.id;
 }

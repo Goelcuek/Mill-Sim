@@ -1087,3 +1087,12 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .jog-axis .row { gap: 4px; }
 .jog-axis .row .btn { padding: 2px 6px; font-variant-numeric: tabular-nums; }
 .jog-axis .field { flex: 1 1 70px; }
+
+/* A notice that is really a question carries the answer with it. */
+.toast-action {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toast-action .btn { flex: none; }

@@ -25,7 +25,7 @@ import { columnFor, describeShape, stockGrid } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
-import { FLAVOUR_DIALECT, controlName } from './gcode/dialects.js';
+import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
 
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
 import { buildTargetMap, compareToTarget } from './sim/target.js';
@@ -1240,6 +1240,51 @@ export class App {
   }
 
   /**
+   * "This is not written for the control this machine has."
+   *
+   * Asked rather than done: which control a machine has is the machine's
+   * business and not a program's to change. But a Fidia program read as a
+   * Fanuc is a page of errors and no toolpath, and the one thing that fixes
+   * it is one click away, so the notice carries it.
+   */
+  offerControl(program) {
+    const id = program && program.suggested;
+    if (!id || !DIALECTS[id]) return;
+    if (this._offered === id && this._offeredFor === this.state.machine.controller.dialect) return;
+    this._offered = id;
+    this._offeredFor = this.state.machine.controller.dialect;
+    this.notify(
+      `This program is written for a ${DIALECTS[id].name}; this machine reads ${DIALECTS[this.state.machine.controller.dialect] ? DIALECTS[this.state.machine.controller.dialect].name : 'something else'}.`,
+      'error',
+      { label: `Read it as a ${DIALECTS[id].name}`, onClick: () => this.setControl(id) },
+    );
+  }
+
+  /**
+   * Put this machine on another control.
+   *
+   * Not a setting — a machine has the control it was built with, and the
+   * Machine tab says so rather than offering to change it. This is the one
+   * way round that, and it exists because a machine built before the shop
+   * had this control in the list is otherwise a machine that has to be
+   * built again. The macros and the parameters are the shop's and are left
+   * alone; only what the control *is* changes.
+   */
+  setControl(flavour) {
+    const c = this.state.machine.controller;
+    const known = FLAVOUR_DIALECT[flavour] ? flavour : null;
+    if (!known) return;
+    this.setMachine({
+      controller: { ...c, flavour: known, dialect: FLAVOUR_DIALECT[known], syntax: null },
+    });
+    this._offered = null;
+    if (this._offerToast) { this._offerToast.remove(); this._offerToast = null; }
+    if (this.panels && this.panels.machine) this.panels.machine.refresh();
+    if (this.panels && this.panels.program) this.panels.program.refresh();
+    this.notify(`This machine reads ${controlName(known)} now, and the program was read again.`, 'ok');
+  }
+
+  /**
    * Where the machine sits at its home switches.
    *
    * Machine zero: G53 and G28 measure from it, and so does the envelope on
@@ -1467,6 +1512,7 @@ export class App {
     });
     this.state.program = program;
     this.toolpathView.setProgram(program);
+    this.offerControl(program);
     this.simulator.load({
       program,
       stock: this.stock,
@@ -2154,14 +2200,28 @@ export class App {
 
   // ---- notifications -----------------------------------------------------
 
-  notify(message, level = 'info') {
-    const node = el(`div.toast.toast-${level}`, {}, message);
+  /**
+   * @param {string} message
+   * @param {'info'|'ok'|'error'} [level]
+   * @param {{label:string, onClick:Function}} [action] one thing to do about
+   *   it, for a notice that is really a question — "this program is written
+   *   for another control, shall I read it that way?"
+   */
+  notify(message, level = 'info', action = null) {
+    const node = el(`div.toast.toast-${level}${action ? '.toast-action' : ''}`, {}, [
+      el('span', {}, message),
+      action ? button(action.label, () => {
+        node.remove();
+        action.onClick();
+      }, { variant: 'primary' }) : null,
+    ].filter(Boolean));
     this.toast.appendChild(node);
+    if (action) this._offerToast = node;
     setTimeout(() => node.classList.add('show'), 10);
     setTimeout(() => {
       node.classList.remove('show');
       setTimeout(() => node.remove(), 400);
-    }, level === 'error' ? 7000 : 3800);
+    }, action ? 14000 : level === 'error' ? 7000 : 3800);
     while (this.toast.children.length > 4) this.toast.firstChild.remove();
   }
 }

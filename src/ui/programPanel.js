@@ -17,6 +17,7 @@ import { uid } from '../core/util.js';
 import { GcodeEditor } from './editor.js';
 import { fmt, fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
+import { DIALECTS } from '../gcode/dialects.js';
 import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 
 export class ProgramPanel extends Panel {
@@ -329,6 +330,19 @@ export class ProgramPanel extends Panel {
     if (!program) {
       this.summaryHost.appendChild(el('div.hint', {}, 'Open a program or pick an example to begin.'));
       return;
+    }
+
+    // A program read against the wrong control is a page of errors and no
+    // toolpath. That is not a hundred and fifty mistakes, it is one, and
+    // the answer to it belongs at the top of the page that lists them.
+    if (program.suggested && DIALECTS[program.suggested]) {
+      const name = DIALECTS[program.suggested].name;
+      this.summaryHost.appendChild(section('Written for another control', [
+        el('div.inline-warning', {}, `This program is written for a ${name}; this machine reads ${DIALECTS[app.state.machine.controller.dialect] ? DIALECTS[app.state.machine.controller.dialect].name : 'something else'}. Almost everything below follows from that — the > in front of every line, the words this reader does not know, the labels.`),
+        actionRow([
+          { label: `Read it as a ${name}`, variant: 'primary', onClick: () => app.setControl(program.suggested), hint: 'Puts this machine on that control and reads the program again' },
+        ]),
+      ]));
     }
 
     const s = program.stats;

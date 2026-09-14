@@ -168,3 +168,99 @@ test('$IF jumps to a named label, and a register decides', () => {
   assert.deepEqual(errs(ran), []);
   assert.deepEqual(ran.moves.map((m) => m.to[0]), [10, 0]);
 });
+
+// ---- a real main program --------------------------------------------------
+//
+// The shape a Fidia main program actually comes in: a label, the control
+// words, a mark in front of nearly every line, the compensation switches,
+// an M code carrying braces, and a file called by name at the end of it.
+// Read against a Fanuc this produced a hundred and fifty errors and no
+// toolpath, which is the report this test exists to keep from coming back.
+
+const MAIN = [
+  'TP5:',
+  ';*********************** IT5_HELICAL_DELIK - 1 ***********************',
+  'ORIGIN 4',
+  'RTCP OF',
+  'RTCPTLCN OF',
+  'RTCP ON',
+  '',
+  ';>>>>>>>>>>TURN ON FLAT AND OFF CENTER COMPENSATIONS',
+  '>M321',
+  '>M311',
+  '>M312',
+  '>S22000',
+  '>G20',
+  '>G21',
+  '>G90 G40 G80',
+  'CQAHDW OF',
+  'CQAHDW ON',
+  '',
+  '>W0.',
+  '>X-10.59 Y0.00 A0. C90. F80000',
+  '>G17',
+  '',
+  '>U0.0000(ITEM BASLANGIC ACISI)',
+  '',
+  'CQA XP .000',
+  'CQA YP .000',
+  'CQA ZP .000',
+  'CQA WP .000',
+  '',
+  '>M03 S1000',
+  '>M08',
+  '',
+  'IPC => CNC C:\\TEI\\TOOLPATH\\2445M92P01_OP110_IT1_HELICAL_DELIK.txt',
+  '>M520{%1=2 %4=2 %8=2 %9=2}',
+  '>M05',
+  '>M09',
+  '>Z4.173 F80000',
+  '>X-10.59 Y0.00',
+  '',
+  '>G91 G0 U-90.0',
+  '>G90',
+  '>M01',
+  'M30',
+];
+
+/** And what it calls: coordinates, a tool vector, and nothing else. */
+const SUB = [
+  '(TOOLPATH/ACILI_DELIK_HELICAL,TOOL=FREZE TKY11986)',
+  'G92',
+  'F20000',
+  'X-4.9392 Y0.0000 Z2.9641 DX-0.9135 DY0.0000 DZ0.4067',
+  'M10',
+  'F4000',
+  'X-4.0257 Y0.0000 Z2.5573',
+  'F3000',
+  'X-4.0255 Y-0.0026 Z2.5576',
+  'X-4.0251 Y-0.0050 Z2.5586',
+  'G93',
+  'M30',
+].join('\n');
+
+test('a Fidia main program reads without a single error', () => {
+  const p = run(MAIN, {
+    subprograms: [{ name: '2445M92P01_OP110_IT1_HELICAL_DELIK.txt', text: SUB }],
+  });
+  assert.deepEqual(errs(p), []);
+
+  // The file it named ran, and the vector in it turned the machine.
+  assert.ok(p.moves.some((m) => m.source === '2445M92P01_OP110_IT1_HELICAL_DELIK.txt'), 'the called file ran');
+  assert.ok(p.moves.some((m) => Math.abs((m.rotTo || {}).A || 0) > 1), 'the tool vector turned the rotaries');
+
+  // U is the indexer on this machine, so U-90 is an index and not a slide.
+  const indexed = p.moves[p.moves.length - 1];
+  assert.ok(Math.abs(indexed.rotTo.U + 90) < 1e-6 || Math.abs(indexed.rotTo.C) > 0, 'U was read as the axis the chain says it is');
+});
+
+test('a program written for another control says so instead of falling apart', () => {
+  // The same program, read by a machine that thinks it is a Fanuc.
+  const fanuc = interpret(MAIN.join('\n'), { kinematics: trunnion() });
+  assert.equal(fanuc.suggested, 'fidia');
+  assert.ok(fanuc.warnings.some((w) => /written for a Fidia/.test(w.message)));
+
+  // And read by the right one, there is nothing to suggest.
+  const p = run(MAIN);
+  assert.equal(p.suggested, null);
+});

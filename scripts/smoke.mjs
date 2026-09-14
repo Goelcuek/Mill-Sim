@@ -232,6 +232,53 @@ try {
   check(fidia.tipped, 'the tool vector did not turn the rotaries');
   check(fidia.tcp, 'RTCP ON did not reach the moves');
 
+  // ---- a program written for another control says so --------------------
+  //
+  // Read against the wrong one, a Fidia program is a page of errors and no
+  // toolpath. That is one mistake, not a hundred and fifty, and the answer
+  // to it is one button.
+  {
+    const main = [
+      'TP5:',
+      'ORIGIN 1',
+      'RTCP ON',
+      '>M321',
+      '>G21',
+      '>G90 G40 G80',
+      'CQAHDW ON',
+      '>X-10.59 Y0.00 A0. C90. F8000',
+      '>U0.0000(ITEM BASLANGIC ACISI)',
+      '>M03 S1000',
+      '>Z14.173 F8000',
+      'M30',
+    ].join('\n');
+    await page.evaluate(() => window.millsim.setControl('fanuc'));
+    await page.waitForTimeout(400);
+    await page.evaluate((text) => window.millsim.loadProgram(text, 'FIDIA-MAIN.txt'), main);
+    await page.waitForTimeout(700);
+    const wrong = await page.evaluate(() => ({
+      suggested: window.millsim.state.program.suggested,
+      errors: window.millsim.state.program.warnings.filter((w) => w.severity === 'error').length,
+    }));
+    check(wrong.suggested === 'fidia', 'a Fidia program was not recognised as one');
+    check(wrong.errors > 0, 'the Fidia program read cleanly as a Fanuc, which it should not');
+
+    await page.click('.ribbon-tab[data-tab="program"]');
+    await page.click('.ribbon-page[data-page="summary"]');
+    await page.waitForTimeout(400);
+    await page.click('.panel button:has-text("Read it as a Fidia")');
+    await page.waitForTimeout(1200);
+    const right = await page.evaluate(() => ({
+      dialect: window.millsim.state.machine.controller.dialect,
+      errors: window.millsim.state.program.warnings.filter((w) => w.severity === 'error').length,
+      moves: window.millsim.state.program.moves.length,
+    }));
+    console.log('wrong control:', JSON.stringify({ before: wrong.errors, after: right.errors, moves: right.moves }));
+    check(right.dialect === 'fidia', 'the offer did not change the control');
+    check(right.errors === 0, `still ${right.errors} errors after taking the offer`);
+    check(right.moves > 0, 'no toolpath after taking the offer');
+  }
+
   // ---- the axes can be wound by hand ------------------------------------
   await page.click('.ribbon-tab[data-tab="machine"]');
   await page.click('.ribbon-page[data-page="jog"]');

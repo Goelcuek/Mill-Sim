@@ -8,7 +8,7 @@
 import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
 import { Vars, evaluate, ARGUMENTS } from './macro.js';
-import { resolveDialect } from './dialects.js';
+import { resolveDialect, detectDialect, DIALECTS } from './dialects.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -299,6 +299,19 @@ export function interpret(text, config = {}) {
     cfg.controller && cfg.controller.syntax,
   );
 
+  /**
+   * Which control the program itself looks written for.
+   *
+   * Read against the wrong one it does not come out slightly wrong, it
+   * comes out as a page of errors and no toolpath — so the question is
+   * asked once, here, and the answer offered rather than acted on. A
+   * machine whose spellings have been edited by hand is left alone: it has
+   * already been told what it reads.
+   */
+  const looksLike = detectDialect(text);
+  const suggested = looksLike && looksLike !== dialect.id
+    && !(cfg.controller && cfg.controller.syntax) ? looksLike : null;
+
   const blocks = [];
   const appendSource = (src, body) => {
     const start = blocks.length;
@@ -323,6 +336,13 @@ export function interpret(text, config = {}) {
 
   const moves = [];
   const warnings = [];
+  if (suggested) {
+    warnings.push({
+      line: 1,
+      severity: 'warning',
+      message: `This program is written for a ${DIALECTS[suggested].name}; this machine reads ${dialect.name}. Nearly everything below follows from that.`,
+    });
+  }
   const toolChanges = [];
   const events = [];
 
@@ -1096,7 +1116,14 @@ export function interpret(text, config = {}) {
         case 53: machineCoords = true; break;
         case 54: case 55: case 56: case 57: case 58: case 59: st.wcs = `G${code}`; break;
         case 61: case 61.1: case 64: break;
-        case 80: st.motion = 80; motionThisBlock = 80; break;
+        case 80:
+          motionThisBlock = 80;
+          // Where motion is not modal, cancelling a canned cycle does not
+          // leave the machine in "no motion" — the next block of
+          // coordinates is a feed move. Every Fidia program opens with a
+          // safety line that says G80 and then starts moving.
+          st.motion = dialect.modalMotion === false ? 1 : 80;
+          break;
         case 90: st.absolute = true; break;
         case 90.1: st.arcAbsolute = true; break;
         case 91: st.absolute = false; break;
@@ -1515,5 +1542,7 @@ export function interpret(text, config = {}) {
     variables: vars.snapshot(),
     /** How this control writes one, so a readout can say R1 rather than #1. */
     variablePrefix: dialect.sigil || dialect.letters[0] || '#',
+    /** Which control this program looks written for, when it is not this one. */
+    suggested,
   };
 }
