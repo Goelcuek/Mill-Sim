@@ -518,6 +518,9 @@ export class App {
       this.panelHost.appendChild(panel.root);
       panel.render();
     }
+    // The jog page has the machine while it is open, and only while it is.
+    if (tabId === 'machine' && panel.page === 'jog') this.startJog();
+    else this.stopJog();
     this.buildRibbon();
   }
 
@@ -1509,6 +1512,7 @@ export class App {
   }
 
   play() {
+    this.stopJog();
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
       return;
@@ -1632,7 +1636,9 @@ export class App {
 
     if (sim.activeSlot) this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
-    const pose = this.state.program ? sim.currentPose() : this.parkPose();
+    const pose = this.jog
+      ? this.jogPose()
+      : (this.state.program ? sim.currentPose() : this.parkPose());
     const placed = this.machineView.update(pose);
     this.toolView.setPose(placed.tip, placed.dir);
     this.toolpathView.setProgress(sim.progress);
@@ -1643,6 +1649,67 @@ export class App {
       this.toolpathView.hideMarker();
     }
     this.updateHud();
+  }
+
+  // ---- jogging -----------------------------------------------------------
+  //
+  // Moving the axes by hand, which is how anybody checks a machine: wind X
+  // over and see whether the head clears the fixture, swing the trunnion and
+  // watch where the table goes. It poses the picture and nothing else — no
+  // metal is removed and the run is left where it was, so the cut on screen
+  // is still the cut the program made.
+
+  /** Take the rig over, starting from wherever it is now. */
+  startJog() {
+    if (this.jog) return;
+    this.pause();
+    const kin = this.machineView.kinematics;
+    const pose = this.state.program ? this.simulator.currentPose() : this.parkPose();
+    const from = { ...(pose.rot || {}), ...(pose.values || {}) };
+    const values = {};
+    for (const node of kin.axes()) {
+      values[node.letter] = Number((Number(from[node.letter]) || 0).toFixed(4));
+    }
+    this.jog = values;
+    if (this.state.machine.mode !== 'machine') {
+      this.setMachine({ mode: 'machine' });
+      this.notify('Switched to the full machine — that is what there is to watch while jogging.', 'info');
+    }
+    this.viewer.invalidate();
+  }
+
+  stopJog() {
+    if (!this.jog) return;
+    this.jog = null;
+    this.viewer.invalidate();
+    if (this.panels && this.panels.machine) this.panels.machine.refresh();
+  }
+
+  /** Move one axis to a value, clamped to its own travel. */
+  setJog(letter, value) {
+    if (!this.jog) this.startJog();
+    const node = this.machineView.kinematics.axes().find((n) => n.letter === letter);
+    let v = Number(value) || 0;
+    if (node && node.limits) v = clamp(v, node.limits.min, node.limits.max);
+    this.jog[letter] = Number(v.toFixed(4));
+    this.viewer.invalidate();
+    return this.jog[letter];
+  }
+
+  /**
+   * The pose a jog asks for.
+   *
+   * The rig is driven from the tool tip rather than from the axis words —
+   * that is what makes TCP work — so a jog says where the tip lands for the
+   * axis values it wants, using the same tool length the rig is drawn with.
+   * The solve back is exact, so what comes out is what was jogged in.
+   */
+  jogPose() {
+    const kin = this.machineView.kinematics;
+    const r = kin.toolInPart(this.jog, this.machineView.assemblyLength);
+    const rot = {};
+    for (const node of kin.extras()) rot[node.letter] = this.jog[node.letter] || 0;
+    return { values: { ...this.jog }, tip: r.tip, dir: r.axis, rot };
   }
 
   /** Where the tool sits when there is no program to position it. */
@@ -1707,11 +1774,13 @@ export class App {
     if (!this.hudFields) this.buildHud();
     const f = this.hudFields;
     const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
-    set(f.x, fmt(sim.pos[0], 3));
-    set(f.y, fmt(sim.pos[1], 3));
-    set(f.z, fmt(sim.pos[2], 3));
+    // Jogging, the readout is the axes as jogged; otherwise it is the run.
+    const at = this.jog || null;
+    set(f.x, fmt(at ? at.X || 0 : sim.pos[0], 3));
+    set(f.y, fmt(at ? at.Y || 0 : sim.pos[1], 3));
+    set(f.z, fmt(at ? at.Z || 0 : sim.pos[2], 3));
     if (this.hudExtras && this.hudExtras.length) {
-      const values = sim.currentPose().values || {};
+      const values = at || sim.currentPose().values || {};
       for (const L of this.hudExtras) {
         const node = f[`ax${L}`];
         if (node) set(node, fmt(values[L] || 0, 3));

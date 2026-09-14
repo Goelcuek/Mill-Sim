@@ -18,7 +18,7 @@ const NAME_RE = /<([^<>]*)>|"([^"]*)"|'([^']*)'/g;
 /** A bare word: CALL, EXTCALL, or the name of a file on controls that ask for it that way. */
 const IDENT_RE = /[A-Za-z_][A-Za-z0-9_.\-]*/g;
 
-import { hasMacroSyntax, parseMacroBlock } from './macro.js';
+import { hasMacroSyntax, parseMacroBlock, usesBrackets } from './macro.js';
 import { DIALECTS } from './dialects.js';
 
 /**
@@ -38,12 +38,19 @@ import { DIALECTS } from './dialects.js';
 export function stripComments(line, dialect) {
   const d = dialect || DIALECTS.fanuc;
   const lineMarks = d.lineComments || [';'];
+  // Some controls write both a remark and a condition in round brackets.
+  // Which this is depends on whether the block is a condition, so it is
+  // asked rather than assumed: eating the brackets off an IF leaves a
+  // block that says "if" and nothing else.
+  const parens = d.parenComments === 'code'
+    ? !usesBrackets(line, d)
+    : d.parenComments !== false;
   const comments = [];
   let out = '';
   let depth = 0;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
-    if (c === '(' && d.parenComments !== false) {
+    if (c === '(' && parens) {
       depth++;
       let text = '';
       i++;
@@ -90,6 +97,38 @@ export function lex(text, dialect) {
       body = body.slice(1).trim();
     }
 
+    // "Do this now": a mark in front of a line on the controls that have
+    // one. It says when the block runs, not what it does, so the reader
+    // takes it off and reads the rest as it always would.
+    if (d.direct && body.startsWith(d.direct)) body = body.slice(d.direct.length).trim();
+
+    // Arguments in braces after an M code — M520{%1=2 %4=2} — are the
+    // control's own macro call. The M code is reported; what it was handed
+    // is not modelled, and leaving the braces in would only read as junk.
+    if (d.braceArgs && body.includes('{')) body = body.replace(/\{[^}]*\}/g, ' ');
+
+    // A file this control asks for by name. The path in front of it is the
+    // control's own; what matters is which file, so the name is taken and
+    // the rest left where it is.
+    if (d.call && d.call.line) {
+      const asks = new RegExp(d.call.line, 'i').exec(body);
+      if (asks) {
+        const name = asks[1].trim().split(/[\\/]/).pop();
+        blocks.push({
+          line: i + 1,
+          raw,
+          words: [],
+          comments,
+          names: [name],
+          idents: [],
+          macro: { assigns: [], control: null, label: null, call: true },
+          blockDelete,
+          skipped: false,
+        });
+        continue;
+      }
+    }
+
     // Program start/end markers and O-numbers carry no motion.
     if (body === '%') {
       blocks.push({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
@@ -128,9 +167,38 @@ export function lex(text, dialect) {
     // What the words did not take. Blanking each one where it stood keeps
     // the rest in order, so `CALL ROUGH` does not come back as `CALLROUGH`.
     let rest = body;
+
+    // A word in its own right: RTCP ON, ORIGIN 4. Read before the letters
+    // are, because ORIGIN 4 taken letter by letter is an N word of 4.
+    let command = null;
+    if (d.commands && d.commands.length) {
+      const name = d.commands.find((w) => new RegExp(`^${w}\\b`, 'i').test(body));
+      if (name) {
+        const tail = body.slice(name.length).trim();
+        const num = /^-?\d+(\.\d+)?$/.exec(tail.split(/\s+/)[0] || '');
+        command = { name: name.toUpperCase(), text: tail, value: num ? Number(num[0]) : null };
+        blocks.push({
+          line: i + 1, raw, words: [], comments, names, idents: [], command, blockDelete, skipped: false,
+        });
+        continue;
+      }
+    }
+
+    // Addresses of more than one letter — DX, DY, DZ — taken first, or the
+    // X in DX would be read as an X word and put the tool somewhere else
+    // entirely.
+    if (d.addresses && d.addresses.length) {
+      const re = new RegExp(`(${d.addresses.join('|')})\\s*([+-]?(?:\\d+\\.?\\d*|\\.\\d+))`, 'gi');
+      rest = rest.replace(re, (all, letter, value, at) => {
+        words.push({ letter: letter.toUpperCase(), value: parseFloat(value), text: all, at });
+        return ' '.repeat(all.length);
+      });
+    }
+
     let m;
     WORD_RE.lastIndex = 0;
-    while ((m = WORD_RE.exec(body)) !== null) {
+    const scan = rest;
+    while ((m = WORD_RE.exec(scan)) !== null) {
       words.push({ letter: m[1].toUpperCase(), value: parseFloat(m[2]), text: m[0] });
       rest = rest.slice(0, m.index) + ' '.repeat(m[0].length) + rest.slice(m.index + m[0].length);
     }

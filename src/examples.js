@@ -166,6 +166,40 @@ export const EXAMPLES = [
     },
     "file": "examples/siemens-bolt-circle-840d.nc",
     "lines": 64
+  },
+  {
+    "name": "Fidia vector-mode hole",
+    "description": "A Fidia reads the same job differently: > in front of a line, ORIGIN for the work offset, RTCP instead of G43.4, G0 and the arcs lasting one block, a negative arc radius, and G92 vector mode where the block says which way the tool points and the control works out the angles.",
+    "setup": {
+      "stock": {
+        "size": [
+          100,
+          80,
+          25
+        ],
+        "origin": [
+          -50,
+          -40,
+          -25
+        ],
+        "resolution": 0.25
+      },
+      "machine": {
+        "preset": "tableTable",
+        "controller": {
+          "flavour": "fidia",
+          "dialect": "fidia",
+          "syntax": null,
+          "plane": 17,
+          "metric": true,
+          "absolute": true,
+          "arcCentreAbsolute": false,
+          "feedMode": 94
+        }
+      }
+    },
+    "file": "examples/fidia-vector-hole.nc",
+    "lines": 57
   }
 ];
 

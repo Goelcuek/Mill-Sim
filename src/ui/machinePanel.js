@@ -52,7 +52,8 @@ export class MachinePanel extends Panel {
       { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
       { id: 'assembly', label: 'Assembly', icon: 'import', hint: 'Import bodies and assemble the machine from them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
       { id: 'macros', label: 'Macros', icon: 'code', hint: 'What this machine does at an M code, and the subprograms that live in it', badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: MachinePanel.prototype.macrosPage },
-      { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
+      { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Machine zero, travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
+      { id: 'jog', label: 'Jog', icon: 'axes', hint: 'Wind the axes by hand and watch what the machine does', render: MachinePanel.prototype.jogPage },
     ]);
     this.selectedId = null;
     /** What the Macros page is acting on. */
@@ -61,6 +62,13 @@ export class MachinePanel extends Panel {
     /** Whether moving a pivot leaves the castings hanging on it where they are. */
     this.holdAssembly = true;
     this.render();
+  }
+
+  /** Opening the Jog page takes the machine; leaving it gives it back. */
+  setPage(id) {
+    if (id === 'jog' && this.page !== 'jog') this.app.startJog();
+    else if (id && id !== 'jog' && this.page === 'jog') this.app.stopJog();
+    super.setPage(id);
   }
 
   get kin() { return this.app.machineView.kinematics; }
@@ -110,6 +118,101 @@ export class MachinePanel extends Panel {
 
   limitsPage() {
     return [this.travelSection()];
+  }
+
+  /**
+   * Moving the axes by hand.
+   *
+   * Every question about a machine that a drawing cannot answer — does the
+   * head clear the clamp at this end of the table, where does the trunnion
+   * put the part at 90° — is answered by winding the axes over and looking.
+   * So the panel does what the pendant does, and nothing else: the picture
+   * moves, the cut and the program stay exactly where they were.
+   */
+  jogPage() {
+    const app = this.app;
+    const k = this.kin;
+    const axes = k.axes();
+    const jog = app.jog || {};
+
+    if (!axes.length) {
+      return [section('Jog', [
+        el('div.empty', {}, [
+          el('div.empty-title', {}, 'No axes to move'),
+          el('div.hint', {}, 'This machine is a base and nothing else. Add axes on the Axes page and they appear here.'),
+        ]),
+      ])];
+    }
+
+    const rows = [];
+    for (const node of axes) {
+      const rotary = node.kind === 'rotary';
+      const lo = Number.isFinite(node.limits.min) ? Math.max(node.limits.min, -1e5) : (rotary ? -360 : -1000);
+      const hi = Number.isFinite(node.limits.max) ? Math.min(node.limits.max, 1e5) : (rotary ? 360 : 1000);
+      const value = Number(jog[node.letter] || 0);
+      const step = rotary ? 1 : 1;
+
+      const readout = el('span.value', {}, `${fmt(value, 3)} ${rotary ? '°' : 'mm'}`);
+      const slider = el('input.jog-slider', {
+        type: 'range',
+        min: lo,
+        max: hi,
+        step: rotary ? 0.5 : 0.5,
+        value,
+        // Dragging redraws the machine on every frame and nothing else, so
+        // it is cheap enough to follow the handle rather than the release.
+        oninput: (e) => {
+          const v = app.setJog(node.letter, parseFloat(e.target.value));
+          readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
+          if (typed) typed.input.value = String(v);
+        },
+      });
+      const nudge = (d) => {
+        const v = app.setJog(node.letter, (Number(app.jog[node.letter]) || 0) + d);
+        slider.value = String(v);
+        readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
+        if (typed) typed.input.value = String(v);
+      };
+      const typed = field('', value, {
+        step,
+        unit: rotary ? '°' : 'mm',
+        onChange: (v) => {
+          const next = app.setJog(node.letter, v || 0);
+          slider.value = String(next);
+          readout.textContent = `${fmt(next, 3)} ${rotary ? '°' : 'mm'}`;
+        },
+      });
+
+      rows.push(el('div.jog-axis', {}, [
+        el('div.jog-head', {}, [
+          el(`span.axis-badge.${node.kind}`, {}, node.letter),
+          el('span.jog-name', {}, node.name),
+          readout,
+        ]),
+        slider,
+        row([
+          button('−10', () => nudge(-10)),
+          button('−1', () => nudge(-1)),
+          button('+1', () => nudge(1)),
+          button('+10', () => nudge(10)),
+          typed,
+        ]),
+      ]));
+    }
+
+    const over = k.violations ? k.violations(jog) : [];
+    return [section('Jog', [
+      el('div.hint', {}, 'The axes as the pendant would move them. Nothing is cut and the run is not touched — press play, or leave this page, and the machine goes back to the program.'),
+      ...rows,
+      over && over.length
+        ? el('div.inline-warning', {}, `Past the stops: ${over.map((v) => `${v.axis} at ${fmt(v.value, 2)}`).join(', ')}.`)
+        : null,
+      actionRow([
+        { label: 'All to zero', variant: 'primary', onClick: () => { for (const n of axes) app.setJog(n.letter, 0); this.render(); } },
+        { label: 'Back to the program', onClick: () => { app.stopJog(); this.app.setPage('machine', 'axes'); } },
+      ]),
+      el('div.hint', {}, 'Travels come from each axis on the Axes page, so a slider stops where that axis stops.'),
+    ])];
   }
 
   // ---- preset ------------------------------------------------------------
@@ -869,6 +972,7 @@ export class MachinePanel extends Panel {
         }, { title: `Remove #${key}`, variant: 'warn' }),
       ])),
       el('div.hint', {}, 'A macro reads these by name — #toolChangeX in a body becomes this number. They belong to the machine, so a program that moves to another machine picks up that machine\u2019s positions.'),
+      el('div.hint', {}, 'A name that is a number is one of the control\u2019s registers instead: 50 is what a Fidia program means by RG 50, so a program that branches on an item number can be read at the number the operator dialled in.'),
     ]);
   }
 

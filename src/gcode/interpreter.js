@@ -113,7 +113,7 @@ class State {
      * care which is which.
      */
     this.rot = { A: 0, B: 0, C: 0 };
-    for (const L of auxLinearLetters(cfg)) this.rot[L] = 0;
+    for (const L of extraLetters(cfg).keys()) this.rot[L] = 0;
     this.rotPrev = { ...this.rot };
     /** Last programmed point in the tilted plane's own coordinates. */
     this.tiltLocal = [0, 0, 0];
@@ -132,6 +132,8 @@ class State {
     this.cycleP = 0;
     this.cycleF = 0;
     this.g92 = [0, 0, 0];
+    /** Tool-vector mode: the block says where the tool points, not the angles. */
+    this.vector = false;
   }
 
   offset() {
@@ -154,6 +156,26 @@ function auxLinearLetters(cfg) {
   const kin = cfg && cfg.kinematics;
   if (!kin || typeof kin.auxLinears !== 'function') return [];
   return kin.auxLinears().map((n) => n.letter);
+}
+
+/**
+ * Every axis this machine has beyond the tool tip, and what kind it is.
+ *
+ * A, B and C are rotaries by convention and are always read. U, V and W are
+ * whatever the machine says they are: a quill on one, the part indexer on
+ * another — the Fidia in front of us turns its table with U — and reading a
+ * 90° index as a 90 mm slide is not a mistake worth making twice.
+ *
+ * @returns {Map<string, 'rotary'|'linear'>}
+ */
+function extraLetters(cfg) {
+  const out = new Map();
+  const kin = cfg && cfg.kinematics;
+  if (!kin || typeof kin.extras !== 'function') return out;
+  for (const node of kin.extras()) {
+    if (node.letter) out.set(node.letter, node.kind === 'rotary' ? 'rotary' : 'linear');
+  }
+  return out;
 }
 
 /**
@@ -290,8 +312,14 @@ export function interpret(text, config = {}) {
   appendSource(null, text);
 
   const st = new State(cfg);
-  /** Which of U, V and W this machine reads as an axis word. */
-  const auxLinear = new Set(auxLinearLetters(cfg));
+  // Where rapid is not modal, what a bare block of coordinates means is a
+  // feed move — including the first one, before any G word has been read.
+  if (dialect.modalMotion === false) st.motion = 1;
+  /** Which of U, V and W this machine reads as an axis word, and as what. */
+  const extras = extraLetters(cfg);
+  const auxLinear = new Set([...extras].filter(([, kind]) => kind === 'linear').map(([L]) => L));
+  /** Rotary letters: the three by convention, plus whatever else turns. */
+  const turning = ['A', 'B', 'C', ...[...extras].filter(([, k]) => k === 'rotary').map(([L]) => L)];
 
   const moves = [];
   const warnings = [];
@@ -300,6 +328,8 @@ export function interpret(text, config = {}) {
 
   /** Which source the block being read came from; null is the main program. */
   let curSrc = null;
+  /** Control words already remarked on, so each is mentioned once. */
+  const spokenFor = new Set();
 
   const warn = (line, message, severity = 'warning') => {
     if (warnings.length >= 500) return;
@@ -552,7 +582,7 @@ export function interpret(text, config = {}) {
   const applyExtraAxes = (axis) => {
     st.rotPrev = { ...st.rot };
     let moved = false;
-    for (const L of ['A', 'B', 'C']) {
+    for (const L of turning) {
       if (axis[L] === undefined) continue;
       st.rot[L] = st.absolute ? axis[L] : st.rot[L] + axis[L];
       moved = true;
@@ -573,6 +603,15 @@ export function interpret(text, config = {}) {
   // which is what makes a family of parts one program instead of twenty.
 
   const vars = new Vars(dialect.locals);
+
+  // Registers the machine holds between programs, and what the operator
+  // dialled into them. A Fidia branches on one — $IF (RG 50 != 5) — so a
+  // program is unreadable without a way to say what RG 50 is: a machine
+  // parameter whose name is a number is that register.
+  for (const [key, value] of Object.entries(cfg.parameters || {})) {
+    const n = Number(key);
+    if (Number.isInteger(n) && n > 0 && Number.isFinite(Number(value))) vars.set(n, Number(value));
+  }
 
   /**
    * Where a jump goes, within the source that asked for it.
@@ -846,6 +885,41 @@ export function interpret(text, config = {}) {
       }
     }
 
+    // ---- a command written as a word --------------------------------------
+    //
+    // RTCP ON, ORIGIN 4. Controls that spell these as words rather than as
+    // G codes are not doing anything unusual by it, so they are read here
+    // and mean what the G codes mean.
+    if (b.command) {
+      const { name, text, value } = b.command;
+      const arg = String(text || '').trim().toUpperCase();
+      if (name === 'RTCP' && dialect.rtcp) {
+        const on = arg === 'ON' || arg === '1';
+        if (on !== (st.tcp !== 0)) {
+          events.push({
+            line: b.line, type: 'tcp', moveIndex: moves.length,
+            text: on ? 'Tool centre point control on (RTCP ON)' : 'Tool centre point control off (RTCP OF)',
+          });
+        }
+        st.tcp = on ? 4 : 0;
+      } else if (name === 'ORIGIN') {
+        const key = `G${53 + (value || 0)}`;
+        if (value >= 1 && cfg.wcs[key]) {
+          st.wcs = key;
+          events.push({ line: b.line, type: 'wcs', moveIndex: moves.length, text: `ORIGIN ${value} (read as ${key})` });
+        } else {
+          warn(b.line, `ORIGIN ${value === null ? '' : value} has no work offset behind it; the offsets this reader holds are G54 to G59.`);
+        }
+      } else if (!spokenFor.has(name)) {
+        // The compensation switches. They change what the control does to
+        // the numbers, not what the numbers are, so the path is the path —
+        // said once rather than on every block that carries one.
+        spokenFor.add(name);
+        warn(b.line, `${name} is a control setting this reader does not model; the toolpath is read as written.`);
+      }
+      continue;
+    }
+
     if (b.error) warn(b.line, b.error, 'error');
     else if (b.idents && b.idents.length) {
       // A word that is not a call and not an address is a typo — the one
@@ -865,7 +939,9 @@ export function interpret(text, config = {}) {
         case 'G': g.push(w.value); break;
         case 'M': m.push(w.value); break;
         case 'X': case 'Y': case 'Z': case 'A': case 'B': case 'C': axis[w.letter] = w.value; break;
-        case 'U': case 'V': case 'W': if (auxLinear.has(w.letter)) axis[w.letter] = w.value; break;
+        case 'U': case 'V': case 'W': if (extras.has(w.letter)) axis[w.letter] = w.value; break;
+        // Which way the tool points, on a control that says so directly.
+        case 'DX': case 'DY': case 'DZ': axis[w.letter] = w.value; break;
         case 'I': iArc = w.value; break;
         case 'J': jArc = w.value; break;
         case 'K': kArc = w.value; break;
@@ -882,6 +958,10 @@ export function interpret(text, config = {}) {
       }
     }
 
+    // A control that writes its pot numbers as a fraction of a hundred —
+    // T0.07 is pot 7 — means the same thing by them as T7 does elsewhere.
+    if (t !== undefined && dialect.toolDecimal && t > 0 && t < 1) t = Math.round(t * 100);
+
     // ---- Non-modal and modal G codes -------------------------------------
     let motionThisBlock = null;
     let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false;
@@ -890,7 +970,13 @@ export function interpret(text, config = {}) {
 
     for (const code of g) {
       switch (code) {
-        case 0: case 1: case 2: case 3: motionThisBlock = code; st.motion = code; break;
+        case 0: case 1: case 2: case 3:
+          motionThisBlock = code;
+          // Where rapid and the arcs last one block, what they leave behind
+          // is the feed move — so the next bare block of coordinates is a
+          // G1 rather than another rapid across the part.
+          st.motion = dialect.modalMotion === false && code !== 1 ? 1 : code;
+          break;
         case 4: {
           const secs = axis.X !== undefined
             ? axis.X
@@ -947,6 +1033,11 @@ export function interpret(text, config = {}) {
           break;
         }
         case 68.2: {
+          // A control with RTCP does not have a tilted plane at all; it
+          // holds the tip still and lets the program say where the tool
+          // points. Read it anyway — a program pasted from another machine
+          // is still worth looking at — but say so.
+          if (dialect.rtcp) warn(b.line, `A ${dialect.name} has no tilted working plane; on this control RTCP ON and a tool vector do that job.`);
           const origin = [
             axis.X !== undefined ? toMM(axis.X, st.metric) : 0,
             axis.Y !== undefined ? toMM(axis.Y, st.metric) : 0,
@@ -1010,9 +1101,23 @@ export function interpret(text, config = {}) {
         case 90.1: st.arcAbsolute = true; break;
         case 91: st.absolute = false; break;
         case 91.1: st.arcAbsolute = false; break;
-        case 92: g92set = true; break;
+        case 92:
+          // On a control with a vector mode this is where it starts: the
+          // block carries the direction the tool points and the control
+          // works out the rotaries. Everywhere else it is a coordinate
+          // shift, which is a different thing entirely.
+          if (dialect.vectorMode && dialect.vectorMode.on === 92) {
+            if (!st.vector) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G92 tool-vector mode on' });
+            st.vector = true;
+          } else g92set = true;
+          break;
         case 92.1: case 92.2: g92clear = true; break;
-        case 93: st.feedMode = 93; break;
+        case 93:
+          if (dialect.vectorMode && dialect.vectorMode.off === 93) {
+            if (st.vector) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G93 tool-vector mode off' });
+            st.vector = false;
+          } else st.feedMode = 93;
+          break;
         case 94: st.feedMode = 94; break;
         case 95: st.feedMode = 95; break;
         case 98: st.retractMode = 98; break;
@@ -1197,16 +1302,48 @@ export function interpret(text, config = {}) {
       continue;
     }
 
-    const hasRotaryWord = axis.A !== undefined || axis.B !== undefined || axis.C !== undefined
+    const hasRotaryWord = turning.some((L) => axis[L] !== undefined)
       || [...auxLinear].some((L) => axis[L] !== undefined);
+
+    // ---- the tool vector, where the control reads one ---------------------
+    //
+    // In vector mode the block says which way the tool points and the
+    // control works out the angles that produce it. That is the same solve
+    // G53.1 does against a tilted plane, so it is the same code: a
+    // direction in, the machine's own rotaries out.
+    let turnedByVector = false;
+    const hasVector = axis.DX !== undefined || axis.DY !== undefined || axis.DZ !== undefined;
+    if (hasVector && !st.vector) {
+      warn(b.line, 'DX/DY/DZ outside vector mode; the tool direction was ignored.');
+    } else if (hasVector) {
+      const v = [axis.DX || 0, axis.DY || 0, axis.DZ || 0];
+      const len = Math.hypot(v[0], v[1], v[2]);
+      if (len < 1e-9) {
+        warn(b.line, 'Tool vector of zero length; the direction was ignored.', 'error');
+      } else if (!cfg.kinematics || !cfg.kinematics.rotaries().length) {
+        warn(b.line, 'A tool vector needs a machine with rotary axes; load one on the Machine tab.', 'error');
+      } else {
+        const sol = cfg.kinematics.rotariesForToolAxis(
+          [v[0] / len, v[1] / len, v[2] / len], st.rot, cfg.gaugeLength || 0,
+        );
+        if (!sol) {
+          warn(b.line, `No rotary position reaches a tool vector of ${v.map((x) => (x / len).toFixed(3)).join(', ')} within the machine's travel.`, 'error');
+        } else {
+          st.rotPrev = { ...st.rot };
+          Object.assign(st.rot, sol);
+          turnedByVector = true;
+        }
+      }
+    }
+
     if (hasRotaryWord) applyExtraAxes(axis);
 
-    if (motion === 80 || (!hasAxisWord && !hasRotaryWord)) {
+    if (motion === 80 || (!hasAxisWord && !hasRotaryWord && !turnedByVector)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');
       continue;
     }
 
-    if (!hasAxisWord && hasRotaryWord) {
+    if (!hasAxisWord && (hasRotaryWord || turnedByVector)) {
       // A rotary-only block still moves the machine, and on a table machine
       // it moves the tool relative to the part.
       emitLinear(b.line, motion === 0 ? 'rapid' : 'feed', st.pos.slice(), st.feed > 0 ? st.feed : 100);
@@ -1268,7 +1405,10 @@ export function interpret(text, config = {}) {
     }
 
     if (words.r !== undefined) {
-      const R = toMM(words.r, st.metric);
+      // Some controls write the radius of a minor arc negative, which is
+      // the opposite of what the sign means here. Flipping it in one place
+      // is what keeps the arc code one piece of arithmetic.
+      const R = toMM(words.r, st.metric) * (dialect.arcRSign || 1);
       const a0 = p0[ax[0]], b0 = p0[ax[1]];
       const a1 = target[ax[0]], b1 = target[ax[1]];
       const da = a1 - a0, db = b1 - b0;

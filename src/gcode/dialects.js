@@ -122,11 +122,79 @@ const OKUMA = {
   call: { code: 'G65', program: 'P', ret: 'M99' },
 };
 
+/**
+ * Fidia.
+ *
+ * The odd one out, and the reason this table exists. A Fidia program is a
+ * stream of direct commands — `>` in front of a line means "do this now" —
+ * with `;` remarks, `$IF` and `$GOTO` round named labels, and registers
+ * written `RG 50`. Several things a Fanuc does with G codes it does with
+ * words of its own: RTCP ON/OF rather than G43.4/G49, ORIGIN rather than
+ * G54, and no tilted working plane at all.
+ *
+ * The rest of what makes it different is in the flags below, because it is
+ * behaviour rather than spelling: G0/G2/G3 last one block, an arc radius is
+ * written negative, a tool is T0.07, and G92 puts the control in vector
+ * mode where a DX/DY/DZ tool direction is turned into the A and C that
+ * produce it.
+ */
+const FIDIA = {
+  id: 'fidia',
+  name: 'Fidia',
+  notes: 'Direct commands with > in front, ; for a remark, $IF and $GOTO round named labels, registers as RG 50. No tilted plane: RTCP ON holds the tip still while the rotaries move, and G92 turns a DX/DY/DZ tool vector into the rotary positions that produce it.',
+  sigil: null,
+  letters: ['RG'],
+  group: ['(', ')'],
+  /** ( ) is a remark, except where a keyword needs the brackets it took. */
+  parenComments: 'code',
+  lineComments: [';'],
+  wordEquals: false,
+  compare: { eq: '==', ne: '!=', gt: '>', lt: '<', ge: '>=', le: '<=' },
+  logic: { and: 'AND', or: 'OR', xor: 'XOR' },
+  keywords: {
+    if: '$IF', then: null, goto: '$GOTO', gotoBack: null,
+    while: '$WHILE', do: null, end: null, endWhile: '$ENDWHILE',
+    for: null, to: null, endFor: null, repeat: null, until: null,
+  },
+  /** Control words wear a $; labels and registers do not. */
+  keywordPrefix: '$',
+  /** A label may carry dots: ITEM4.00. */
+  identDots: true,
+  locals: 0,
+  labels: 'name',
+  call: {
+    code: null,
+    program: 'IPC',
+    ret: 'M30',
+    /** How a Fidia asks for a file: the path is the control's, the name is ours. */
+    line: '^IPC\\s*=>\\s*CNC\\s+(.+)$',
+  },
+  /** A line may start with this; it means "act on it now" and reads the same. */
+  direct: '>',
+  /** Arguments in braces after an M code: M520{%1=2 %4=2}. */
+  braceArgs: true,
+  /** Addresses of more than one letter, which have to be read before X and Y. */
+  addresses: ['DX', 'DY', 'DZ'],
+  /** Words that are commands in their own right. */
+  commands: ['RTCP', 'RTCPTLCN', 'CQAHDW', 'CQA', 'ORIGIN'],
+  /** G0, G2 and G3 last one block rather than staying on. */
+  modalMotion: false,
+  /** R is written negative for the arc a Fanuc writes positive. */
+  arcRSign: -1,
+  /** T0.07 is tool 7. */
+  toolDecimal: true,
+  /** The G codes that turn the DX/DY/DZ tool vector on and off. */
+  vectorMode: { on: 92, off: 93 },
+  /** RTCP ON / RTCP OF, in place of G43.4 and G49. */
+  rtcp: true,
+};
+
 export const DIALECTS = {
   fanuc: FANUC,
   siemens: SIEMENS,
   heidenhain: HEIDENHAIN,
   okuma: OKUMA,
+  fidia: FIDIA,
 };
 
 /**
@@ -155,7 +223,7 @@ export function controlName(flavour) {
 export const FLAVOUR_DIALECT = {
   fanuc: 'fanuc',
   haas: 'fanuc',
-  fidia: 'fanuc',
+  fidia: 'fidia',
   siemens: 'siemens',
   heidenhain: 'heidenhain',
   okuma: 'okuma',
@@ -186,6 +254,9 @@ export function resolveDialect(id, overrides) {
     logic: { ...base.logic, ...(overrides.logic || {}) },
     keywords: { ...base.keywords, ...(overrides.keywords || {}) },
     call: { ...base.call, ...(overrides.call || {}) },
+    addresses: overrides.addresses || base.addresses,
+    commands: overrides.commands || base.commands,
+    vectorMode: overrides.vectorMode || base.vectorMode,
   };
 }
 

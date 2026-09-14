@@ -1070,3 +1070,20 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .legend-name { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .legend-note { color: var(--warn); font-size: 10.5px; margin-left: auto; }
+
+/* ── jogging the axes ────────────────────────────────────────────────── */
+
+.jog-axis {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 6px 8px 8px;
+  margin-bottom: 6px;
+  background: var(--surface);
+}
+.jog-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.jog-name { font-size: 11.5px; color: var(--text-2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jog-head .value { font-variant-numeric: tabular-nums; font-size: 11.5px; color: var(--text); }
+.jog-slider { width: 100%; margin: 2px 0 4px; }
+.jog-axis .row { gap: 4px; }
+.jog-axis .row .btn { padding: 2px 6px; font-variant-numeric: tabular-nums; }
+.jog-axis .field { flex: 1 1 70px; }

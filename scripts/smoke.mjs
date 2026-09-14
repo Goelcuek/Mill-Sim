@@ -211,6 +211,47 @@ try {
       'the handles stayed up after leaving the Setup tab');
   }
 
+  // ---- and in the other idiom entirely ----------------------------------
+  //
+  // A Fidia: > in front of a line, ORIGIN instead of G54, RTCP instead of
+  // G43.4, rapid lasting one block, a negative arc radius, and a tool
+  // vector the control turns into angles.
+  await loadExample(page, 7, 'Fidia');
+  await runToEnd(page);
+  const fidia = await page.evaluate(() => ({
+    dialect: window.millsim.state.machine.controller.dialect,
+    removed: window.millsim.simulator.removedVolume,
+    errors: window.millsim.state.program.warnings.filter((w) => w.severity === 'error').length,
+    tipped: window.millsim.state.program.moves.some((m) => Math.abs((m.rotTo || {}).A || 0) > 20),
+    tcp: window.millsim.state.program.moves.some((m) => m.tcp),
+  }));
+  console.log('fidia example:', JSON.stringify(fidia));
+  check(fidia.dialect === 'fidia', 'loading the Fidia example did not set the dialect');
+  check(fidia.errors === 0, 'the Fidia example did not read cleanly');
+  check(fidia.removed > 1000, 'the Fidia example did not cut');
+  check(fidia.tipped, 'the tool vector did not turn the rotaries');
+  check(fidia.tcp, 'RTCP ON did not reach the moves');
+
+  // ---- the axes can be wound by hand ------------------------------------
+  await page.click('.ribbon-tab[data-tab="machine"]');
+  await page.click('.ribbon-page[data-page="jog"]');
+  await page.waitForTimeout(500);
+  const sliders = await page.$$('.jog-slider');
+  check(sliders.length > 0, 'the jog page has no axes');
+  await sliders[0].fill('80');
+  await page.waitForTimeout(400);
+  const jogged = await page.evaluate(() => ({
+    jog: { ...window.millsim.jog },
+    hud: document.querySelector('.hud').textContent,
+  }));
+  const moved = Object.values(jogged.jog).some((v) => Math.abs(v - 80) < 1e-6);
+  console.log('jog:', JSON.stringify(jogged.jog));
+  check(moved, 'the jog slider did not move an axis');
+  check(/80/.test(jogged.hud), 'the readout did not follow the jog');
+  await page.click('.ribbon-tab[data-tab="program"]');
+  await page.waitForTimeout(300);
+  check(await page.evaluate(() => window.millsim.jog === null), 'jogging did not stop when the page was left');
+
   // ---- a project saves and opens into a working session -----------------
   await loadExample(page, 0, 'Demo bracket');
   await page.evaluate(() => {

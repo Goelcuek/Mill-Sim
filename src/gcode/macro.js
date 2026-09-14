@@ -52,12 +52,23 @@ const COMPARE = {
 
 const ALWAYS = ['MOD', ...Object.keys(FUNCTIONS)];
 
+/** A literal, safe to drop into a regular expression. */
+const escapeRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Is this spelled as a word rather than as a symbol?
+ *
+ * A control that marks its keywords — $IF — spells them with letters all
+ * the same; what it does not do is spell them with < and >.
+ */
+const isWordy = (t) => /^[$@#]?[A-Za-z][A-Za-z0-9_]*$/.test(String(t));
+
 /** Every word this dialect reserves, so a letter run can be told apart. */
 function keywordsOf(d) {
   const out = new Set(ALWAYS);
-  for (const v of Object.values(d.compare)) if (/^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
-  for (const v of Object.values(d.logic)) if (/^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
-  for (const v of Object.values(d.keywords)) if (v && /^[A-Z]+$/i.test(v)) out.add(v.toUpperCase());
+  for (const v of Object.values(d.compare)) if (isWordy(v)) out.add(v.toUpperCase());
+  for (const v of Object.values(d.logic)) if (isWordy(v)) out.add(v.toUpperCase());
+  for (const v of Object.values(d.keywords)) if (v && isWordy(v)) out.add(v.toUpperCase());
   // Only a word: Fanuc's "call" is the letter P of G65 P9010, and reserving
   // a single letter would take it away from every block that uses it.
   if (d.call && d.call.program && d.call.program.length > 1 && /^[A-Z]+$/i.test(d.call.program)) {
@@ -70,10 +81,10 @@ function keywordsOf(d) {
 function symbolsOf(d) {
   const out = [];
   for (const [op, text] of Object.entries(d.compare)) {
-    if (!/^[A-Z]+$/i.test(text)) out.push({ text, kind: 'compare', op });
+    if (!isWordy(text)) out.push({ text, kind: 'compare', op });
   }
   for (const [op, text] of Object.entries(d.logic)) {
-    if (!/^[A-Z]+$/i.test(text)) out.push({ text, kind: 'logic', op });
+    if (!isWordy(text)) out.push({ text, kind: 'logic', op });
   }
   return out.sort((a, b) => b.text.length - a.text.length);
 }
@@ -90,12 +101,36 @@ export function hasMacroSyntax(code, dialect) {
   if (code.includes(d.group[0])) return true;
   if (code.includes('=')) return true;
   // A label definition on a control that names them: "MARK1:".
-  if (d.labels === 'name' && /^\s*[A-Za-z_][A-Za-z0-9_]*\s*:/.test(code)) return true;
+  if (d.labels === 'name' && /^\s*[A-Za-z_][A-Za-z0-9_.]*\s*:/.test(code)) return true;
   for (const letter of d.letters) {
-    if (new RegExp(`\\b${letter}\\s*[0-9\\${d.group[0]}]`, 'i').test(code)) return true;
+    if (new RegExp(`\\b${escapeRe(letter)}\\s*[0-9\\${d.group[0]}]`, 'i').test(code)) return true;
   }
-  const words = [...keywordsOf(d)].filter((w) => w.length > 1).join('|');
-  return words ? new RegExp(`\\b(${words})\\b`, 'i').test(code) : false;
+  // A control that writes its keywords with a mark in front — $IF — has
+  // words that do not start on a word boundary, and a $ in a pattern is
+  // not a $ in the text, so both are dealt with rather than assumed away.
+  const words = [...keywordsOf(d)].filter((w) => w.length > 1);
+  if (!words.length) return false;
+  const pattern = words.map((w) => `${/^\w/.test(w) ? '\\b' : ''}${escapeRe(w)}\\b`).join('|');
+  return new RegExp(`(${pattern})`, 'i').test(code);
+}
+
+/**
+ * Does this block need its round brackets left alone?
+ *
+ * On a control where ( ) is both a remark and the brackets a condition is
+ * written in, the difference is whether the block is a condition — so the
+ * question is asked here, where the keywords live, rather than guessed at
+ * by the comment stripper.
+ */
+export function usesBrackets(code, dialect) {
+  const d = dialect || DIALECTS.fanuc;
+  if (d.group[0] !== '(') return false;
+  const words = ['if', 'while', 'until', 'repeat', 'for']
+    .map((role) => d.keywords[role])
+    .filter((w) => w && w.length > 1);
+  if (!words.length) return false;
+  const pattern = words.map((w) => `${/^\w/.test(w) ? '\\b' : ''}${escapeRe(w)}\\b`).join('|');
+  return new RegExp(`(${pattern})`, 'i').test(code);
 }
 
 // ---- tokens ---------------------------------------------------------------
@@ -139,8 +174,10 @@ function tokenize(code, d) {
       continue;
     }
 
-    if (/[A-Za-z]/.test(c)) {
-      let j = i;
+    // A control word with a mark in front of it — $IF, $GOTO — is one word.
+    const prefixed = d.keywordPrefix && c === d.keywordPrefix && /[A-Za-z]/.test(text[i + 1] || '');
+    if (/[A-Za-z]/.test(c) || prefixed) {
+      let j = prefixed ? i + 1 : i;
       while (j < text.length && /[A-Za-z_]/.test(text[j])) j++;
       const word = text.slice(i, j).toUpperCase();
 
@@ -176,9 +213,11 @@ function tokenize(code, d) {
       // relatives — a run is what it has always been: one letter at a time.
       if (word.length > 1 && (d.labels === 'name' || d.wordEquals)) {
         // A name may carry digits after its first letter — MARK1, POS_2 —
-        // which is what a label looks like on the controls that use them.
+        // which is what a label looks like on the controls that use them,
+        // and dots too where the control counts its labels ITEM4.00.
+        const more = d.identDots ? /[A-Za-z0-9_.]/ : /[A-Za-z0-9_]/;
         let k = j;
-        while (k < text.length && /[A-Za-z0-9_]/.test(text[k])) k++;
+        while (k < text.length && more.test(text[k])) k++;
         out.push({ kind: 'ident', text: text.slice(i, k).toUpperCase() });
         i = k;
         continue;
