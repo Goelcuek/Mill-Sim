@@ -94,7 +94,14 @@ const MOTION_CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 88, 89]);
 class State {
   constructor(cfg) {
     this.cfg = cfg;
-    this.pos = (cfg.initialPosition || cfg.machineZero || [0, 0, 0]).slice();
+    // Where the tool is before the program starts: the machine at home,
+    // which puts its *gauge line* on machine zero — so the tip of whatever
+    // is in the spindle hangs its own length below that. Same rule as G53,
+    // and it is what makes a G53 Z0 from the start of a program the
+    // nothing-happens move it is on the machine.
+    const start = (cfg.initialPosition || cfg.machineZero || [0, 0, 0]).slice();
+    if (!cfg.initialPosition && cfg.gaugeLength) start[2] -= cfg.gaugeLength;
+    this.pos = start;
     const ctl = cfg.controller || {};
     this.motion = 0;             // modal motion G code
     this.plane = ctl.plane ?? 17;
@@ -602,14 +609,39 @@ export function interpret(text, config = {}) {
       return planeToWork(local);
     }
 
+    // Machine coordinates are read at the gauge line, so the tip they put
+    // the tool at is a gauge length below the numbers in the block.
+    const drop = machineCoords ? gaugeDrop() : null;
     return [0, 1, 2].map((i) => {
       const w = [axis.X, axis.Y, axis.Z][i];
       if (w === undefined) return st.pos[i];
       const v = toMM(w, metric);
-      if (machineCoords) return cfg.machineZero[i] + v;
+      if (machineCoords) return cfg.machineZero[i] + v + drop[i];
       if (st.absolute) return st.offset()[i] + v;
       return st.pos[i] + v;
     });
+  };
+
+  /**
+   * How far the tip hangs below the gauge line, as a vector.
+   *
+   * A machine coordinate is an axis position, and an axis position is read
+   * at the gauge line — the spindle's own face — not at the tip of
+   * whatever happens to be in it. So G53 Z0 stands the spindle nose at
+   * machine zero and the tool hangs a gauge length below it, which is why
+   * the same block leaves a long tool lower than a short one. Tilt the
+   * head and it hangs down the tool rather than down Z, so the direction
+   * comes off the machine when there is one.
+   */
+  const gaugeDrop = () => {
+    const gauge = cfg.gaugeLength || 0;
+    if (!gauge) return [0, 0, 0];
+    const kin = cfg.kinematics;
+    if (kin && typeof kin.toolAxis === 'function' && kin.rotaries().length) {
+      const a = kin.toolAxis(st.rot, gauge);
+      return [-a[0] * gauge, -a[1] * gauge, -a[2] * gauge];
+    }
+    return [0, 0, -gauge];
   };
 
   /** A point in the active tilted plane, expressed in work coordinates. */
@@ -630,7 +662,7 @@ export function interpret(text, config = {}) {
   const resolveAxis = (idx, word, metric, machineCoords) => {
     if (word === undefined) return st.pos[idx];
     const v = toMM(word, metric);
-    if (machineCoords) return cfg.machineZero[idx] + v;
+    if (machineCoords) return cfg.machineZero[idx] + v + gaugeDrop()[idx];
     if (st.absolute) return st.offset()[idx] + v;
     return st.pos[idx] + v;
   };
@@ -1429,12 +1461,16 @@ export function interpret(text, config = {}) {
         // only puts a move in the list that nothing can see.
         if (dist3(st.pos, mid) > 1e-9) emitLinear(b.line, 'rapid', mid, cfg.rapidRate);
       }
+      // Reference return is a machine-coordinate move like any other, so
+      // the axis goes home and the tip hangs its gauge length below.
+      const drop = gaugeDrop();
+      const at = (i) => home[i] + drop[i];
       const target = [
-        axis.X !== undefined ? home[0] : st.pos[0],
-        axis.Y !== undefined ? home[1] : st.pos[1],
-        axis.Z !== undefined ? home[2] : st.pos[2],
+        axis.X !== undefined ? at(0) : st.pos[0],
+        axis.Y !== undefined ? at(1) : st.pos[1],
+        axis.Z !== undefined ? at(2) : st.pos[2],
       ];
-      if (!hasAxis) { target[0] = home[0]; target[1] = home[1]; target[2] = home[2]; }
+      if (!hasAxis) { target[0] = at(0); target[1] = at(1); target[2] = at(2); }
       emitLinear(b.line, 'rapid', target, cfg.rapidRate);
       continue;
     }

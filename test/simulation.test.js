@@ -386,3 +386,31 @@ test('travel limits are held from home and reported as machine coordinates', asy
   // The machine every session starts from says the same thing both ways.
   assert.deepEqual(limitsInScene(DEFAULT_MACHINE).min, [-380, -215, -120]);
 });
+
+test('machine coordinates are read at the gauge line, not at the tool tip', () => {
+  // G53 Z0 stands the spindle nose on machine zero. What the tip does
+  // then depends on what is in the spindle: a long tool hangs lower, which
+  // is exactly the thing that catches people out on the machine.
+  const at = (gaugeLength) => {
+    const p = interpret(['G21 G90 G54', 'G0 X0 Y0 Z10', 'G53 G0 Z0', 'M30'].join('\n'),
+      { gaugeLength, machineZero: [0, 0, 250] });
+    return p.moves[p.moves.length - 1].to[2];
+  };
+  assert.ok(Math.abs(at(0) - 250) < 1e-9, 'with nothing in the spindle the tip is the gauge line');
+  assert.ok(Math.abs(at(160) - 90) < 1e-9, 'a 160 mm assembly hangs 160 below it');
+
+  // And the machine starts where the same rule says it does, so G53 Z0 at
+  // the top of a program is the nothing-happens move it is on the machine.
+  const p = interpret(['G21 G90 G54', 'G53 G0 Z0', 'M30'].join('\n'),
+    { gaugeLength: 160, machineZero: [0, 0, 250] });
+  assert.ok(Math.abs(p.moves[0].from[2] - 90) < 1e-9, `starts at ${p.moves[0].from[2]}`);
+  assert.ok(Math.abs(p.moves[0].to[2] - 90) < 1e-9, 'G53 Z0 moved a machine that was already home');
+});
+
+test('reference return goes to the same place', () => {
+  // G28 is a machine-coordinate move like any other.
+  const p = interpret(['G21 G90 G54', 'G0 X0 Y0 Z10', 'G91 G28 Z0', 'M30'].join('\n'),
+    { gaugeLength: 140, machineZero: [0, 0, 250] });
+  assert.ok(Math.abs(p.moves[p.moves.length - 1].to[2] - 110) < 1e-9,
+    `G28 left the tip at ${p.moves[p.moves.length - 1].to[2]}`);
+});

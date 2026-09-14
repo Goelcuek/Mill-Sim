@@ -607,15 +607,19 @@ try {
     const moves = app.state.program.moves;
     return {
       tip: moves[moves.length - 1].to[2],
+      gauge: app.state.program.config.gaugeLength || 0,
       ceiling: app.machineView.config.limits.max[2],
       stored: app.state.machine.limits.max[2],
     };
   }, home);
   const low = await g53At([0, 0, 250]);
   const high = await g53At([0, 0, 400]);
-  console.log('home:', JSON.stringify({ low: low.tip, high: high.tip, stored: high.stored }));
-  check(Math.abs(low.tip - 200) < 1e-6 && Math.abs(high.tip - 350) < 1e-6,
-    `G53 Z-50 did not follow home: ${low.tip} then ${high.tip}`);
+  console.log('home:', JSON.stringify({ low: low.tip, high: high.tip, gauge: low.gauge, stored: high.stored }));
+  // A machine coordinate is read at the gauge line, so the tip lands a
+  // gauge length below the number in the block — and moves with home.
+  check(Math.abs(low.tip - (250 - 50 - low.gauge)) < 1e-6 && Math.abs(high.tip - (400 - 50 - high.gauge)) < 1e-6,
+    `G53 Z-50 with a ${low.gauge} mm assembly did not follow home: ${low.tip} then ${high.tip}`);
+  check(low.gauge > 0, 'nothing in the spindle, so this proves nothing about the gauge line');
   check(low.stored === high.stored, 'the stored envelope should not change when home moves');
   await page.evaluate(() => window.millsim.setHome([0, 0, 250]));
   await page.waitForTimeout(300);
