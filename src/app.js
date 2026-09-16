@@ -259,15 +259,24 @@ export class App {
     this.viewer.add(this.toolView.group);
 
     this.measure = new MeasureView(this.viewer, this.viewOverlay);
+    /** Scratch for carrying a point between the part and coordinate frames. */
+    this._frameSwap = new THREE.Matrix4();
 
     this.pick = new PickController(this.viewer, {
       stock: () => this.stock,
       models: () => this.models,
       machine: () => this.state.machine,
-      origins: () => Object.entries(this.state.wcs).map(([name, point]) => ({ name, point })),
-      // Work coordinates are whatever the table is carrying, which in
-      // full-machine view is somewhere else entirely.
-      workFrame: () => this.machineView.workGroup,
+      // Work offsets are stated in the coordinate frame; everything a pick
+      // measures is in the part's. They are the same numbers until the
+      // table indexes.
+      origins: () => Object.entries(this.state.wcs).map(([name, point]) => ({ name, point: this.partFromCoord(point) })),
+      // The frame a ray has to be carried into is the frame the geometry
+      // is in — the part's, not the coordinate system's. The two are the
+      // same place until the table indexes, and then they are not: a ray
+      // tested in the coordinate frame against a heightmap that has turned
+      // with the table comes back with the point that was under the
+      // cursor before it turned.
+      workFrame: () => this.machineView.partGroup,
       bodies: () => this.machineView.pickMeshes(),
       axisOrigins: () => {
         const kin = this.machineView.kinematics;
@@ -286,7 +295,7 @@ export class App {
 
     // The block gets handles of its own, like the fixtures have.
     this.stockGizmo = new StockGizmo(this.viewer, {
-      frame: () => this.machineView.workGroup,
+      frame: () => this.machineView.partGroup,
       onPreview: (move, turn) => this.previewStockPlacement(move, turn),
       onCommit: (move, turn) => this.commitStockPlacement(move, turn),
       onChange: (move, turn) => this.showPlacementBar(placementText(move, turn)),
@@ -1233,6 +1242,11 @@ export class App {
   pickHome() {
     this.pick.begin({
       steps: 1,
+      // Machine zero is a place in the machine, not on the job: it stays
+      // put when the table moves, so it is picked in the scene rather than
+      // in the frame the part is measured in.
+      space: 'world',
+      bodies: true,
       title: 'Machine home',
       hints: ['Click where the tool tip stands at home'],
       onDone: ([p]) => {
@@ -1938,6 +1952,37 @@ export class App {
   }
 
   /**
+   * The same point, carried between the two frames the table splits.
+   *
+   * What is bolted down turns with the table; the coordinate system it is
+   * measured in does not. Until something indexes they are one frame and
+   * these are the identity, which is why nothing had to say which it meant
+   * before there was an indexer to tell them apart.
+   *
+   * @param {number[]} p
+   */
+  coordFromPart(p) {
+    return this.betweenFrames(p, 'partGroup', 'workGroup');
+  }
+
+  /** The reverse: a coordinate-frame point as the part sees it. */
+  partFromCoord(p) {
+    return this.betweenFrames(p, 'workGroup', 'partGroup');
+  }
+
+  betweenFrames(p, fromKey, toKey) {
+    const mv = this.machineView;
+    if (!mv) return [p[0], p[1], p[2]];
+    const from = mv[fromKey];
+    const to = mv[toKey];
+    from.updateWorldMatrix(true, false);
+    to.updateWorldMatrix(true, false);
+    const v = new THREE.Vector3(p[0], p[1], p[2]).applyMatrix4(from.matrixWorld);
+    v.applyMatrix4(this._frameSwap.copy(to.matrixWorld).invert());
+    return [v.x, v.y, v.z];
+  }
+
+  /**
    * The frame the part is set up in.
    *
    * The stock's grid, the tool tip the simulation is handed and the boxes
@@ -2268,7 +2313,10 @@ export class App {
       hints: ['Click a point to measure from', 'Click where that point should go'],
       onDone: ([a, b]) => {
         const cur = this.state.wcs[key];
-        this.applyWcs(key, [cur[0] + (b[0] - a[0]), cur[1] + (b[1] - a[1]), cur[2] + (b[2] - a[2])]);
+        // The offset moves in the frame it is stated in, so the two picked
+        // points go there before the difference is taken.
+        const [ca, cb] = [this.coordFromPart(a), this.coordFromPart(b)];
+        this.applyWcs(key, [cur[0] + (cb[0] - ca[0]), cur[1] + (cb[1] - ca[1]), cur[2] + (cb[2] - ca[2])]);
       },
     });
     this.buildRibbon();
@@ -2281,7 +2329,7 @@ export class App {
       steps: 1,
       title: `Set ${key} zero`,
       hints: [`Click the point that should read X0 Y0 Z0 in ${key}`],
-      onDone: ([p]) => this.applyWcs(key, p),
+      onDone: ([p]) => this.applyWcs(key, this.coordFromPart(p)),
     });
     this.buildRibbon();
   }

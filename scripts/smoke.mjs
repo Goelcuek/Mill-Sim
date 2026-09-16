@@ -700,6 +700,82 @@ try {
     check(kept.after === '#123456' && kept.painted === '#123456', 'the colour did not come back with the machine');
   }
 
+  // ---- a ray lands where the cursor is ----------------------------------
+  //
+  // Picking is done by carrying the pointer ray into the frame the
+  // geometry is in and testing it there, so it is only ever as right as
+  // that frame is. Two things can put it out: the part sitting somewhere
+  // other than where the coordinate system says it does, and the table
+  // turning under a ray that was carried into the frame that did not turn.
+  // Both are checked by clicking points whose answer is known.
+  {
+    const rays = await page.evaluate(async () => {
+      const THREE = await import('/vendor/three/three.module.min.js');
+      const app = window.millsim;
+      const out = [];
+
+      const clickAt = (truth) => {
+        const mv = app.machineView;
+        mv.partGroup.updateWorldMatrix(true, false);
+        const world = new THREE.Vector3(...truth).applyMatrix4(mv.partGroup.matrixWorld);
+        const ndc = world.clone().project(app.viewer.camera);
+        const rect = app.viewer.renderer.domElement.getBoundingClientRect();
+        const ev = {
+          clientX: rect.left + ((ndc.x + 1) / 2) * rect.width,
+          clientY: rect.top + ((1 - ndc.y) / 2) * rect.height,
+        };
+        const hit = app.pick.objectAt(ev);
+        if (!hit || hit.kind !== 'stock') return { miss: hit ? hit.kind : 'nothing' };
+        return { err: +Math.hypot(...hit.point.map((v, i) => v - truth[i])).toFixed(3) };
+      };
+
+      // Looked at from an angle: straight down would hide an error in Z.
+      const oblique = () => {
+        const c = app.viewer.camera;
+        const t = app.viewer.controls.target;
+        c.position.set(t.x + 420, t.y - 520, t.z + 380);
+        c.lookAt(t);
+        c.updateMatrixWorld(true);
+      };
+
+      for (const mode of ['part', 'machine']) {
+        app.setMachine({ preset: 'vmc3', mode });
+        app.setStock({ shape: 'box', size: [100, 100, 20], origin: [-50, -50, -20], resolution: 0.5, rotation: 0 });
+        app.resetStock();
+        app.fitToScene();
+        await new Promise((r) => setTimeout(r, 500));
+        oblique();
+        const mv = app.machineView;
+        mv.partGroup.updateWorldMatrix(true, false);
+        mv.workGroup.updateWorldMatrix(true, false);
+        const gap = new THREE.Vector3().setFromMatrixPosition(mv.partGroup.matrixWorld)
+          .distanceTo(new THREE.Vector3().setFromMatrixPosition(mv.workGroup.matrixWorld));
+        out.push({
+          where: mode,
+          gap: +gap.toFixed(3),
+          hits: [[0, 0, 0], [40, 40, 0], [-40, 25, 0]].map(clickAt),
+        });
+      }
+
+      // ...and with the table indexed a quarter turn, which moves the part
+      // out from under the frame the coordinate system lives in.
+      app.machineView.partGroup.rotation.z = Math.PI / 2;
+      app.machineView.partGroup.updateWorldMatrix(true, false);
+      out.push({ where: 'indexed 90', gap: null, hits: [[40, 20, 0], [-30, 45, 0]].map(clickAt) });
+      app.machineView.partGroup.rotation.z = 0;
+      return out;
+    });
+    console.log('picking:', JSON.stringify(rays));
+    for (const r of rays) {
+      check(r.gap === null || r.gap < 1e-6,
+        `in ${r.where} view the part sits ${r.gap} mm from the coordinate frame it is measured in`);
+      for (const h of r.hits) {
+        check(!h.miss, `clicking the stock in ${r.where} view hit ${h.miss}`);
+        check(h.err !== undefined && h.err < 0.6, `a pick in ${r.where} view came back ${h.err} mm out`);
+      }
+    }
+  }
+
   // ---- U turns the work, and nothing else --------------------------------
   //
   // Twice over: on a machine that has no such axis, and on one where the

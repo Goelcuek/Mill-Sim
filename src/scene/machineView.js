@@ -217,8 +217,14 @@ export class MachineView {
     coord.add(this.workGroup);
     const tool = this.nodeGroups.get(kin.toolNode) || this.group;
     tool.add(this.toolGroup);
+    // Both sit on the fixture face: the table offset is the stack the job
+    // stands on, and work coordinates are measured from the top of it.
+    // Splitting the part off the coordinate frame is about what *turns*,
+    // not about where either of them is, so leaving the part at the bare
+    // casting dropped it a fixture height below the numbers that describe
+    // it — and took every ray cast at it down with it.
     this.workGroup.position.set(...kin.tableOffset);
-    this.partGroup.position.set(0, 0, 0);
+    this.partGroup.position.set(...kin.tableOffset);
     this.toolGroup.position.set(...kin.spindleOffset);
 
     for (const node of kin.order) this.buildNodeParts(node);
@@ -445,6 +451,7 @@ export class MachineView {
     // about the *program*, answered by Kinematics.toolInPart; it has no
     // business moving the workpiece.
     this.workGroup.position.set(...kin.tableOffset);
+    this.partGroup.position.set(...kin.tableOffset);
     this.toolGroup.position.set(...kin.spindleOffset);
 
     // Drive the rig from the tool tip, not from the programmed word. Once
