@@ -811,6 +811,70 @@ try {
     check(Math.abs(framed.middle) < 0.01, 'something was cut in the middle');
   }
 
+  // ---- the reference part is checked in the frame the part is in --------
+  //
+  // The stock grid is in part coordinates. In full-machine view the
+  // scene's coordinates are a whole kinematic chain away from those, and
+  // comparing the two put the reference surface off the side of the block
+  // where nothing could ever reach it: the cutter went straight through a
+  // reference part and nothing was reported.
+  for (const mode of ['part', 'machine']) {
+    await page.evaluate(async (m) => {
+      const app = window.millsim;
+      app.setMachine({ preset: 'vmc3', mode: m });
+      app.setStock({ shape: 'box', size: [80, 60, 20], origin: [-40, -30, -20], resolution: 0.4, rotation: 0 });
+      for (const model of [...app.models.models]) app.models.remove(model);
+      const { boxToTriangles } = await import('/src/io/mesh.js');
+      // The finished part: this block with its top 5 mm taken off.
+      const part = boxToTriangles([-40, -30, -20], [40, 30, -5]);
+      app.models.add({ name: 'reference', positions: part.positions, role: 'reference' });
+      app.refreshTarget();
+      app.loadProgram(['G21 G90 G54', 'G0 X-30 Y0 Z5', 'G1 Z-10 F300', 'G1 X30', 'G0 Z20', 'M30'].join('\n'), 'gouge.nc');
+    }, mode);
+    await page.waitForTimeout(900);
+    await runToEnd(page);
+    const cut = await page.evaluate(() => {
+      const app = window.millsim;
+      const cmp = app.compareToReference();
+      return {
+        reported: app.simulator.collisions.filter((c) => c.type === 'gouge').length,
+        maxGouge: cmp ? +cmp.maxGouge.toFixed(2) : null,
+      };
+    });
+    console.log(`reference in ${mode} view:`, JSON.stringify(cut));
+    check(cut.reported > 0, `cutting 5 mm through the reference part in ${mode} view reported nothing`);
+    check(Math.abs(cut.maxGouge - 5) < 0.05, `the gouge measured ${cut.maxGouge} mm, not 5`);
+  }
+  await page.evaluate(() => {
+    const app = window.millsim;
+    for (const model of [...app.models.models]) app.models.remove(model);
+    app.refreshTarget();
+  });
+
+  // ---- the jog sliders span the travels, and say when they are past -----
+  {
+    const jog = await page.evaluate(() => {
+      const app = window.millsim;
+      app.setHome([0, 0, 300]);
+      app.setMachine({ limits: { enabled: true, frame: 'home', min: [-100, -100, -200], max: [100, 100, 50] } });
+      app.setPage('machine', 'jog');
+      const spans = [...document.querySelectorAll('.jog-slider')].map((sl) => `${sl.min}..${sl.max}`);
+      app.startJog();
+      app.setJog('X', 90);
+      const inside = app.jogLimit();
+      app.setJog('X', 400);
+      const outside = app.jogLimit();
+      app.setJog('X', 0);
+      return { spans, inside, outside };
+    });
+    console.log('jog travels:', JSON.stringify({ spans: jog.spans, outside: jog.outside }));
+    check(jog.spans[0] === '-100..100' && jog.spans[2] === '-200..50',
+      `the sliders span ${jog.spans.join(', ')} rather than the machine's travels`);
+    check(jog.inside === null, 'inside the envelope and alarming');
+    check(jog.outside && jog.outside.axis === 'X', 'jogging past the envelope raised nothing');
+    await page.evaluate(() => { window.millsim.stopJog(); window.millsim.setHome([0, 0, 250]); });
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you

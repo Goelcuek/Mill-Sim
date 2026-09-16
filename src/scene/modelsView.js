@@ -193,8 +193,13 @@ export class ModelsView {
    * Oriented boxes for the simulator, one per collidable model.
    * @returns {import('../sim/collision.js').FixtureBox[]}
    */
-  collisionBoxes() {
+  collisionBoxes(frame = null) {
     const out = [];
+    const toFrame = frame ? new THREE.Matrix4() : null;
+    if (frame) {
+      frame.updateMatrixWorld(true);
+      toFrame.copy(frame.matrixWorld).invert();
+    }
     for (const m of this.models) {
       if (!m.visible || !MODEL_ROLES[m.role].collide) continue;
       m.object.updateMatrixWorld(true);
@@ -202,7 +207,11 @@ export class ModelsView {
       if (!bb) continue;
       const centre = bb.getCenter(new THREE.Vector3());
       const half = bb.getSize(new THREE.Vector3()).multiplyScalar(0.5);
-      const inv = new THREE.Matrix4().copy(m.object.matrixWorld).invert();
+      // The tool is given on the part, so the box has to answer in the
+      // same frame — see worldPositions.
+      const placed = new THREE.Matrix4().copy(m.object.matrixWorld);
+      if (toFrame) placed.premultiply(toFrame);
+      const inv = new THREE.Matrix4().copy(placed).invert();
       const s = m.object.scale;
       out.push({
         id: m.id,
@@ -247,13 +256,24 @@ export class ModelsView {
   }
 
   /** World-space triangles of a model, for export. */
-  worldPositions(model) {
+  worldPositions(model, frame = null) {
     model.object.updateMatrixWorld(true);
+    // In the frame that was asked for, which is the part's when the caller
+    // is the reference-part check: the stock grid is in part coordinates,
+    // and in full-machine view the scene's coordinates are a whole
+    // kinematic chain away from those. Comparing the two put the reference
+    // surface somewhere off the side of the block, where nothing could
+    // ever gouge it.
+    const m = new THREE.Matrix4().copy(model.object.matrixWorld);
+    if (frame) {
+      frame.updateMatrixWorld(true);
+      m.premultiply(new THREE.Matrix4().copy(frame.matrixWorld).invert());
+    }
     const src = model.mesh.geometry.attributes.position.array;
     const out = new Float32Array(src.length);
     const v = new THREE.Vector3();
     for (let i = 0; i < src.length; i += 3) {
-      v.set(src[i], src[i + 1], src[i + 2]).applyMatrix4(model.object.matrixWorld);
+      v.set(src[i], src[i + 1], src[i + 2]).applyMatrix4(m);
       out[i] = v.x; out[i + 1] = v.y; out[i + 2] = v.z;
     }
     return out;

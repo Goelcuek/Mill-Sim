@@ -387,10 +387,16 @@ export class Simulator {
       // carried it onto the part yet, whichever way the machine is
       // modelled; and everything downstream — the cut, the drawn tool —
       // wants it on the part.
+      // The tool axis comes out of the chain already expressed on the
+      // part — toolAxis walks to the work node, and on a machine that
+      // models the indexer that walk has turned it. Only the programmed
+      // point still needs carrying over, and doing both turned the drawn
+      // tool twice: at A0 that is invisible, and at any other angle the
+      // head swings away from its own castings as the table indexes.
       const axis = k.toolAxis(rot, gauge);
       if (chainSpins) {
         const m = k.indexTransform(k.coordNode(idx.letter), { ...rot });
-        return { tip: m4.transformPoint([0, 0, 0], m, point), dir: m4.normalize(m4.transformDir([0, 0, 0], m, axis)), index };
+        return { tip: m4.transformPoint([0, 0, 0], m, point), dir: axis, index };
       }
       return { tip: this.onPart(point, index), dir: this.onPart(axis, index), index };
     }

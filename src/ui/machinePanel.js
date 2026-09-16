@@ -145,11 +145,37 @@ export class MachinePanel extends Panel {
       ])];
     }
 
+    // A linear axis is jogged over the machine's travels, which are the
+    // numbers on the Travels page and are measured from home — so a slider
+    // spans what the envelope allows, and follows it when either changes.
+    // A rotary has no place in that envelope; its stops are its own.
+    const travel = this.app.state.machine.limits;
+    const envelope = (letter) => {
+      const i = ['X', 'Y', 'Z'].indexOf(letter);
+      if (i < 0 || !travel || !travel.enabled) return null;
+      return { min: Number(travel.min[i]) || 0, max: Number(travel.max[i]) || 0 };
+    };
+
+    // Updated as the sliders move: a redraw mid-drag would destroy the
+    // slider under the pointer.
+    const alarm = el('div.inline-warning');
+    const showAlarm = () => {
+      const bad = app.jogLimit();
+      alarm.hidden = !bad;
+      if (bad) {
+        alarm.textContent = `Over travel: machine ${bad.axis}${fmt(bad.value, 2)} is past the `
+          + `${bad.value > bad.limit ? 'maximum' : 'minimum'} of ${fmt(bad.limit, 2)} mm.`;
+      }
+    };
+
     const rows = [];
     for (const node of axes) {
       const rotary = node.kind === 'rotary';
-      const lo = Number.isFinite(node.limits.min) ? Math.max(node.limits.min, -1e5) : (rotary ? -360 : -1000);
-      const hi = Number.isFinite(node.limits.max) ? Math.min(node.limits.max, 1e5) : (rotary ? 360 : 1000);
+      const env = rotary ? null : envelope(node.letter);
+      const lo = env ? env.min
+        : (Number.isFinite(node.limits.min) ? Math.max(node.limits.min, -1e5) : (rotary ? -360 : -1000));
+      const hi = env ? env.max
+        : (Number.isFinite(node.limits.max) ? Math.min(node.limits.max, 1e5) : (rotary ? 360 : 1000));
       const value = Number(jog[node.letter] || 0);
       const step = rotary ? 1 : 1;
 
@@ -166,6 +192,7 @@ export class MachinePanel extends Panel {
           const v = app.setJog(node.letter, parseFloat(e.target.value));
           readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
           if (typed) typed.input.value = String(v);
+          showAlarm();
         },
       });
       const nudge = (d) => {
@@ -173,6 +200,7 @@ export class MachinePanel extends Panel {
         slider.value = String(v);
         readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
         if (typed) typed.input.value = String(v);
+        showAlarm();
       };
       const typed = field('', value, {
         step,
@@ -181,6 +209,7 @@ export class MachinePanel extends Panel {
           const next = app.setJog(node.letter, v || 0);
           slider.value = String(next);
           readout.textContent = `${fmt(next, 3)} ${rotary ? '°' : 'mm'}`;
+          showAlarm();
         },
       });
 
@@ -202,9 +231,11 @@ export class MachinePanel extends Panel {
     }
 
     const over = k.violations ? k.violations(jog) : [];
+    showAlarm();
     return [section('Jog', [
       el('div.hint', {}, 'The axes as the pendant would move them. Nothing is cut and the run is not touched — press play, or leave this page, and the machine goes back to the program.'),
       ...rows,
+      alarm,
       over && over.length
         ? el('div.inline-warning', {}, `Past the stops: ${over.map((v) => `${v.axis} at ${fmt(v.value, 2)}`).join(', ')}.`)
         : null,
@@ -212,7 +243,7 @@ export class MachinePanel extends Panel {
         { label: 'All to zero', variant: 'primary', onClick: () => { for (const n of axes) app.setJog(n.letter, 0); this.render(); } },
         { label: 'Back to the program', onClick: () => { app.stopJog(); this.app.setPage('machine', 'axes'); } },
       ]),
-      el('div.hint', {}, 'Travels come from each axis on the Axes page, so a slider stops where that axis stops.'),
+      el('div.hint', {}, 'A linear slider spans the machine\u2019s travels \u2014 the envelope on the Travels page, measured from home — and a rotary spans its own stops from the Axes page. Change either and the sliders follow. The warning above is the same check the run makes: the gauge line, measured from home, against the envelope.'),
     ])];
   }
 

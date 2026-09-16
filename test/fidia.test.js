@@ -635,3 +635,53 @@ test('under RTCP the tool stands still while the part indexes', () => {
   // And the tool has not moved a micron.
   for (let i = 0; i < 3; i++) near(after.world[i], before.world[i], 1e-9, `the drawn tool, axis ${i}`);
 });
+
+test('indexing the work does not swing the head', () => {
+  // The tool axis comes out of the chain already on the part. Carrying it
+  // over again turned the drawn tool twice: invisible with the head
+  // upright, and at any other angle the tool swung away from its own
+  // castings every time the table indexed.
+  const kin = new Kinematics({
+    name: 'head with a U table',
+    nodes: [
+      { id: 'base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+      { id: 'x', letter: 'X', kind: 'linear', parent: 'base', axis: [1, 0, 0], origin: [0, 0, 0] },
+      { id: 'y', letter: 'Y', kind: 'linear', parent: 'x', axis: [0, 1, 0], origin: [0, 0, 0] },
+      { id: 'z', letter: 'Z', kind: 'linear', parent: 'y', axis: [0, 0, 1], origin: [0, 0, 300] },
+      { id: 'c', letter: 'C', kind: 'rotary', parent: 'z', axis: [0, 0, 1], origin: [0, 0, -100] },
+      { id: 'a', letter: 'A', kind: 'rotary', parent: 'c', axis: [1, 0, 0], origin: [0, 0, -50] },
+      { id: 'spindle', kind: 'carrier', parent: 'a', origin: [0, 0, 0] },
+      { id: 'u', letter: 'U', kind: 'rotary', parent: 'base', axis: [0, 0, -1], origin: [0, 0, -80] },
+      { id: 'table', kind: 'carrier', parent: 'u', origin: [0, 0, 0] },
+    ],
+    toolNode: 'spindle',
+    workNode: 'table',
+    spindleOffset: [0, 0, 0],
+    tableOffset: [0, 0, 0],
+  });
+
+  const p = run([
+    'RTCP ON', '>G90 G21', 'F500',
+    '>A30.', '>G0 X0 Y0 Z0',
+    '>G91', '>G0 U-90.', '>G90',
+    '>G0 X0 Y0 Z0',
+    'M30',
+  ], { kinematics: kin, gauge: 160 });
+  assert.deepEqual(errs(p), []);
+
+  const sim = new Simulator();
+  sim.load({ program: p, stock: null, slots: new Map(), fallbackSlot: null, kinematics: kin });
+
+  // Where the tool is drawn: the part frame carries the part-frame answer
+  // back out into the world, and that is what has to hold still.
+  const drawn = (mv) => {
+    const pose = sim.poseAt(mv, mv.to, 1);
+    kin.solve({ ...mv.rotTo, X: mv.to[0], Y: mv.to[1], Z: mv.to[2] });
+    const w = kin.matrixOf(kin.workNode);
+    return m4.normalize(m4.transformDir([0, 0, 0], w, pose.dir));
+  };
+  const before = drawn(p.moves[0]);
+  const after = drawn(p.moves[p.moves.length - 1]);
+  assert.ok(Math.abs(before[2] - Math.cos((30 * Math.PI) / 180)) < 1e-9, `the head is not at 30 degrees: ${before}`);
+  for (let i = 0; i < 3; i++) near(after[i], before[i], 1e-9, `the tool leaned, axis ${i}`);
+});

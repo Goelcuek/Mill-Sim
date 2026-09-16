@@ -23,7 +23,7 @@ import { ToolLibrary } from './tools/library.js';
 import { Stock } from './sim/stock.js';
 import { columnFor, describeShape, stockGrid } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
-import { silhouetteSpheres } from './sim/collision.js';
+import { silhouetteSpheres, checkLimits } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
 import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
 
@@ -105,8 +105,11 @@ export class App {
       /** Which work offset the Setup panel and the placement tools act on. */
       wcsEdit: 'G54',
       display: {
-        grid: true, axes: true, stock: true, tool: true, holder: true,
-        toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: true,
+        // The grid and the work-offset markers are reference furniture:
+        // useful when you are setting a job up, in the way while you are
+        // watching one run. Off until asked for, on View.
+        grid: false, axes: true, stock: true, tool: true, holder: true,
+        toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: false,
         sectionPct: 100, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
         background: DEFAULT_BACKGROUND, backgroundCustom: '#8b93a3',
       },
@@ -600,7 +603,7 @@ export class App {
     // the whole object would have quietly dropped the rest.
     const parts = patch.parts ? { ...checks.parts, ...patch.parts } : checks.parts;
     Object.assign(checks, patch, { parts });
-    this.simulator.retune({ checks, fixtures: this.models.collisionBoxes() });
+    this.simulator.retune({ checks, fixtures: this.models.collisionBoxes(this.partFrame()) });
     if (patch.parts) this.refreshSlots();
     this.rerunIfFinished();
     if (this.panels && this.panels.setup) this.panels.setup.refresh();
@@ -941,16 +944,20 @@ export class App {
     };
 
     const files = [];
+    // Each body goes to its own file so it can be read and edited outside
+    // this program — and into machine.json as well, so that one file on
+    // its own is still the whole machine. A machine.json handed round on
+    // its own used to arrive with every macro empty.
     const macros = (machine.macros || []).map((m) => {
       const file = `${prefix}macros/${unique(m.code, '.nc')}`;
       files.push({ name: file, data: `${m.body || ''}\n` });
-      return { id: m.id, code: m.code, name: m.name, enabled: m.enabled, notes: m.notes, file };
+      return { id: m.id, code: m.code, name: m.name, enabled: m.enabled, notes: m.notes, file, body: m.body || '' };
     });
 
     const subprograms = (machine.subprograms || []).map((sub) => {
       const file = `${prefix}subprograms/${unique(sub.name.replace(/\.[^.]+$/, ''), '.nc')}`;
       files.push({ name: file, data: `${sub.text || ''}` });
-      return { id: sub.id, name: sub.name, file };
+      return { id: sub.id, name: sub.name, file, text: sub.text || '' };
     });
 
     const bodies = [];
@@ -1147,8 +1154,12 @@ export class App {
     // list, and any body written inline.
     if (Array.isArray(def.macros)) {
       this.state.machine.macros = def.macros.map((m) => {
+        // The file wins when the folder brought one: editing macros/M6.nc
+        // is how the README says to change what the machine does at M6,
+        // and the copy inside machine.json is the fallback for a
+        // machine.json travelling on its own.
         let body = m.body || '';
-        if (!body && entries && m.file && entries.has(m.file)) {
+        if (entries && m.file && entries.has(m.file)) {
           body = new TextDecoder().decode(entries.get(m.file)).replace(/\s+$/, '');
         }
         return makeMacro({ ...m, body });
@@ -1160,9 +1171,11 @@ export class App {
       this.state.machine.subprograms = def.subprograms.map((sub) => ({
         id: sub.id || uid('msub'),
         name: sub.name || (sub.file || 'subprogram').split('/').pop(),
-        text: sub.text || (entries && sub.file && entries.has(sub.file)
+        // Same rule as the macros: the file the folder carries wins, the
+        // copy in machine.json is what makes that file optional.
+        text: (entries && sub.file && entries.has(sub.file)
           ? new TextDecoder().decode(entries.get(sub.file))
-          : ''),
+          : sub.text) || '',
       }));
     }
 
@@ -1437,7 +1450,7 @@ export class App {
       slots,
       fallbackSlot: this.fallbackSlot,
       machine: this.state.machine,
-      fixtures: this.models.collisionBoxes(),
+      fixtures: this.models.collisionBoxes(this.partFrame()),
       stock: this.stock,
       program: this.state.program,
       checks: this.state.checks,
@@ -1450,7 +1463,7 @@ export class App {
   }
 
   refreshFixtures() {
-    this.simulator.fixtures = this.models.collisionBoxes();
+    this.simulator.fixtures = this.models.collisionBoxes(this.partFrame());
     this.scheduleTargetRefresh();
     this.viewer.invalidate();
   }
@@ -1467,7 +1480,7 @@ export class App {
   refreshTarget() {
     const parts = this.models.models
       .filter((m) => m.visible && m.role === 'reference')
-      .map((m) => ({ positions: this.models.worldPositions(m) }));
+      .map((m) => ({ positions: this.models.worldPositions(m, this.partFrame()) }));
 
     const started = performance.now();
     this.target = parts.length && this.stock ? buildTargetMap(this.stock, parts) : null;
@@ -1545,7 +1558,7 @@ export class App {
       fallbackSlot: this.fallbackSlot,
       machine: this.state.machine,
       kinematics: this.machineView ? this.machineView.kinematics : null,
-      fixtures: this.models.collisionBoxes(),
+      fixtures: this.models.collisionBoxes(this.partFrame()),
     });
     this.pause();
     this.updateTransport();
@@ -1813,6 +1826,43 @@ export class App {
     const rot = {};
     for (const node of kin.extras()) rot[node.letter] = this.jog[node.letter] || 0;
     return { values: { ...this.jog }, tip: r.tip, dir: r.axis, rot };
+  }
+
+  /**
+   * Is the machine, as jogged, outside its travels?
+   *
+   * The same question the run asks, asked of the pendant: take where the
+   * gauge line has ended up, measure it from home, and see whether that is
+   * inside the envelope. The axis stops on the Axes page are a different
+   * thing — they are what each joint can do — and they are reported
+   * alongside rather than instead.
+   *
+   * @returns {null|{axis:string, value:number, limit:number}}
+   */
+  jogLimit() {
+    if (!this.jog) return null;
+    const kin = this.machineView.kinematics;
+    const gauge = this.simulator.gaugeLength || 0;
+    const r = kin.toolInPart(this.jog, this.machineView.assemblyLength);
+    const point = [
+      r.tip[0] + r.axis[0] * gauge,
+      r.tip[1] + r.axis[1] * gauge,
+      r.tip[2] + r.axis[2] * gauge,
+    ];
+    return checkLimits(point, limitsInScene(this.state.machine), homeOf(this.state.machine));
+  }
+
+  /**
+   * The frame the part is set up in.
+   *
+   * The stock's grid, the tool tip the simulation is handed and the boxes
+   * the crash model tests against all live here. In part view it is the
+   * scene; in full-machine view it is a whole kinematic chain away from
+   * it, which is why anything measured against the stock has to be asked
+   * for in this frame by name rather than taken from the scene.
+   */
+  partFrame() {
+    return this.machineView ? this.machineView.partGroup : null;
   }
 
   /** Where the tool sits when there is no program to position it. */
@@ -2208,7 +2258,7 @@ export class App {
       this.notify('Select a model first.', 'error');
       return;
     }
-    const positions = this.models.worldPositions(model);
+    const positions = this.models.worldPositions(model, this.partFrame());
     const buffer = writeSTL(positions, { name: model.name });
     download(`${model.name.replace(/\W+/g, '-').toLowerCase()}.stl`, new Blob([buffer], { type: 'model/stl' }));
   }
