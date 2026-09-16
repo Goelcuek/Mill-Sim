@@ -371,12 +371,19 @@ export class Simulator {
   poseAt(mv, point, u) {
     const idx = this.indexer;
     const index = idx ? this.indexAt(mv, u) : 0;
+    // How far down its own line the tool has been sent. Nothing on the
+    // machine answers for it: the control puts the tip there by moving X,
+    // Y and Z together, so here it is a shift along the tool axis and the
+    // rig is solved for it afterwards, which is the same thing.
+    const along = this.alongTool;
     // Who turns the part: the chain, when the machine has been modelled
     // with the axis, or this, when it has not. Doing it twice puts the cut
     // at double the angle, and doing it neither leaves the tool going
     // round with the part instead of standing still.
     const chainSpins = !!(idx && idx.inChain);
-    if (!this.fiveAxis) return { tip: this.onPart(point, index), dir: UP, index };
+    if (!this.fiveAxis) {
+      return { tip: this.downTool(this.onPart(point, index), UP, mv, u), dir: UP, index };
+    }
     const rot = this.rotaryAt(mv, u);
     const gauge = this.gaugeLength;
     const k = this.kinematics;
@@ -396,13 +403,39 @@ export class Simulator {
       const axis = k.toolAxis(rot, gauge);
       if (chainSpins) {
         const m = k.indexTransform(k.coordNode(idx.letter), { ...rot });
-        return { tip: m4.transformPoint([0, 0, 0], m, point), dir: axis, index };
+        const tip = m4.transformPoint([0, 0, 0], m, point);
+        return { tip: this.downTool(tip, axis, mv, u), dir: axis, index };
       }
-      return { tip: this.onPart(point, index), dir: this.onPart(axis, index), index };
+      const dir = this.onPart(axis, index);
+      return { tip: this.downTool(this.onPart(point, index), dir, mv, u), dir, index };
     }
     const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
     const spin = chainSpins ? 0 : index;
-    return { tip: this.onPart(r.tip, spin), dir: this.onPart(r.axis, spin), index };
+    const dir = this.onPart(r.axis, spin);
+    return { tip: this.downTool(this.onPart(r.tip, spin), dir, mv, u), dir, index };
+  }
+
+  /** The letter that runs down the tool, when the chain has no such slide. */
+  get alongTool() {
+    const a = this.program && this.program.alongTool;
+    return a && !a.inChain ? a : null;
+  }
+
+  /**
+   * Shift a tip along the tool by however far W has been sent.
+   *
+   * The axis points up the tool from the tip, and W is measured the way
+   * the slide it stands in for would be — so W-50 puts the tip fifty
+   * millimetres further down the tool, whichever way the head is leaning.
+   */
+  downTool(tip, dir, mv, u) {
+    const a = this.alongTool;
+    if (!a) return tip;
+    const from = (mv.rotFrom && mv.rotFrom[a.letter]) || 0;
+    const to = (mv.rotTo && mv.rotTo[a.letter]) || 0;
+    const w = from + (to - from) * u;
+    if (!w) return tip;
+    return [tip[0] + dir[0] * w, tip[1] + dir[1] * w, tip[2] + dir[2] * w];
   }
 
   /**

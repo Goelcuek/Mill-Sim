@@ -685,3 +685,74 @@ test('indexing the work does not swing the head', () => {
   assert.ok(Math.abs(before[2] - Math.cos((30 * Math.PI) / 180)) < 1e-9, `the head is not at 30 degrees: ${before}`);
   for (let i = 0; i < 3; i++) near(after[i], before[i], 1e-9, `the tool leaned, axis ${i}`);
 });
+
+test('W runs the tool down its own line, and the slides do the work', () => {
+  // There is no quill. W says "move the tip this far the way the spindle
+  // is pointing" and the control drives X, Y and Z together to get there,
+  // so what has to come out is a tip shifted along the tool axis and a
+  // machine that has moved to put it there.
+  const kin = new Kinematics({
+    name: 'head, no quill',
+    nodes: [
+      { id: 'base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+      { id: 'x', letter: 'X', kind: 'linear', parent: 'base', axis: [1, 0, 0], origin: [0, 0, 0] },
+      { id: 'y', letter: 'Y', kind: 'linear', parent: 'x', axis: [0, 1, 0], origin: [0, 0, 0] },
+      { id: 'z', letter: 'Z', kind: 'linear', parent: 'y', axis: [0, 0, 1], origin: [0, 0, 300] },
+      { id: 'c', letter: 'C', kind: 'rotary', parent: 'z', axis: [0, 0, 1], origin: [0, 0, -100] },
+      { id: 'a', letter: 'A', kind: 'rotary', parent: 'c', axis: [1, 0, 0], origin: [0, 0, -50] },
+      { id: 'spindle', kind: 'carrier', parent: 'a', origin: [0, 0, 0] },
+      { id: 'table', kind: 'carrier', parent: 'base', origin: [0, 0, 0] },
+    ],
+    toolNode: 'spindle',
+    workNode: 'table',
+    spindleOffset: [0, 0, 0],
+    tableOffset: [0, 0, 0],
+  });
+
+  const p = run([
+    'RTCP ON', '>G90 G21', 'F500',
+    '>A30.', '>W0.', '>G0 X0 Y0 Z0',
+    '>W-50.',
+    'M30',
+  ], { kinematics: kin, gauge: 160 });
+  assert.deepEqual(errs(p), []);
+  assert.equal(p.alongTool.letter, 'W');
+  assert.equal(p.alongTool.inChain, false, 'this machine has no W slide, so the control owns it');
+
+  const sim = new Simulator();
+  sim.load({ program: p, stock: null, slots: new Map(), fallbackSlot: null, kinematics: kin });
+
+  const last = p.moves[p.moves.length - 1];
+  const pose = sim.poseAt(last, last.to, 1);
+  const cos = Math.cos((30 * Math.PI) / 180);
+  const sin = Math.sin((30 * Math.PI) / 180);
+
+  // Fifty millimetres down a tool leaning thirty degrees: not down Z.
+  near(pose.tip[0], 0, 1e-9, 'X');
+  near(pose.tip[1], 50 * sin, 1e-9, 'Y follows the lean');
+  near(pose.tip[2], -50 * cos, 1e-9, 'and Z takes the rest');
+  near(Math.hypot(pose.tip[1], pose.tip[2]), 50, 1e-9, 'fifty millimetres in all');
+
+  // The tool has not tilted to do it, and the slides can reach it.
+  near(pose.dir[2], cos, 1e-9, 'the head stayed where it was');
+  assert.ok(kin.linearsForTip(pose.tip, { ...last.rotTo }, 160), 'no X/Y/Z solution for the tip W asked for');
+});
+
+test('a machine with a real W slide keeps it', () => {
+  const kin = new Kinematics({
+    name: 'with a quill',
+    nodes: [
+      { id: 'base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+      { id: 'z', letter: 'Z', kind: 'linear', parent: 'base', axis: [0, 0, 1], origin: [0, 0, 300] },
+      { id: 'w', letter: 'W', kind: 'linear', parent: 'z', axis: [0, 0, 1], origin: [0, 0, 0] },
+      { id: 'spindle', kind: 'carrier', parent: 'w', origin: [0, 0, 0] },
+      { id: 'table', kind: 'carrier', parent: 'base', origin: [0, 0, 0] },
+    ],
+    toolNode: 'spindle',
+    workNode: 'table',
+    spindleOffset: [0, 0, 0],
+    tableOffset: [0, 0, 0],
+  });
+  const p = run(['>G90 G21', '>G0 X0 Y0 Z0', 'M30'], { kinematics: kin, gauge: 0 });
+  assert.equal(p.alongTool.inChain, true, 'a modelled W slide was taken over by the control');
+});

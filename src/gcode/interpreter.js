@@ -194,7 +194,35 @@ function extraLetters(cfg) {
   // stands — this only adds the letter a machine does not name at all.
   const idx = indexerOf(cfg);
   if (idx && !out.has(idx.letter)) out.set(idx.letter, 'rotary');
+  // And the same for the axis that runs down the tool: a length, in
+  // program units, that the control turns into X, Y and Z.
+  const along = alongToolOf(cfg);
+  if (along && !out.has(along.letter)) out.set(along.letter, 'linear');
   return out;
+}
+
+/**
+ * The letter that moves the tool along its own line, or null.
+ *
+ * There is no such slide on the machine: the control reads W as "move the
+ * tip this far the way the spindle is pointing" and drives X, Y and Z to
+ * do it. Which is why it is read whether or not any axis is named W, and
+ * why a machine that does name one — a real quill — keeps that instead.
+ *
+ * @returns {null | {letter:string, inChain:boolean}}
+ */
+function alongToolOf(cfg) {
+  const d = resolveDialect(
+    (cfg && cfg.controller && cfg.controller.dialect)
+      || (cfg && cfg.controller && cfg.controller.flavour) || 'fanuc',
+    cfg && cfg.controller && cfg.controller.syntax,
+  );
+  const a = d.alongTool;
+  if (!a || !a.letter) return null;
+  const kin = cfg && cfg.kinematics;
+  const node = kin && typeof kin.extras === 'function'
+    ? kin.extras().find((n) => n.letter === a.letter) : null;
+  return { ...a, inChain: !!node };
 }
 
 /**
@@ -1729,6 +1757,11 @@ export function interpret(text, config = {}) {
      * control has one and the machine has not been modelled with it.
      */
     indexer: indexerOf(cfg),
+    /**
+     * The letter that runs down the tool, when this control has one and
+     * the machine has no slide of that name.
+     */
+    alongTool: alongToolOf(cfg),
     /**
      * The lines that fill in the machine's own tables and were skipped —
      * the tool-table block a Fidia program opens with. Kept so the summary

@@ -257,6 +257,17 @@ const FIDIA = {
    * everything else stands exactly where it was.
    */
   indexer: { letter: 'U', axis: 'Z' },
+  /**
+   * The axis that moves the tool along its own line.
+   *
+   * W is not a joint and there is no quill: the control takes it as "move
+   * the tip this far the way the spindle is pointing" and works out the
+   * X, Y and Z that get it there, in whatever combination the head's angle
+   * calls for. So it belongs here with the other things the control does
+   * rather than in any machine's chain — and a machine that does have a
+   * real W slide keeps it, the same way as the indexer.
+   */
+  alongTool: { letter: 'W' },
   marks: [
     '^\\s*>', '\\bIPC\\s*=>\\s*CNC\\b', '\\bRTCP(TLCN)?\\s+(ON|OF)\\b',
     '\\$IF\\b', '\\$GOTO\\b', '^\\s*ORIGIN\\s+\\d', '^\\s*CQA\\b', '\\bRG\\s*\\d+',
@@ -335,6 +346,7 @@ export function resolveDialect(id, overrides) {
     tables: overrides.tables || base.tables,
     vectorMode: overrides.vectorMode || base.vectorMode,
     indexer: overrides.indexer || base.indexer,
+    alongTool: overrides.alongTool || base.alongTool,
   };
 }
 
