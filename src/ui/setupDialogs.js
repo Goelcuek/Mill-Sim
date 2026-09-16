@@ -45,16 +45,32 @@ export function openFixtureDialog(app, panel) {
       select('Units in the file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
         state.units, (v) => { state.units = v; }),
       select('Role', Object.entries(MODEL_ROLES).map(([k, v]) => ({ value: k, label: v.label })),
-        state.role, (v) => { state.role = v; }),
+        state.role, (v) => {
+          state.role = v;
+          // A reference part has to sit where the program thinks it sits.
+          // Moving it on the way in is right for a vice, whose place is
+          // wherever you put it, and wrong for the part itself: recentred,
+          // it lines up with nothing and nothing is ever reported against
+          // it.
+          state.recentre = v !== 'reference';
+          sync();
+        }),
     ]),
-    checkbox('Sit it on Z0 and centre it in XY', state.recentre, (v) => { state.recentre = v; }),
+    place,
     el('div.hint', {}, 'STL carries no units, so pick the right one here. Fixtures and clamps are collision-checked against the whole tool assembly; a reference part is not — it is the shape the job should produce, and cutting past it is reported as a gouge.'),
+    placeHint,
   ]);
 
+  const place = checkbox('Sit it on Z0 and centre it in XY', state.recentre, (v) => { state.recentre = v; sync(); });
+  const placeHint = el('div.hint');
   const kindHint = el('div.hint');
 
   const sync = () => {
     stlBlock.hidden = state.kind !== 'stl';
+    place.input.checked = state.recentre;
+    placeHint.textContent = state.role === 'reference' && state.recentre
+      ? 'A reference part that is moved on the way in lines up with nothing: the comparison happens where the program cuts, and this puts the part somewhere else. Leave it off unless the file really is drawn about its own corner.'
+      : '';
     kindHint.textContent = (KINDS.find((k) => k.value === state.kind) || {}).hint || '';
     dialog.setConfirmEnabled(state.kind !== 'stl' || state.files.length > 0);
   };

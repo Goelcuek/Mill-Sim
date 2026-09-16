@@ -146,3 +146,30 @@ test('the walls left out of the comparison are counted, not hidden', () => {
   // Walls are a rim one column wide, so the flat annulus is most of it.
   assert.ok(cmp.skippedCells / (cmp.comparedCells + cmp.skippedCells) < 0.1);
 });
+
+test('a hole drilled where the part has none is a gouge', () => {
+  // The plainest case there is, and the one the whole check exists for: a
+  // block of material, a reference part that is the same block with no
+  // hole in it, and a drill through the middle. Nothing here is near an
+  // edge of the reference, so nothing is excused.
+  const stock = new Stock({ origin: [-50, -50, -20], size: [100, 100, 20], resolution: 0.25 });
+  const solid = boxToTriangles([-50, -50, -20], [50, 50, 0]);
+  const target = buildTargetMap(stock, [solid]);
+  assert.ok(target, 'the reference block did not map onto the stock');
+
+  const mid = Math.floor(stock.ny / 2) * stock.nx + Math.floor(stock.nx / 2);
+  assert.equal(target.map[mid], 0, 'the reference surface over the middle is the top face');
+  assert.equal(target.edge[mid], 0, 'the middle of a flat face is not an edge');
+
+  const drill = buildTool(makeTool({ type: 'flat', diameter: 5, fluteLength: 30 }));
+  const res = stock.carveSweep(drill.cutEnvelope, [0, 0, 0], [0, 0, -10], 0, { target, tolerance: 0.02 });
+  assert.ok(res.gouge, 'drilling a hole the part does not have reported nothing');
+  assert.ok(Math.abs(res.gouge.depth - 10) < 1e-6, `the hole is 10 mm deep and the gouge reads ${res.gouge.depth}`);
+
+  const cmp = compareToTarget(stock, target, 0.02);
+  assert.ok(Math.abs(cmp.maxGouge - 10) < 1e-6, `the comparison reads ${cmp.maxGouge}`);
+  // The hole's own footprint, and nothing else: a Ø5 drill on a 0.25 mm grid.
+  const footprint = (Math.PI * 2.5 * 2.5) / (0.25 * 0.25);
+  assert.ok(Math.abs(cmp.gougeCells - footprint) / footprint < 0.05,
+    `${cmp.gougeCells} cells gouged, expected about ${Math.round(footprint)}`);
+});

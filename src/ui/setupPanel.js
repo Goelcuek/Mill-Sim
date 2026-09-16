@@ -444,7 +444,7 @@ export class SetupPanel extends Panel {
         drop.classList.remove('over');
         this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
       },
-    }, 'or drop STL files here');
+    }, 'or drop STL files here — they land as fixtures; use Add for a reference part');
 
     return section(`Fixtures & models (${app.models.models.length})`, [
       addBar('Add fixture…', () => openFixtureDialog(this.app, this), { hint: 'A vice, parallels, a clamp, or an STL of your own' }),
