@@ -344,21 +344,33 @@ export function openAssemblyDialog(app, assemblyId = null) {
  * was posted against those numbers.
  */
 export function openLibraryImportDialog(app) {
-  const state = { file: null, mode: 'merge' };
+  const state = { file: null, mode: 'merge', units: 'mm' };
   const fileLabel = el('div.hint', {}, 'No file chosen.');
+  const unitRow = el('div.dialog-form');
+
+  // JSON libraries carry their own unit. A text tool list does not: an NX
+  // library is metric or english by the directory it sits in, and a
+  // spreadsheet says nothing at all, so it is asked for — but only when it
+  // is going to be used.
+  const syncUnits = () => {
+    const name = (state.file && state.file.name) || '';
+    unitRow.hidden = /\.(json|tools|hsmlib)$/i.test(name) || !state.file;
+  };
 
   const body = el('div.dialog-form', {}, [
     row([el('button.btn', {
       type: 'button',
       onclick: async () => {
-        const [file] = await pickFile('.json,.tools,.hsmlib,application/json');
+        const [file] = await pickFile('.json,.tools,.hsmlib,.dat,.csv,.tsv,.txt,application/json,text/csv');
         state.file = file || null;
         fileLabel.textContent = file ? file.name : 'No file chosen.';
+        syncUnits();
         dialog.setConfirmEnabled(!!file);
       },
     }, 'Choose file…')]),
     fileLabel,
-    el('div.hint', {}, 'A library exported from Mill-Sim, or a tool library exported from Fusion 360 or HSMWorks — those are read directly, geometry, feeds and T numbers.'),
+    el('div.hint', {}, 'A library exported from Mill-Sim, or a tool library from Fusion 360 or HSMWorks — those are read directly, geometry, feeds and T numbers. A Siemens NX ASCII tool library (tool_database.dat and its neighbours) is read too, as is a tool list saved as CSV: the columns are matched by what they mean, so NX\u2019s FLUTE_LN, ISO\u2019s LCF and a plain \u201cFlute Length\u201d all land in the same place.'),
+    unitRow,
     select('How', [
       { value: 'merge', label: 'Add to this library' },
       { value: 'replace', label: 'Replace this library' },
@@ -366,18 +378,25 @@ export function openLibraryImportDialog(app) {
     el('div.hint', {}, 'Adding keeps what is here and moves any incoming T number that is already taken. Replacing keeps the incoming numbering, which is what you want when the programs were posted against it.'),
   ]);
 
+  unitRow.replaceChildren(
+    select('Units in the file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
+      state.units, (v) => { state.units = v; }),
+    el('div.hint', {}, 'A text tool list carries no unit. NX keeps its metric and english libraries in separate directories \u2014 this is which one this file came from.'),
+  );
+
   const dialog = new Dialog({
     title: 'Import a tool library',
-    subtitle: 'Mill-Sim or Fusion JSON',
+    subtitle: 'Mill-Sim, Fusion or NX',
     width: 480,
     body,
     confirm: 'Import',
     onConfirm: () => {
       if (!state.file) return false;
-      app.importLibraryFile(state.file, state.mode === 'merge');
+      app.importLibraryFile(state.file, state.mode === 'merge', state.units);
       return true;
     },
   });
+  syncUnits();
   dialog.setConfirmEnabled(false);
   dialog.open();
   return dialog;

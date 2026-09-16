@@ -862,16 +862,41 @@ try {
       app.startJog();
       app.setJog('X', 90);
       const inside = app.jogLimit();
-      app.setJog('X', 400);
+      // Asking for 400 on a machine with 100 of travel does not get 400:
+      // the pendant stops at the stop, which is why nothing alarms here.
+      const refused = app.setJog('X', 400);
       const outside = app.jogLimit();
+      // The end of a slider has to be the last place the machine can stand:
+      // a hair inside is clear, a hair outside alarms. The envelope is
+      // stated about the gauge line and the slider is the joint, so this is
+      // the thing that proves the one was solved back onto the other.
+      const range = app.jogRange('X');
+      app.setJog('X', range.max - 0.01);
+      const atEnd = app.jogLimit();
+      app.jog.X = range.max + 0.5;          // past what the slider allows
+      const pastEnd = app.jogLimit();
       app.setJog('X', 0);
-      return { spans, inside, outside };
+      // The travels change, and the sliders follow them.
+      app.setMachine({ limits: { enabled: true, frame: 'home', min: [-1300, -100, -200], max: [500, 100, 50] } });
+      app.setPage('machine', 'limits');
+      app.setPage('machine', 'jog');
+      const wider = app.jogRange('X');
+      const hard = [app.setJog('X', -99999), app.setJog('X', 99999)];
+      app.setJog('X', 0);
+      return { spans, inside, refused, outside, range, atEnd, pastEnd, wider, hard };
     });
-    console.log('jog travels:', JSON.stringify({ spans: jog.spans, outside: jog.outside }));
-    check(jog.spans[0] === '-100..100' && jog.spans[2] === '-200..50',
-      `the sliders span ${jog.spans.join(', ')} rather than the machine's travels`);
+    console.log('jog travels:', JSON.stringify(jog));
+    check(jog.spans.length >= 3, `the jog page drew ${jog.spans.length} sliders`);
     check(jog.inside === null, 'inside the envelope and alarming');
-    check(jog.outside && jog.outside.axis === 'X', 'jogging past the envelope raised nothing');
+    check(Math.abs(jog.refused - 100) < 1e-6 && jog.outside === null,
+      `winding X to 400 on 100 mm of travel reached ${jog.refused}`);
+    check(jog.range && jog.range.source === 'envelope', 'a linear jog slider is not governed by the envelope');
+    check(jog.atEnd === null, 'the last millimetre of the slider already alarms');
+    check(jog.pastEnd && jog.pastEnd.axis === 'X', 'past the end of the slider and no alarm');
+    check(Math.abs(jog.wider.max - jog.wider.min - 1800) < 1e-3,
+      `after widening X to 1800 mm of travel the slider spans ${jog.wider.min}..${jog.wider.max}`);
+    check(Math.abs(jog.hard[0] - jog.wider.min) < 1e-3 && Math.abs(jog.hard[1] - jog.wider.max) < 1e-3,
+      `winding hard over stopped at ${jog.hard.join('/')} rather than the ends of travel`);
     await page.evaluate(() => { window.millsim.stopJog(); window.millsim.setHome([0, 0, 250]); });
   }
 

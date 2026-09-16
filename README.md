@@ -49,6 +49,23 @@ lives inside the spindle bore and can never touch anything. The gauge line
 is the mating face, and the spindle nose starts exactly there. A tool plus a holder plus a stickout is an *assembly*, and
 an assembly is what a `T` number selects.
 
+A shop's tools arrive as a file rather than as forty sets of numbers to
+retype, so **Tools › Library › Import** reads four kinds directly:
+
+| From | File | Notes |
+| --- | --- | --- |
+| Mill-Sim | `.json` | What Export writes. |
+| Fusion 360 / HSMWorks | `.json`, `.tools`, `.hsmlib` | ISO 13399 geometry, holders, presets, `T` numbers. |
+| Siemens NX | `tool_database.dat` and friends | NX's own ASCII library, as it sits on disk under `MACH/resource/library/tool/…`. Pick the unit in the dialog: NX keeps metric and english libraries in separate directories, and the file itself does not say which it is. |
+| Anything else | `.csv`, `.tsv`, `.txt` | A tool list with a header row. Columns are matched by meaning, so NX's `FLUTE_LN`, ISO's `LCF` and a plain `Flute Length` all land in the same place. |
+
+For tools that live in a part's CAM setup rather than in the NX library,
+`integrations/nx/export_tools_to_mill_sim.py` is an NX Open journal — **Tools
+› Journal › Play…** — that walks the setup's tool group and writes a
+Mill-Sim library. It reads each parameter by trying the names NX has used
+for it across versions and tool classes, so a parameter it cannot find is
+left out and defaulted rather than guessed at.
+
 **G-code interpretation.** A full modal interpreter: linear and helical
 arcs in all three planes, both `I/J/K` and `R` forms, inch and metric,
 absolute and incremental, work offsets, tool-length offsets, canned

@@ -148,13 +148,9 @@ export class MachinePanel extends Panel {
     // A linear axis is jogged over the machine's travels, which are the
     // numbers on the Travels page and are measured from home — so a slider
     // spans what the envelope allows, and follows it when either changes.
-    // A rotary has no place in that envelope; its stops are its own.
-    const travel = this.app.state.machine.limits;
-    const envelope = (letter) => {
-      const i = ['X', 'Y', 'Z'].indexOf(letter);
-      if (i < 0 || !travel || !travel.enabled) return null;
-      return { min: Number(travel.min[i]) || 0, max: Number(travel.max[i]) || 0 };
-    };
+    // A rotary has no place in that envelope; its stops are its own. Both
+    // come back from the same place the clamp uses, so the end of a slider
+    // is exactly where the warning starts.
 
     // Updated as the sliders move: a redraw mid-drag would destroy the
     // slider under the pointer.
@@ -171,11 +167,9 @@ export class MachinePanel extends Panel {
     const rows = [];
     for (const node of axes) {
       const rotary = node.kind === 'rotary';
-      const env = rotary ? null : envelope(node.letter);
-      const lo = env ? env.min
-        : (Number.isFinite(node.limits.min) ? Math.max(node.limits.min, -1e5) : (rotary ? -360 : -1000));
-      const hi = env ? env.max
-        : (Number.isFinite(node.limits.max) ? Math.min(node.limits.max, 1e5) : (rotary ? 360 : 1000));
+      const range = app.jogRange(node.letter) || { min: rotary ? -360 : -1000, max: rotary ? 360 : 1000 };
+      const lo = Math.max(range.min, rotary ? -100000 : -1e5);
+      const hi = Math.min(range.max, rotary ? 100000 : 1e5);
       const value = Number(jog[node.letter] || 0);
       const step = rotary ? 1 : 1;
 
@@ -190,6 +184,10 @@ export class MachinePanel extends Panel {
         // it is cheap enough to follow the handle rather than the release.
         oninput: (e) => {
           const v = app.setJog(node.letter, parseFloat(e.target.value));
+          // The handle goes back to where the axis actually got to. Left to
+          // itself it stays under the pointer and reads a position the
+          // machine never reached.
+          if (String(v) !== e.target.value) e.target.value = String(v);
           readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
           if (typed) typed.input.value = String(v);
           showAlarm();
@@ -230,7 +228,11 @@ export class MachinePanel extends Panel {
       ]));
     }
 
-    const over = k.violations ? k.violations(jog) : [];
+    // A slide that the envelope governs has no stops of its own to be past
+    // — reporting the Axes page numbers as well would be reporting a rule
+    // that is no longer enforced.
+    const owned = new Set(axes.filter((n) => !app.envelopeGoverned(n)).map((n) => n.letter));
+    const over = (k.violations ? k.violations(jog) : []).filter((v) => owned.has(v.axis));
     showAlarm();
     return [section('Jog', [
       el('div.hint', {}, 'The axes as the pendant would move them. Nothing is cut and the run is not touched — press play, or leave this page, and the machine goes back to the program.'),
@@ -243,7 +245,7 @@ export class MachinePanel extends Panel {
         { label: 'All to zero', variant: 'primary', onClick: () => { for (const n of axes) app.setJog(n.letter, 0); this.render(); } },
         { label: 'Back to the program', onClick: () => { app.stopJog(); this.app.setPage('machine', 'axes'); } },
       ]),
-      el('div.hint', {}, 'A linear slider spans the machine\u2019s travels \u2014 the envelope on the Travels page, measured from home — and a rotary spans its own stops from the Axes page. Change either and the sliders follow. The warning above is the same check the run makes: the gauge line, measured from home, against the envelope.'),
+      el('div.hint', {}, 'A linear slider spans the machine\u2019s travels \u2014 the envelope on the Travels page, measured from home and solved back onto the joint — and a rotary spans its own stops from the Axes page. Change either and the sliders follow. The end of a slider is exactly where the warning starts, because both ask the same question: the gauge line, measured from home, against the envelope.'),
     ])];
   }
 
@@ -390,8 +392,12 @@ export class MachinePanel extends Panel {
       letter,
       name: s.name || (letter ? `${letter} axis` : 'New carrier'),
       parent: parent ? parent.id : null,
-      limits: s.limits || { min: -360, max: 360 },
     });
+    // A rotary that is not told otherwise turns once each way. A slide has
+    // no such natural number — its travel is the envelope on the Travels
+    // page — so it starts unbounded rather than at a nonsense 360 mm.
+    if (s.limits) node.limits = { ...s.limits };
+    else if (node.kind === 'rotary') node.limits = { min: -360, max: 360 };
     k.nodes.push(node);
     // What the new axis carries is stated, not guessed. Naming the spindle
     // here is what "an A axis above the spindle" means: the spindle stops
@@ -480,10 +486,21 @@ export class MachinePanel extends Panel {
         select('Direction', DIRECTIONS, dirKey(node.axis), (v) => set({ axis: v.split(',').map(Number) })),
         checkbox('Reverse', node.invert, (v) => set({ invert: v })),
       ]));
-      body.push(row([
-        field('Min', node.limits.min, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, min: Number(v) } }) }),
-        field('Max', node.limits.max, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, max: Number(v) } }) }),
-      ]));
+      // A slide along X, Y or Z is the thing the Travels page describes, so
+      // its stops are read from there rather than typed again here. Two
+      // places to say the same number is two numbers that disagree, and it
+      // was the jog sliders that believed the wrong one.
+      if (this.app.envelopeGoverned(node)) {
+        const r = this.app.jogRange(node.letter);
+        body.push(el('div.hint', {}, `Travel comes from the envelope on the Travels page${
+          r && r.source === 'envelope' ? `: ${fmt(r.min, 1)} to ${fmt(r.max, 1)} mm on this joint` : ''
+        }. Change it there and the jog sliders and the over-travel check follow.`));
+      } else {
+        body.push(row([
+          field('Min', node.limits.min, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, min: Number(v) } }) }),
+          field('Max', node.limits.max, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, max: Number(v) } }) }),
+        ]));
+      }
       body.push(row([
         select('Slaved to', masterOptions, node.slaveTo || '', (v) => {
           // Slaving an axis also moves it into its master's folder, unless

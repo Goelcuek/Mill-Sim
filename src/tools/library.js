@@ -7,6 +7,7 @@ import { defaultTools, makeTool, buildTool } from './toolDefs.js';
 import { defaultHolders, makeHolder, buildHolder } from './holderDefs.js';
 import { buildAssembly, makeAssembly } from './assembly.js';
 import { fromFusion } from './fusionLibrary.js';
+import { fromNX } from './nxLibrary.js';
 import { uid } from '../core/util.js';
 
 const STORAGE_KEY = 'millsim.library.v1';
@@ -122,7 +123,21 @@ export class ToolLibrary {
     };
   }
 
-  fromJSON(data, { merge = false } = {}) {
+  /**
+   * Read a library, whoever wrote it.
+   *
+   * @param {object|string} data parsed JSON, or the text of a tool list
+   *   that is not JSON at all — an NX ASCII library or a spreadsheet.
+   * @param {{merge?:boolean, units?:'mm'|'in'}} [opts]
+   */
+  fromJSON(data, { merge = false, units = 'mm' } = {}) {
+    // Text rather than JSON: NX keeps its tools as pipe-delimited records
+    // and every other route out of a CAM system lands as a spreadsheet.
+    if (typeof data === 'string') {
+      const read = fromNX(data, { units });
+      if (!read) return false;
+      return this.fromJSON({ tools: read.tools, holders: read.holders, assemblies: read.assemblies }, { merge });
+    }
     if (!data || typeof data !== 'object') return false;
     let tools = Array.isArray(data.tools) ? data.tools.map((t) => makeTool(t)) : [];
     let holders = Array.isArray(data.holders) ? data.holders.map((h) => makeHolder(h)) : [];

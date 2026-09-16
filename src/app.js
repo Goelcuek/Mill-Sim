@@ -1360,13 +1360,18 @@ export class App {
    * @param {File} file
    * @param {boolean} merge add to what is here, rather than replace it
    */
-  async importLibraryFile(file, merge = true) {
+  async importLibraryFile(file, merge = true, units = 'mm') {
     if (!file) return;
     try {
-      const data = JSON.parse(await file.text());
-      const stats = this.library.fromJSON(data, { merge });
+      const text = await file.text();
+      // JSON when it is JSON — ours or Fusion's. Anything else is read as
+      // text: an NX ASCII library, or the spreadsheet a tool list arrives
+      // as when it has been through anything at all.
+      let data;
+      try { data = JSON.parse(text); } catch (err) { data = text; }
+      const stats = this.library.fromJSON(data, { merge, units });
       if (!stats) {
-        this.notify(`${file.name} has no tools in it that this could read. Mill-Sim libraries and Fusion 360 / HSMWorks tool libraries are both understood; a post or a setup sheet is not.`, 'error');
+        this.notify(`${file.name} has no tools in it that this could read. Mill-Sim and Fusion 360 / HSMWorks libraries, Siemens NX ASCII tool libraries and a tool list as CSV are all understood; a post or a setup sheet is not.`, 'error');
         return;
       }
       this.refreshSlots();
@@ -1801,15 +1806,101 @@ export class App {
     if (this.panels && this.panels.machine) this.panels.machine.refresh();
   }
 
-  /** Move one axis to a value, clamped to its own travel. */
+  /** Move one axis to a value, clamped to the travel that axis really has. */
   setJog(letter, value) {
     if (!this.jog) this.startJog();
-    const node = this.machineView.kinematics.axes().find((n) => n.letter === letter);
+    const range = this.jogRange(letter);
     let v = Number(value) || 0;
-    if (node && node.limits) v = clamp(v, node.limits.min, node.limits.max);
+    if (range) v = clamp(v, range.min, range.max);
     this.jog[letter] = Number(v.toFixed(4));
     this.viewer.invalidate();
     return this.jog[letter];
+  }
+
+  /**
+   * Is this axis stopped by the envelope rather than by a stop of its own?
+   *
+   * A slide that carries the tip along X, Y or Z is the thing the Travels
+   * page is describing: X 1800 mm of travel is a statement about that
+   * slide. Writing it twice — once as an envelope, once as a pair of
+   * numbers on the Axes page — gives two answers that drift apart, and
+   * the jog sliders were reading the wrong one. So for those three letters
+   * the envelope wins and the Axes page stops asking.
+   *
+   * Any other linear joint — a quill, a sub-spindle, a second head — has
+   * no entry in the envelope and keeps its own stops.
+   *
+   * @param {object} node a kinematic axis
+   */
+  envelopeGoverned(node) {
+    if (!node || node.kind === 'rotary') return false;
+    if (!['X', 'Y', 'Z'].includes(node.letter)) return false;
+    const l = this.state.machine.limits;
+    return !!(l && l.enabled);
+  }
+
+  /**
+   * How far one axis can be wound, as the jog page should draw it.
+   *
+   * The ends of a jog slider have to be exactly where the over-travel
+   * warning starts, or the pendant lies. For a rotary that is its own pair
+   * of stops. For a slide it is the envelope, which is stated about the
+   * gauge line rather than about the joint — so the joint range is solved
+   * for rather than assumed: wind the axis a millimetre, see where the
+   * gauge point went, and invert that. It comes out exact for a slide that
+   * is square to the machine and honest for one that is not, and it follows
+   * the sign the axis is built with rather than hoping it is positive.
+   *
+   * @param {string} letter
+   * @returns {null|{min:number, max:number, source:'axis'|'envelope'}}
+   */
+  jogRange(letter) {
+    const kin = this.machineView.kinematics;
+    const node = kin.axes().find((n) => n.letter === letter);
+    if (!node) return null;
+    const own = {
+      min: Number.isFinite(node.limits && node.limits.min) ? node.limits.min : -1e6,
+      max: Number.isFinite(node.limits && node.limits.max) ? node.limits.max : 1e6,
+      source: 'axis',
+    };
+    if (!this.envelopeGoverned(node)) return own;
+
+    const limits = limitsInScene(this.state.machine);
+    const home = homeOf(this.state.machine);
+    const base = { ...(this.jog || {}) };
+    const at = (v) => this.gaugeFromHome({ ...base, [letter]: v });
+    const p0 = at(0);
+    const p1 = at(1);
+
+    let lo = -1e6;
+    let hi = 1e6;
+    for (let i = 0; i < 3; i++) {
+      const slope = p1[i] - p0[i];
+      if (Math.abs(slope) < 1e-9) continue;          // this axis does not move that wall
+      const a = (limits.min[i] - home[i] - p0[i]) / slope;
+      const b = (limits.max[i] - home[i] - p0[i]) / slope;
+      lo = Math.max(lo, Math.min(a, b));
+      hi = Math.min(hi, Math.max(a, b));
+    }
+    if (!(hi > lo)) return own;                       // nothing sensible to draw
+    return { min: Number(lo.toFixed(4)), max: Number(hi.toFixed(4)), source: 'envelope' };
+  }
+
+  /**
+   * Where the gauge line has ended up, measured from home.
+   *
+   * The number a control reads out, for a set of axis values. Both the jog
+   * slider's ends and the over-travel warning are worked out from this one
+   * place, so they cannot disagree.
+   *
+   * @param {object} values axis letters to positions
+   */
+  gaugeFromHome(values) {
+    const kin = this.machineView.kinematics;
+    const gauge = this.simulator.gaugeLength || 0;
+    const home = homeOf(this.state.machine);
+    const r = kin.toolInPart(values, this.machineView.assemblyLength);
+    return [0, 1, 2].map((i) => r.tip[i] + r.axis[i] * gauge - home[i]);
   }
 
   /**
@@ -1841,15 +1932,9 @@ export class App {
    */
   jogLimit() {
     if (!this.jog) return null;
-    const kin = this.machineView.kinematics;
-    const gauge = this.simulator.gaugeLength || 0;
-    const r = kin.toolInPart(this.jog, this.machineView.assemblyLength);
-    const point = [
-      r.tip[0] + r.axis[0] * gauge,
-      r.tip[1] + r.axis[1] * gauge,
-      r.tip[2] + r.axis[2] * gauge,
-    ];
-    return checkLimits(point, limitsInScene(this.state.machine), homeOf(this.state.machine));
+    const home = homeOf(this.state.machine);
+    const point = this.gaugeFromHome(this.jog).map((v, i) => v + home[i]);
+    return checkLimits(point, limitsInScene(this.state.machine), home);
   }
 
   /**
