@@ -306,6 +306,33 @@ export class ToolLibrary {
     this.emit('assemblies');
   }
 
+  /**
+   * Remove several at once.
+   *
+   * One change rather than one per item: everything that listens to the
+   * library redraws on a change, and clearing out forty imported cutters
+   * one at a time redrew the panel forty times and left the assemblies
+   * that used them being patched up over and over.
+   *
+   * @param {'tools'|'holders'|'assemblies'} kind
+   * @param {string[]} ids
+   * @returns {number} how many were actually there to remove
+   */
+  removeMany(kind, ids) {
+    const gone = new Set(ids);
+    if (!gone.size) return 0;
+    const before = this[kind].length;
+    this[kind] = this[kind].filter((x) => !gone.has(x.id));
+    if (kind === 'tools') {
+      for (const a of this.assemblies) if (gone.has(a.toolId)) a.toolId = '';
+    } else if (kind === 'holders') {
+      for (const a of this.assemblies) if (gone.has(a.holderId)) a.holderId = '';
+    }
+    const removed = before - this[kind].length;
+    if (removed) this.emit(kind);
+    return removed;
+  }
+
   /** Validation report shown in the Tools panel. */
   audit(machine = {}) {
     const issues = [];

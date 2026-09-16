@@ -125,7 +125,6 @@ export class App {
       playing: false,
       speed: '4',
       activeAssemblyId: null,
-      persistLibrary: true,
       exportDecimate: 1,
       seekTarget: null,
       /** What has been measured on the part, newest last. */
@@ -168,8 +167,12 @@ export class App {
     this.viewer.start();
     this.bindKeys();
 
+    // The library is kept, full stop. It used to be a question the Library
+    // page asked — a tick box about browser storage — which is a question
+    // about the browser rather than about the tools, and the browser is on
+    // its way out.
     this.library.onChange(() => {
-      if (this.state.persistLibrary) this.library.save();
+      this.library.save();
       this.scheduleSlotRefresh();
     });
 
@@ -1407,11 +1410,6 @@ export class App {
     if (!Array.isArray(this.state.machine.macros)) this.state.machine.macros = [];
     this.state.machine.macros.push(mac);
     return mac;
-  }
-
-  setPersistLibrary(on) {
-    this.state.persistLibrary = on;
-    if (on) this.library.save();
   }
 
   setActiveAssembly(id) {

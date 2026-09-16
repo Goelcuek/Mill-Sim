@@ -122,3 +122,39 @@ test('the built-ins can be put back without touching anything else', () => {
   assert.ok(lib.tool(mine.id), 'the tool I added is still mine');
   assert.equal(lib.mergeDefaults(), 0, 'nothing to do the second time');
 });
+
+test('a pile of cutters goes in one go, and the tool table is patched once', () => {
+  const lib = new ToolLibrary().loadDefaults();
+  const before = lib.tools.length;
+  const doomed = lib.tools.slice(0, 3).map((t) => t.id);
+  const users = lib.assemblies.filter((a) => doomed.includes(a.toolId)).length;
+  assert.ok(users > 0, 'the tools being removed are in use, or this proves nothing');
+
+  let changes = 0;
+  lib.onChange(() => { changes++; });
+
+  assert.equal(lib.removeMany('tools', doomed), 3);
+  assert.equal(lib.tools.length, before - 3);
+  assert.equal(changes, 1, 'removing three raised one change, not three');
+  // Every assembly that used one is left without a cutter rather than
+  // pointing at something that is no longer there.
+  for (const a of lib.assemblies) assert.ok(!a.toolId || lib.tool(a.toolId), `${a.name} points at a cutter that exists`);
+  assert.equal(lib.assemblies.filter((a) => !a.toolId).length, users);
+
+  // An id that is not there is not an error, and an empty list is a no-op.
+  assert.equal(lib.removeMany('tools', [doomed[0], 'nothing_like_it']), 0);
+  assert.equal(lib.removeMany('tools', []), 0);
+  assert.equal(changes, 1, 'a no-op raised a change');
+});
+
+test('holders and assemblies go the same way', () => {
+  const lib = new ToolLibrary().loadDefaults();
+  const held = lib.assemblies.find((a) => a.holderId);
+  assert.ok(held, 'no assembly uses a holder, so this proves nothing');
+  assert.equal(lib.removeMany('holders', [held.holderId]), 1);
+  assert.equal(lib.assembly(held.id).holderId, '', 'the assembly kept a holder that is gone');
+
+  const ids = lib.assemblies.slice(0, 2).map((a) => a.id);
+  assert.equal(lib.removeMany('assemblies', ids), 2);
+  for (const id of ids) assert.equal(lib.assembly(id), null);
+});

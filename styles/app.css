@@ -722,6 +722,40 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   border-radius: 4px;
   padding: 1px 5px;
 }
+/* The tick that picks a row out of a long list for a bulk delete. It is
+   faint until the pointer is over the list, so a library nobody is tidying
+   still reads as a list of tools rather than as a form to fill in. */
+.list-tick {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  opacity: .35;
+  transition: opacity .12s, background .12s, border-color .12s;
+  position: relative;
+}
+.list:hover .list-tick, .list-item.selected .list-tick { opacity: .8; }
+.list-tick:hover { opacity: 1; border-color: var(--accent); }
+.list-tick.on {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.list-tick.on::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(42deg);
+}
+.list-item.marked { border-color: var(--accent); }
+
 .swatch { width: 4px; height: 30px; border-radius: 2px; flex: none; }
 .stage-row { align-items: flex-end; }
 .stage-index { flex: 0 0 14px; color: var(--text-4); font-family: var(--mono); padding-bottom: 7px; }

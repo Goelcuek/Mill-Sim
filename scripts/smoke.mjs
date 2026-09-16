@@ -976,6 +976,82 @@ try {
     await page.evaluate(() => { window.millsim.stopJog(); window.millsim.setHome([0, 0, 250]); });
   }
 
+  // ---- a pile of cutters goes in one go ---------------------------------
+  //
+  // A library arrives forty tools at a time and is tidied the same way, so
+  // the lists take a selection rather than a row: a tick per row, Ctrl to
+  // add and drop, Shift for a run, and one confirmation for the lot.
+  {
+    await page.click('.ribbon-tab[data-tab="tools"]');
+    await page.click('.ribbon-page[data-page="tools"]');
+    await page.waitForTimeout(400);
+    const before = await page.evaluate(() => window.millsim.library.tools.length);
+    check(before >= 6, `only ${before} cutters to pick from`);
+
+    // Rows are redrawn on every click, so they are addressed by position
+    // rather than held on to.
+    const nth = (i) => `.list-item:nth-of-type(${i + 1})`;
+    await page.click(nth(1));
+    await page.click(nth(4), { modifiers: ['Shift'] });
+    await page.waitForTimeout(250);
+    const run = await page.evaluate(() => ({
+      marked: window.millsim.panels.tools.marked.tool.size,
+      ticks: document.querySelectorAll('.list-tick.on').length,
+      labels: [...document.querySelectorAll('.btn')].map((b) => b.textContent).filter((t) => /^(Delete|Duplicate)/.test(t)),
+    }));
+    console.log('bulk select:', JSON.stringify(run));
+    check(run.marked === 4 && run.ticks === 4, `a shift-click run took ${run.marked} rows, not 4`);
+    check(run.labels.includes('Delete 4'), `the buttons read ${run.labels.join(', ')}`);
+
+    // Ctrl adds one and takes one away; the tick box does the same thing
+    // without the keyboard.
+    await page.click(nth(5), { modifiers: ['Control'] });
+    await page.click(nth(2), { modifiers: ['Control'] });
+    await page.click(`${nth(0)} .list-tick`);
+    await page.waitForTimeout(250);
+    const picked = await page.evaluate(() => window.millsim.panels.tools.selectedIds().length);
+    check(picked === 5, `after adding, dropping and ticking there are ${picked} rows, not 5`);
+
+    await page.evaluate(() => [...document.querySelectorAll('.btn')].find((x) => /^Delete \d+$/.test(x.textContent)).click());
+    await page.waitForTimeout(300);
+    const asked = await page.evaluate(() => {
+      const d = document.querySelector('.dialog');
+      return d ? d.textContent : '';
+    });
+    check(/Delete 5 cutters\?/.test(asked), `the confirmation said "${asked.slice(0, 60)}"`);
+    await page.evaluate(() => [...document.querySelectorAll('.dialog .btn')].find((x) => /^Delete/.test(x.textContent)).click());
+    await page.waitForTimeout(450);
+
+    const after = await page.evaluate(() => ({
+      tools: window.millsim.library.tools.length,
+      marked: window.millsim.panels.tools.marked.tool.size,
+      rows: document.querySelectorAll('.list-item').length,
+      // Nothing may be left pointing at a cutter that is gone.
+      dangling: window.millsim.library.assemblies.filter((a) => a.toolId && !window.millsim.library.tool(a.toolId)).length,
+    }));
+    console.log('bulk delete:', JSON.stringify({ before, ...after }));
+    check(after.tools === before - 5, `${before} cutters less five left ${after.tools}`);
+    check(after.rows === after.tools, 'the list did not redraw after the delete');
+    check(after.marked === 0, 'the ticks survived the delete');
+    check(after.dangling === 0, `${after.dangling} assemblies point at a cutter that is gone`);
+
+    // One row on its own still reads as one row.
+    await page.click(nth(0));
+    await page.waitForTimeout(200);
+    const single = await page.evaluate(() => [...document.querySelectorAll('.btn')].map((b) => b.textContent).filter((t) => /^(Delete|Duplicate)/.test(t)));
+    check(single.includes('Delete') && !single.some((t) => /^Delete \d/.test(t)), `one row selected and the buttons read ${single.join(', ')}`);
+
+    // The library is kept without anyone being asked to tick a box about
+    // browser storage — that question goes away with the browser.
+    await page.click('.ribbon-page[data-page="library"]');
+    await page.waitForTimeout(300);
+    const libPage = await page.evaluate(() => document.body.innerText);
+    check(!/Keep the library in this browser/.test(libPage), 'the browser-storage toggle is still on the Library page');
+
+    await page.evaluate(() => { window.millsim.library.mergeDefaults(); window.millsim.refreshSlots(); });
+    await page.waitForTimeout(300);
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you
