@@ -74,6 +74,12 @@ For tools that live in a part's CAM setup rather than in the NX library,
 › Journal › Play…** — that walks the setup's tool group and writes a
 Mill-Sim library.
 
+It brings the holders too. NX describes a holder the way Mill-Sim does — a
+run of steps, each with a lower diameter, an upper diameter and a length —
+so the stack comes across as it stands, turned nose-first, shared between
+every tool that runs in it, and with the tool's projection as the
+stickout. That is the part that usually crashes, so it is worth having.
+
 It does not assume it knows NX Open's spelling. The call that hands you a
 tool's parameters has moved between versions and differs between tool
 classes, so the journal asks the objects in front of it what they can do:

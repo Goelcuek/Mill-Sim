@@ -106,5 +106,71 @@ eq(f2.get('fluteLength'), 18.0, 'flute length under another spelling')
 eq(f2.get('fluteCount'), 3.0, 'flute count under another spelling')
 
 print()
+print('holder_stages(), the three ways NX might keep a holder:')
+
+class Step:
+    def __init__(self, lo, up, ln):
+        self.LowerDiameterBuilder = Inh(lo)
+        self.UpperDiameterBuilder = Inh(up)
+        self.LengthBuilder = Inh(ln)
+
+class ListHolder:
+    # A list of step objects, under a name that says what it is.
+    def __init__(self):
+        self.HolderSections = [Step(22, 34, 26), Step(34, 44, 24), Step(44, 48, 22)]
+        self.TlDiameterBuilder = Inh(10.0)
+st = j.nose_first(j.holder_stages(ListHolder(), 1.0))
+eq(len(st), 3, 'three steps off a list')
+eq(st[0], {'dia': 22.0, 'topDia': 34.0, 'length': 26.0}, 'nose step')
+eq(st[-1]['topDia'], 48.0, 'top step')
+
+class SubHolder:
+    # A sub-builder carrying numbered steps.
+    class H:
+        def __init__(self):
+            self.Dia1 = 20.0; self.Len1 = 30.0
+            self.Dia2 = 40.0; self.Len2 = 25.0
+    def __init__(self):
+        self.HolderBuilder = SubHolder.H()
+st2 = j.nose_first(j.holder_stages(SubHolder(), 1.0))
+eq(len(st2), 2, 'two steps off a sub-builder')
+eq(st2[0]['dia'], 20.0, 'first step diameter')
+
+class FlatHolder:
+    # Flat parameters on the tool builder itself.
+    def __init__(self):
+        self.TlHolderDia1 = 25.0; self.TlHolderLen1 = 40.0
+        self.TlHolderDia2 = 50.0; self.TlHolderLen2 = 30.0
+        self.TlDiameterBuilder = Inh(12.0)
+st3 = j.nose_first(j.holder_stages(FlatHolder(), 1.0))
+eq(len(st3), 2, 'two steps off flat parameters')
+
+print()
+print('...and an inch part is converted, and an upside-down stack turned over:')
+st4 = j.nose_first(j.holder_stages(ListHolder(), 25.4))
+eq(round(st4[0]['dia'], 3), 558.8, '22 in is 558.8 mm')
+
+class Upside:
+    def __init__(self):
+        self.HolderSections = [Step(48, 44, 22), Step(44, 34, 24), Step(34, 22, 26)]
+st5 = j.nose_first(j.holder_stages(Upside(), 1.0))
+eq(st5[0]['dia'], 22.0, 'the narrow end is the nose')
+eq(st5[-1]['topDia'], 48.0, 'the wide end is the gauge line')
+
+print()
+print('a tool with no holder on it says so rather than inventing one:')
+class Bare:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(8.0)
+        self.TlFluteLnBuilder = Inh(20.0)
+eq(j.holder_stages(Bare(), 1.0), [], 'no holder, no stages')
+
+print()
+print('taper_of() reads the interface out of the name:')
+eq(j.taper_of('TK2105_FREZE_BT40'), 'BT40', 'BT40')
+eq(j.taper_of('HSK 63 A shrink'), 'HSK63A', 'HSK63-A however it is spelt')
+eq(j.taper_of('TKY60053_LOLIPOP'), 'none', 'nothing claimed')
+
+print()
 print('PASS' if ok else 'FAIL')
 sys.exit(0 if ok else 1)

@@ -150,3 +150,65 @@ test('a shop that names its tools in Turkish is read too', () => {
   assert.equal(nxToolType('Ball Mill', {}), 'ball');
   assert.equal(nxToolType('Spot Drill', {}), 'chamfer');
 });
+
+test('a library the NX journal writes imports with its holders attached', () => {
+  // The shape the journal writes: tools, the holders they run in, and an
+  // assembly pairing each with a stickout. Holders are shared, because a
+  // shop runs forty tools in a dozen chucks.
+  const fromJournal = {
+    version: 1,
+    exported: 'NX',
+    tools: [
+      {
+        id: 'nx1', name: 'TK2105_FREZE', type: 'flat', number: 21,
+        diameter: 10, cornerRadius: 0, tipDiameter: 0, tipAngle: 90, taperAngle: 0,
+        fluteLength: 26, fluteCount: 4, shankDiameter: 10, neckDiameter: 0,
+        neckLength: 0, overallLength: 75, material: 'carbide', notes: 'From NX',
+      },
+      {
+        id: 'nx2', name: 'TK1314_MATKAP', type: 'drill', number: 13,
+        diameter: 8.5, cornerRadius: 0, tipDiameter: 0, tipAngle: 118, taperAngle: 0,
+        fluteLength: 70, fluteCount: 2, shankDiameter: 8.5, neckDiameter: 0,
+        neckLength: 0, overallLength: 110, material: 'hss', notes: 'From NX',
+      },
+    ],
+    holders: [{
+      id: 'nxh1', name: 'Holder 1 (TK2105_FREZE)', type: 'custom', taper: 'BT40',
+      stages: [
+        { dia: 22, topDia: 34, length: 26 },
+        { dia: 34, topDia: 44, length: 24 },
+        { dia: 44, topDia: 48, length: 22 },
+      ],
+      notes: 'From NX',
+    }],
+    assemblies: [
+      { id: 'nxa0', name: 'T21 · TK2105_FREZE', number: 21, toolId: 'nx1', holderId: 'nxh1', stickout: 36 },
+      { id: 'nxa1', name: 'T13 · TK1314_MATKAP', number: 13, toolId: 'nx2', holderId: 'nxh1', stickout: 98 },
+    ],
+  };
+
+  const lib = new ToolLibrary();
+  const stats = lib.fromJSON(fromJournal);
+  assert.ok(stats);
+  assert.equal(lib.tools.length, 2);
+  assert.equal(lib.holders.length, 1);
+  assert.equal(lib.assemblies.length, 2);
+
+  // The holder survives as a stack of cones, nose first and widening.
+  const holder = lib.holder('nxh1');
+  assert.equal(holder.stages.length, 3);
+  assert.equal(holder.taper, 'BT40');
+  assert.ok(holder.stages[0].dia < holder.stages[2].topDia, 'the stack narrows towards the nose');
+
+  // And both assemblies build against it, which is what the simulation
+  // needs: a cutter, a body above it and a gauge length to the spindle.
+  for (const a of lib.assemblies) {
+    const built = lib.build(a.id, {});
+    assert.ok(built, `${a.name} did not build`);
+    assert.ok(built.holder, `${a.name} lost its holder`);
+    assert.ok(built.gaugeLength > built.stickout, `${a.name} has no holder above the tool`);
+    // The widest thing on the assembly is the flange, not the cutter —
+    // which is the whole reason a holder is worth importing.
+    assert.ok(built.bodyRadius * 2 >= 44, `${a.name} is only ${built.bodyRadius * 2} across`);
+  }
+});
