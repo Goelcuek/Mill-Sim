@@ -599,73 +599,71 @@ class Section5:
         self._r = rows
     def GetSection(self, i): return tuple(self._r[i])
 
-# TK1457: the steps are still there because NX keeps them, but the Define
-# Shank tick box is cleared.
-tk_rows = [[1.0, 0.75, 18.43494882292202, 1.5, 0.0], [1.5, 2.25, 0.0, 1.5, 0.0]]
 
-class ToolWithFlag:
-    def __init__(self, defined, rows=tk_rows, taper=True):
-        self.TlDiameterBuilder = Inh(0.75)
+class RealTool:
+    """A tool as NX hands it over: sections, and the tool's own summary of
+    the same shank. Clearing Define Shank zeroes the summary and leaves the
+    sections behind."""
+    def __init__(self, dia, scalars, rows, extra=None):
+        self.TlDiameterBuilder = Inh(dia)
+        self.TaperedShankDiameterBuilder = Inh(scalars[0])
+        self.TaperedShankLengthBuilder = Inh(scalars[1])
+        self.TaperedShankTaperLengthBuilder = Inh(scalars[2])
         self.ShankSectionBuilder = Section5(rows)
-        self.DefineShank = defined
-        # The one that is about the taper, not about there being a shank.
-        self.UseTaperedShank = taper
+        for k, v in (extra or {}).items():
+            setattr(self, k, v)
 
-eq(j.shank_defined(ToolWithFlag(False)), False, 'the tick box is read')
-eq(j.shank_defined(ToolWithFlag(True)), True, 'either way')
-eq(j.shank_stages(ToolWithFlag(False), 25.4, 19.05), [], 'unticked: no shank, whatever is remembered')
-eq(len(j.shank_stages(ToolWithFlag(True), 25.4, 19.05)), 2, 'ticked: the shank it remembers')
+LOLLI_ROWS = [[0.07, 1.15, 3.235015057784577, 0.2, 0.0], [0.2, 1.85, 0.0, 0.2, 0.0]]
+TK_ROWS = [[1.0, 0.75, 18.43494882292202, 1.5, 0.0], [1.5, 2.25, 0.0, 1.5, 0.0]]
 
-# UseTaperedShank says the shank is tapered, not that there is one, so it
-# is never mistaken for the tick box.
-class OnlyTaperFlag:
-    def __init__(self):
-        self.TlDiameterBuilder = Inh(0.75)
-        self.ShankSectionBuilder = Section5(tk_rows)
-        self.UseTaperedShank = True
-eq(j.shank_defined(OnlyTaperFlag()), None, 'a taper flag is not a define flag')
+# Both tools, exactly as their diagnostics read. The lollipop's tick box is
+# set and its summary matches its sections; TK1457's is cleared and its
+# summary has gone to zero while the sections are still remembered.
+lolli = RealTool(0.12, (0.2, 3.0, 1.15), LOLLI_ROWS, {'UseTaperedShank': True})
+tk = RealTool(0.75, (0.0, 0.0, 0.0), TK_ROWS)
 
-# With no flag at all the shank is left alone by default: a plain tool is
-# wrong in a small way, a shank that is not there hides a crash.
-eq(j.shank_stages(OnlyTaperFlag(), 25.4, 19.05), [], 'no flag, no shank')
-j.SHANK_WITHOUT_FLAG = True
-eq(len(j.shank_stages(OnlyTaperFlag(), 25.4, 19.05)), 2, 'unless the switch at the top says otherwise')
-j.SHANK_WITHOUT_FLAG = False
+eq(len(j.shank_stages(lolli, 25.4, 3.048)), 2, 'the lollipop keeps the shank it is using')
+eq(j.shank_stages(tk, 25.4, 19.05), [], 'TK1457 does not get the one it is not')
+eq(j.tapered_summary(lolli), (0.2, 3.0, 1.15), 'the summary is read off the tool')
+eq(j.tapered_summary(tk), (0.0, 0.0, 0.0), 'and is zero where the box is cleared')
 
-# The flag on the section builder itself, where some builds keep it.
-class FlagOnSection:
-    def __init__(self):
-        self.TlDiameterBuilder = Inh(0.75)
-        self.ShankSectionBuilder = Section5(tk_rows)
-        self.ShankSectionBuilder.Defined = False
-eq(j.shank_defined(FlagOnSection()), False, 'found on the section builder too')
+# UseTaperedShank is True on the lollipop and says nothing about whether
+# there is a shank, so it is never the thing that decides.
+eq(j.shank_defined(lolli), None, 'a taper flag is not a define flag')
 
-# Every boolean is listed for the diagnostic, so a flag with a name this
-# does not know can be named from one run.
-names = [n for n, _ in j.shank_flags(ToolWithFlag(False))]
-eq('DefineShank' in names, True, 'the flag is listed')
-eq('ShankSectionBuilder.' in ' '.join(names) or True, True, 'along with the section builder\'s own')
+# A flag, where a build has one, overrules the summary either way.
+eq(j.shank_stages(RealTool(0.12, (0.2, 3.0, 1.15), LOLLI_ROWS,
+                           {'DefineShank': False}), 25.4, 3.048), [],
+   'an explicit no beats an agreeing summary')
+eq(len(j.shank_stages(RealTool(0.75, (0.0, 0.0, 0.0), TK_ROWS,
+                               {'DefineShank': True}), 25.4, 19.05)), 2,
+   'and an explicit yes beats a zeroed one')
+eq(j.shank_defined(RealTool(0.12, (0.2, 3.0, 1.15), LOLLI_ROWS,
+                            {'ShankIsDefined': True})), True, 'however it is spelt')
+
+# A summary that disagrees in size, not just in being zero, is the tick box
+# cleared on a tool that used to have a different shank.
+eq(j.shank_stages(RealTool(0.75, (1.5, 9.0, 0.75), TK_ROWS), 25.4, 19.05), [],
+   'a summary that does not match the sections is not describing them')
 
 print()
 print("...and TK1457 comes out at the length its dialog states:")
 read = {'diameter': 19.05, 'fluteLength': 50.8, 'overallLength': 127.0}
 flute, height = read['fluteLength'], read['overallLength']
-for defined, want_len, want_out, what in ((False, 127.0, 101.6, 'unticked'),
-                                          (True, 203.2, 177.8, 'ticked')):
-    shank = j.shank_stages(ToolWithFlag(defined), 25.4, 19.05)
-    body = j.body_above_flutes(height, flute, shank, 19.05) if hasattr(j, 'body_above_flutes') else None
-    if body is None:
-        body = []
-        if shank:
-            gap = height - flute
-            if gap > 0.01:
-                body.append({'dia': 19.05, 'topDia': 19.05, 'length': gap})
-            body.extend(shank)
+for tool, want_len, want_out, what in ((tk, 127.0, 101.6, 'shank cleared'),
+                                       (RealTool(0.75, (1.5, 3.0, 0.75), TK_ROWS),
+                                        203.2, 177.8, 'shank in use')):
+    shank = j.shank_stages(tool, 25.4, 19.05)
+    body = []
+    if shank:
+        gap = height - flute
+        if gap > 0.01:
+            body.append({'dia': 19.05, 'topDia': 19.05, 'length': gap})
+        body.extend(shank)
     overall = flute + sum(x['length'] for x in body) if body else height
-    near(overall, want_len, '%s: %.1f mm' % (what, want_len))
+    near(overall, want_len, '%s: %.1f mm long' % (what, want_len))
     near(j.stickout_of(overall, flute, 25.4, None), want_out, '%s: %.1f mm out' % (what, want_out))
 
-print()
 print('taper_of() reads the interface out of the name:')
 eq(j.taper_of('TK2105_FREZE_BT40'), 'BT40', 'BT40')
 eq(j.taper_of('HSK 63 A shrink'), 'HSK63A', 'HSK63-A however it is spelt')

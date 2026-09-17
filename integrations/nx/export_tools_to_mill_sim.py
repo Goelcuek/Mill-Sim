@@ -161,7 +161,7 @@ def read_tool(collection, tool, name, tried, scale):
     # alone. Reading them from every candidate was most of the half minute.
     extra = {"holder": [], "shank": [], "insertion": None,
              "holderRows": [], "shankRows": [], "shankDefined": None,
-             "shankFlags": []}
+             "shankFlags": [], "shankSummary": (None, None, None)}
     # The cutter's own size, which is what says whether a shank reading
     # could be true.
     diameter = (fields_from(best[0]).get("diameter") or 0.0) * scale
@@ -179,6 +179,7 @@ def read_tool(collection, tool, name, tried, scale):
             extra["shankRows"] = raw_rows(builder, "shank")
             extra["shankDefined"] = shank_defined(builder)
             extra["shankFlags"] = shank_flags(builder)
+            extra["shankSummary"] = tapered_summary(builder)
         finally:
             try:
                 builder.Destroy()
@@ -837,6 +838,64 @@ def section_builder(builder, which):
     return None
 
 
+def tapered_summary(builder):
+    """What the tool says about its shank besides the sections.
+
+    NX states a shank twice: as the steps on the Shank tab, and as three
+    numbers on the tool itself. Both are in the part's units.
+
+    @returns (diameter, length, taper length), any of them None
+    """
+    nums = numbers_on(builder)
+    out = {"dia": None, "len": None, "taper": None}
+    for name, v in nums.items():
+        low = norm(name)
+        if not low.startswith("taperedshank"):
+            continue
+        rest = low[len("taperedshank"):]
+        if rest == "taperlength":
+            out["taper"] = v
+        elif rest == "length":
+            out["len"] = v
+        elif rest == "diameter" or rest == "dia":
+            out["dia"] = v
+    return out["dia"], out["len"], out["taper"]
+
+
+def shank_in_use(builder, rows_total):
+    """Is the shank NX remembers actually on the tool?
+
+    The Shank tab has a Define Shank tick box and clearing it does not
+    clear the steps, so the steps alone cannot say. Two things can:
+
+    1. A flag, where the build has one. Not every builder does -- a
+       T-cutter builder has no such attribute at all, which is how the
+       first version of this took the lollipop's shank away.
+
+    2. Failing that, the tool's own summary of its shank. NX states the
+       same shank twice, and clearing the tick box zeroes the summary while
+       leaving the steps behind, so the two disagreeing is the answer:
+
+           lollipop   summary 3.00 in   steps 3.00 in   on the tool
+           TK1457     summary 0.00 in   steps 3.00 in   cleared
+
+    A defined shank with no taper at all may summarise as zero and be
+    passed over. That leaves a plain tool, which is wrong in a small way,
+    where the other mistake is metal that is not there and hides a crash.
+
+    @param rows_total the sections' total length, in the part's units
+    """
+    flag = shank_defined(builder)
+    if flag is not None:
+        return flag
+    if rows_total <= 0:
+        return False
+    _, length, _ = tapered_summary(builder)
+    if length is None:
+        return SHANK_WITHOUT_FLAG
+    return abs(length - rows_total) < max(1e-4, rows_total * 0.01)
+
+
 def shank_stages(builder, scale, diameter=0.0):
     """The tool's own body above the flutes, as a stack of cones.
 
@@ -849,13 +908,6 @@ def shank_stages(builder, scale, diameter=0.0):
     Read tip-upwards, which is the order Mill-Sim wants, so it is not
     turned over the way a holder is.
     """
-    # A shank NX is not using is not a shank. It keeps the steps after the
-    # tick box is cleared, and they read perfectly well -- they are just
-    # not on the tool.
-    defined = shank_defined(builder)
-    if defined is False or (defined is None and not SHANK_WITHOUT_FLAG):
-        return []
-
     for name in dir(builder):
         low = name.lower()
         if name.startswith("_") or "shank" not in low or "section" not in low:
@@ -871,8 +923,15 @@ def shank_stages(builder, scale, diameter=0.0):
         # it. Anything outside that is not a diameter and is refused.
         limits = (diameter / 20.0, diameter * 4.0) if diameter > 0 else None
         stages = stages_from_rows(rows, scale, limits)
-        if stages:
-            return stages
+        if not stages:
+            continue
+        # A shank NX is not using is not a shank. The steps are still here
+        # after the tick box is cleared, and they read perfectly well --
+        # they are just not on the tool.
+        total = sum(st["length"] for st in stages) / (scale or 1.0)
+        if not shank_in_use(builder, total):
+            return []
+        return stages
     return []
 
 
@@ -1171,6 +1230,7 @@ def main():
         shank_rows = []
         shank_defined_flag = None
         shank_flag_list = []
+        shank_summary = (None, None, None)
         shape = []
         factory_name = None
         try:
@@ -1183,6 +1243,7 @@ def main():
             shank_rows = extra.get("shankRows", [])
             shank_defined_flag = extra.get("shankDefined")
             shank_flag_list = extra.get("shankFlags", [])
+            shank_summary = extra.get("shankSummary", (None, None, None))
             how = factory_name or ""
         except Exception:
             failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
@@ -1350,13 +1411,15 @@ def main():
         diag.append("  ø%.4f  flute %.4f  length %.4f  insertion %s  stickout %.4f  (%s)"
                     % (diameter, flute, overall, insertion,
                        assemblies[-1]["stickout"], kind))
-        diag.append("  shank defined: %s%s" % (
+        diag.append("  shank defined: %s  (%s)" % (
             shank_defined_flag,
-            "" if shank_defined_flag is not None else
-            " (no flag found; shank %s)" % ("used" if SHANK_WITHOUT_FLAG else "ignored")))
+            "from a flag" if shank_defined_flag is not None
+            else "no flag here; decided by the tool's own summary"))
         if shank_defined_flag is None:
             # Nothing here was recognised as the Define Shank tick box, so
-            # every boolean is listed: one of them is it.
+            # the summary decides and every boolean is listed: if one of
+            # them is the tick box it can be named rather than guessed.
+            diag.append("  shank summary (dia, len, taper): %s" % (shank_summary,))
             diag.append("  shank flags: %s" % (shank_flag_list or "none"))
         diag.append("  shank rows:  %s" % (shank_rows or "none"))
         diag.append("  shank read:  %s" % (shank or "none"))
