@@ -156,21 +156,23 @@ def read_tool(collection, tool, name, tried, scale):
     if best[1] is None:
         return None, [], None
 
-    # The holder comes off the winner alone. Reading it from every
-    # candidate was most of the half minute.
-    stages = []
+    # The holder, the shank and the insertion all come off the winner
+    # alone. Reading them from every candidate was most of the half minute.
+    extra = {"holder": [], "shank": [], "insertion": None}
     try:
         builder = getattr(collection, best[1])(tool)
         try:
-            stages = nose_first(holder_stages(builder, scale))
+            extra["holder"] = nose_first(holder_stages(builder, scale))
+            extra["shank"] = shank_stages(builder, scale)
+            extra["insertion"] = insertion_of(builder, scale)
         finally:
             try:
                 builder.Destroy()
             except Exception:
                 pass
     except Exception:
-        stages = []
-    return best[0], stages, best[1]
+        pass
+    return best[0], extra, best[1]
 
 
 def numbers_on(builder):
@@ -660,6 +662,99 @@ def numbered_stages(nums, scale):
     return stages
 
 
+def shank_stages(builder, scale):
+    """The tool's own body above the flutes, as a stack of cones.
+
+    NX describes it exactly as it describes a holder — a run of sections —
+    and it is part of the tool rather than of the holder, so it goes on the
+    tool. A stepped shank, a reduced neck or a tapered shank is a real
+    difference to what will fit in a pocket, which is the only reason the
+    body is drawn at all.
+
+    Read tip-upwards, which is the order Mill-Sim wants, so it is not
+    turned over the way a holder is.
+    """
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "shank" not in low or "section" not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        rows = sections_of(attr)
+        stages = stages_from_rows(rows, scale)
+        if stages:
+            return stages
+    return []
+
+
+def insertion_of(builder, scale):
+    """How far the tool is pushed into the holder, if NX says.
+
+    Mill-Sim asks for the stickout — how much of the tool is *out* of the
+    holder — and NX states the other end of the same measurement. One is
+    the overall length less the other, so this is a reading rather than a
+    second number, and it is converted here rather than carried inside.
+    """
+    best = None
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_"):
+            continue
+        if not ("holderoffset" in low or "profilestartposition" in low
+                or "insertion" in low or "zmount" in low):
+            continue
+        try:
+            v = plain(getattr(builder, name))
+        except Exception:
+            continue
+        if v is not None and v > 0:
+            best = v * scale if best is None else min(best, v * scale)
+    # The same names live on the section builders, which is where the one
+    # that is actually set was seen.
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "holder" not in low or "section" not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        for sub in dir(attr):
+            if "holderoffset" not in sub.lower() and "profilestart" not in sub.lower():
+                continue
+            try:
+                v = plain(getattr(attr, sub))
+            except Exception:
+                continue
+            if v is not None and v > 0:
+                best = v * scale if best is None else min(best, v * scale)
+    return best
+
+
+def stickout_of(overall, flute, insertion, stated):
+    """How much of the tool is out of the holder.
+
+    Three ways of knowing, in order of how much they are worth: a stickout
+    NX stated outright, the overall length less how far it is inserted, and
+    failing both, enough to clear the flutes and a little more. A reading
+    that would put the holder on the flutes, or that would leave the tool
+    held by nothing, is not the right reading and is not used.
+    """
+    for candidate in (stated, (overall - insertion) if insertion else None):
+        # Gripped right at the end of the flutes is a real setting and a
+        # common one, so the flute length itself is allowed; what is not is
+        # a holder sitting on the flutes, or a tool held by nothing.
+        if candidate and flute - 1e-9 <= candidate <= overall - 0.5:
+            return candidate
+    return max(flute * 1.4, flute + 5.0)
+
+
 def nose_first(stages):
     """Turn the stack the right way up.
 
@@ -885,11 +980,16 @@ def main():
         how = ""
 
         stages = []
+        shank = []
+        insertion = None
         shape = []
         factory_name = None
         try:
-            found, stages, factory_name = read_tool(collection, group, name, tried, scale)
+            found, extra, factory_name = read_tool(collection, group, name, tried, scale)
             found = found or {}
+            stages = extra.get("holder", [])
+            shank = extra.get("shank", [])
+            insertion = extra.get("insertion")
             how = factory_name or ""
         except Exception:
             failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
@@ -991,6 +1091,10 @@ def main():
             "overallLength": round(overall, 4),
             "material": "carbide",
             "notes": "From NX: %s" % name,
+            # The shank profile, when NX described one. Left out otherwise,
+            # because a tool with no stages is built the way every tool was
+            # built before there were any.
+            "bodyStages": shank or None,
         })
         # The holder, shared with every tool that runs in the same one.
         holder_id = ""
@@ -1014,10 +1118,13 @@ def main():
             "number": number,
             "toolId": tool_id,
             "holderId": holder_id,
-            # NX states how far the tool stands out of the holder; without
-            # one, enough to clear the flutes, which is what an operator
-            # would set.
-            "stickout": round(read.get("stickout") or max(flute * 1.4, flute + 5.0), 4),
+            # NX says how far the tool goes *into* the holder; Mill-Sim
+            # asks how much of it is out. One is the overall length less
+            # the other. The conversion is checked rather than trusted: a
+            # stickout that does not clear the flutes, or that leaves
+            # nothing gripped, is not the right reading of that number, and
+            # enough to clear the flutes is what an operator would set.
+            "stickout": round(stickout_of(overall, flute, insertion, read.get("stickout")), 4),
         })
         lw.WriteLine("  T%-4d %-32s %-8s ø%.3f  %s [%s]"
                      % (number, name, kind, diameter,

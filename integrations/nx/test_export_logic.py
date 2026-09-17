@@ -22,6 +22,12 @@ spec = importlib.util.spec_from_file_location('j', 'integrations/nx/export_tools
 j = importlib.util.module_from_spec(spec); spec.loader.exec_module(j)
 
 ok = True
+def near(got, want, what):
+    """Same, for numbers that are the end of a conversion."""
+    eq(abs(got - want) < 1e-6 if isinstance(got, (int, float)) else got == want, True,
+       '%s (%s)' % (what, got))
+
+
 def eq(got, want, what):
     global ok
     if got != want:
@@ -76,7 +82,7 @@ class Missing:
     def CreateTToolBuilder(self, tool): return Thin()
     def CreateMillToolBuilder(self, tool): return Full()
 tried = []
-found, stages, nm = j.read_tool(Missing(), None, 'TK2105_FREZE', tried, 1.0)
+found, extra, nm = j.read_tool(Missing(), None, 'TK2105_FREZE', tried, 1.0)
 eq(nm, 'CreateMillToolBuilder', 'the builder that knew the most won')
 eq(j.fields_from(found).get('diameter'), 12.0, 'and it is the one with the diameter on it')
 
@@ -361,7 +367,7 @@ class Counting:
         return (['CreateMillToolBuilder', 'CreateDrillStdToolBuilder', 'CreateTToolBuilder']
                 + ['CreateJunk%dToolBuilder' % i for i in range(90)])
 c = Counting()
-found2, stages2, nm2 = j.read_tool(c, None, 'TK2105_FREZE', [], 1.0)
+found2, extra2, nm2 = j.read_tool(c, None, 'TK2105_FREZE', [], 1.0)
 eq(nm2, 'CreateMillToolBuilder', 'the mill builder answered for a FREZE')
 eq(len(c.built) <= 2, True, 'and it stopped there: %d builders made' % len(c.built))
 
@@ -395,6 +401,55 @@ print('getters() leaves anything that would change something alone:')
 names = [n for n, _ in j.getters(SectionBuilderObjects())]
 eq('SetSection' in names, False, 'SetSection is not called speculatively')
 eq('GetSection' in names, True, 'GetSection is')
+
+print()
+print('stickout, from however NX says it:')
+# A 3 in tool with 2 in of flute, inserted 1 in: 2 in of it is out.
+near(j.stickout_of(76.2, 50.8, 25.4, None), 50.8, 'overall less the insertion')
+eq(j.stickout_of(76.2, 50.8, None, 60.0), 60.0, 'a stated stickout is taken as stated')
+# An insertion that would put the holder on the flutes is the wrong
+# reading of that number, whatever it is.
+near(j.stickout_of(76.2, 50.8, 60.0, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'a stickout inside the flutes is refused')
+near(j.stickout_of(76.2, 50.8, 0.0, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'nothing gripped is refused too')
+near(j.stickout_of(76.2, 50.8, None, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'and with nothing said, enough to clear the flutes')
+# Gripped right at the end of the flutes: allowed, because it is what a
+# short tool in a shrink fit actually looks like.
+near(j.stickout_of(100.0, 50.0, 50.0, None), 50.0, 'gripped at the flute line')
+
+print()
+print('the shank sections become the tool\'s own body, tip upwards:')
+class ToolWithShank:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(0.5)
+        self.ShankSectionBuilder = HandleSectionBuilder(
+            [(0.3, 0.4, 0.0), (0.5, 0.2, 0.0)])
+sh = j.shank_stages(ToolWithShank(), 25.4)
+eq(len(sh), 2, 'two shank sections')
+eq(sh[0]['dia'], 7.62, 'a reduced neck of 0.3 in')
+eq(sh[-1]['dia'], 12.7, 'up to a 0.5 in shank')
+# It is the tool's body, so it is not turned over the way a holder is.
+eq([x['dia'] for x in sh], sorted(x['dia'] for x in sh), 'read tip upwards')
+
+print()
+print('...and a tool with no shank sections says nothing rather than guessing:')
+class NoShank:
+    def __init__(self): self.TlDiameterBuilder = Inh(0.5)
+eq(j.shank_stages(NoShank(), 1.0), [], 'no sections, no body')
+
+print()
+print('insertion_of() finds the offset wherever NX keeps it:')
+class WithOffset:
+    class HS:
+        def __init__(self):
+            self.NumberOfSections = IntB(3.0)
+            self.TlHolderOffsetBuilder = Inh(1.0)
+    def __init__(self):
+        self.HolderSectionBuilder = WithOffset.HS()
+eq(j.insertion_of(WithOffset(), 25.4), 25.4, 'one inch, on the section builder')
+eq(j.insertion_of(NoShank(), 1.0), None, 'nothing said')
 
 print()
 print('taper_of() reads the interface out of the name:')
