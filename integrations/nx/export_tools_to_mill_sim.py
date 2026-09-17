@@ -159,7 +159,8 @@ def read_tool(collection, tool, name, tried, scale):
 
     # The holder, the shank and the insertion all come off the winner
     # alone. Reading them from every candidate was most of the half minute.
-    extra = {"holder": [], "shank": [], "insertion": None}
+    extra = {"holder": [], "shank": [], "insertion": None,
+             "holderRows": [], "shankRows": []}
     # The cutter's own size, which is what says whether a shank reading
     # could be true.
     diameter = (fields_from(best[0]).get("diameter") or 0.0) * scale
@@ -169,6 +170,12 @@ def read_tool(collection, tool, name, tried, scale):
             extra["holder"] = nose_first(holder_stages(builder, scale))
             extra["shank"] = shank_stages(builder, scale, diameter)
             extra["insertion"] = insertion_of(builder, scale)
+            # The rows as they came back, before anything was made of
+            # them. When a tool comes out wrong these are the only numbers
+            # that say why, and reading them off one tool while the fault
+            # is on another is how three rounds of this were wasted.
+            extra["holderRows"] = raw_rows(builder, "holder")
+            extra["shankRows"] = raw_rows(builder, "shank")
         finally:
             try:
                 builder.Destroy()
@@ -177,6 +184,25 @@ def read_tool(collection, tool, name, tried, scale):
     except Exception:
         pass
     return best[0], extra, best[1]
+
+
+def raw_rows(builder, which):
+    """The section rows of the holder or the shank, exactly as returned."""
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "section" not in low or which not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        try:
+            return sections_of(attr)
+        except Exception:
+            return []
+    return []
 
 
 def numbers_on(builder):
@@ -1034,6 +1060,8 @@ def main():
         stages = []
         shank = []
         insertion = None
+        holder_rows = []
+        shank_rows = []
         shape = []
         factory_name = None
         try:
@@ -1042,6 +1070,8 @@ def main():
             stages = extra.get("holder", [])
             shank = extra.get("shank", [])
             insertion = extra.get("insertion")
+            holder_rows = extra.get("holderRows", [])
+            shank_rows = extra.get("shankRows", [])
             how = factory_name or ""
         except Exception:
             failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
@@ -1200,6 +1230,25 @@ def main():
             # enough to clear the flutes is what an operator would set.
             "stickout": round(stickout_of(overall, flute, insertion, read.get("stickout")), 4),
         })
+        # Every tool, not just the first. A fault on the fourth tool with a
+        # dump of the first is three rounds of guessing, which is what it
+        # cost. These are the numbers that say what a tool came out as and
+        # what it was made from.
+        diag.append("")
+        diag.append("%s  [%s]" % (name, how))
+        diag.append("  ø%.4f  flute %.4f  length %.4f  insertion %s  stickout %.4f  (%s)"
+                    % (diameter, flute, overall, insertion,
+                       assemblies[-1]["stickout"], kind))
+        diag.append("  shank rows:  %s" % (shank_rows or "none"))
+        diag.append("  shank read:  %s" % (shank or "none"))
+        diag.append("  body built:  %s" % (body or "plain"))
+        diag.append("  holder rows: %s" % (holder_rows or "none"))
+        diag.append("  holder read: %s" % (stages or "none"))
+        for key in ("diameter", "fluteLength", "overallLength", "shankDiameter",
+                    "cornerRadius", "tipAngle", "taperAngle", "fluteCount", "number"):
+            if key in read:
+                diag.append("  read %-14s %s" % (key, read[key]))
+
         lw.WriteLine("  T%-4d %-32s %-8s ø%.3f  L%.1f out%.1f  %s [%s]"
                      % (number, name, kind, diameter, overall, assemblies[-1]["stickout"],
                         ("holder %d, shank %d" % (len(stages), len(body))) if stages
