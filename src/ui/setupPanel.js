@@ -326,9 +326,11 @@ export class SetupPanel extends Panel {
 
     // One header of axis labels, then a tight row per offset — six copies
     // of "X Y Z" is noise.
+    // Six copies of "X Y Z" is noise, so the unit is said once here too
+    // rather than on all eighteen boxes.
     const header = el('div.row.wcs-row', {}, [
       el('span.wcs-name', {}),
-      ...AXES.map((a) => el('span.field-label', {}, a)),
+      ...AXES.map((a) => el('span.field-label', {}, [a, el('span.unit', {}, ` ${units.lengthLabel()}`)])),
     ]);
 
     const rows = Object.keys(wcs).map((key) => {
@@ -339,8 +341,13 @@ export class SetupPanel extends Panel {
           title: `Make ${key} the offset the placement tools act on`,
           onclick: () => app.setWcsEdit(key),
         }, key),
-        ...AXES.map((a, i) => field('', Number(wcs[key][i].toFixed(4)), {
+        // A work offset is a length like any other. It reads in whatever
+        // the panels are set to, and is held in millimetres like
+        // everything else — the rounding is the field's to do, so the raw
+        // number goes in rather than one already cut to four places.
+        ...AXES.map((a, i) => field('', wcs[key][i], {
           step: 1,
+          unit: 'mm',
           title: `${key} ${a}`,
           onChange: (v) => {
             const next = { ...app.state.wcs, [key]: [...app.state.wcs[key]] };

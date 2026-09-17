@@ -1136,6 +1136,74 @@ try {
     check(unitCheck.drift.every((d) => d === 0), `the envelope drifted ${unitCheck.drift.join(', ')} mm from being redrawn in inches`);
     check(Math.abs(unitCheck.edited + 254) < 1e-6, `typing -10 in stored ${unitCheck.edited}, not -254 mm`);
     check(unitCheck.libUnchanged, 'the library changed when the unit did');
+
+    // Reading the prose is not enough. A box with no unit on it converts
+    // nothing and says nothing about it, which is how the work offsets
+    // stayed in millimetres while every page around them had changed. So
+    // every numeric box on every page is read in both units and has to
+    // account for itself: one labelled as a length must be the metric
+    // value over 25.4, and one that is not a length must not have moved.
+    const boxes = await page.evaluate(async () => {
+      const app = window.millsim;
+      const sweep = async (u) => {
+        app.setUnits(u);
+        await new Promise((r) => setTimeout(r, 250));
+        const found = {};
+        for (const tab of ['setup', 'machine', 'tools', 'program', 'results', 'view']) {
+          if (app.setTab) app.setTab(tab);
+          const pages = [...document.querySelectorAll('.ribbon-page')].map((p) => p.dataset.page);
+          for (const pg of pages) {
+            app.setPage(tab, pg);
+            await new Promise((r) => setTimeout(r, 50));
+            let n = 0;
+            for (const f of document.querySelectorAll('.field')) {
+              const input = f.querySelector('input[type=number]');
+              if (!input) continue;
+              const label = ((f.querySelector('.field-label') || {}).textContent || '').trim();
+              found[`${tab}/${pg}#${n++}`] = { label, value: input.value };
+            }
+          }
+        }
+        return found;
+      };
+      // Something non-zero in the offsets, or there is nothing to convert.
+      app.setWcs({ ...app.state.wcs, G54: [25.4, 50.8, -12.7] });
+      const mm = await sweep('mm');
+      const inch = await sweep('in');
+      app.setUnits('mm');
+
+      const bad = [];
+      let counted = 0;
+      for (const key of Object.keys(mm)) {
+        const a = mm[key];
+        const b = inch[key];
+        if (!b) continue;
+        counted++;
+        const va = parseFloat(a.value);
+        const vb = parseFloat(b.value);
+        const moved = Number.isFinite(va) && Number.isFinite(vb) && Math.abs(va - vb) > 1e-9;
+        // A box with no label of its own says its unit somewhere else —
+        // the work-offset table in its column header, the jog box in the
+        // readout beside it — so it is judged by whether it converted.
+        const isLength = /\bin$/.test(b.label) || /\bin\/min$/.test(b.label) || (b.label === '' && moved);
+        if (isLength) {
+          const want = va / 25.4;
+          if (Number.isFinite(va) && va !== 0 && Math.abs(vb - want) > Math.max(1e-4, Math.abs(want) * 1e-4)) {
+            bad.push(`${key} "${b.label}" ${a.value} → ${b.value}, wanted ${want.toFixed(4)}`);
+          }
+        } else if (moved) {
+          bad.push(`${key} "${b.label}" is not a length but moved ${a.value} → ${b.value}`);
+        } else if (Number.isFinite(va) && va !== 0 && !/°|rpm|flutes|ratio|scale|number|%/i.test(b.label)) {
+          // Unitless, unchanged and not one of the things that genuinely
+          // has no unit: most likely a length nobody told about the switch.
+          bad.push(`${key} "${b.label}" has no unit and did not convert (${a.value})`);
+        }
+      }
+      return { bad, counted };
+    });
+    console.log('unit boxes:', JSON.stringify({ counted: boxes.counted, bad: boxes.bad.length }));
+    check(boxes.counted > 30, `only ${boxes.counted} numeric boxes were found to check`);
+    check(boxes.bad.length === 0, `boxes that do not follow the unit switch:\n   ${boxes.bad.join('\n   ')}`);
   }
 
   // ---- a machine built from nothing looks like nothing ------------------

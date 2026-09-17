@@ -502,9 +502,12 @@ export class MachinePanel extends Panel {
           r && r.source === 'envelope' ? `: ${units.len(r.min, 1)} to ${units.lenU(r.max, 1)} on this joint` : ''
         }. Change it there and the jog sliders and the over-travel check follow.`));
       } else {
+        // A joint's own stops: degrees on a rotary, a length on a slide
+        // the envelope does not govern — a quill, a second head.
+        const stopUnit = node.kind === 'rotary' ? '\u00b0' : 'mm';
         body.push(row([
-          field('Min', node.limits.min, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, min: Number(v) } }) }),
-          field('Max', node.limits.max, { type: 'number', onChange: (v) => set({ limits: { ...node.limits, max: Number(v) } }) }),
+          field('Min', node.limits.min, { type: 'number', unit: stopUnit, step: 10, onChange: (v) => set({ limits: { ...node.limits, min: Number(v) } }) }),
+          field('Max', node.limits.max, { type: 'number', unit: stopUnit, step: 10, onChange: (v) => set({ limits: { ...node.limits, max: Number(v) } }) }),
         ]));
       }
       body.push(row([
@@ -534,9 +537,9 @@ export class MachinePanel extends Panel {
     };
     const carried = app.machineParts.forNode(node.id).length + k.children(node.id).length;
     body.push(row([
-      field('Pivot X', node.origin[0], { type: 'number', onChange: (v) => pivot(0, v) }),
-      field('Pivot Y', node.origin[1], { type: 'number', onChange: (v) => pivot(1, v) }),
-      field('Pivot Z', node.origin[2], { type: 'number', onChange: (v) => pivot(2, v) }),
+      field('Pivot X', node.origin[0], { type: 'number', unit: 'mm', step: 1, onChange: (v) => pivot(0, v) }),
+      field('Pivot Y', node.origin[1], { type: 'number', unit: 'mm', step: 1, onChange: (v) => pivot(1, v) }),
+      field('Pivot Z', node.origin[2], { type: 'number', unit: 'mm', step: 1, onChange: (v) => pivot(2, v) }),
     ]));
     body.push(actionRow([
       {
