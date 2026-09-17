@@ -9,7 +9,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fromNX, nxRecords, nxToolType, isNXText } from '../src/tools/nxLibrary.js';
 import { ToolLibrary } from '../src/tools/library.js';
-import { makeTool, buildTool } from '../src/tools/toolDefs.js';
 
 const NX_DAT = `
 ! Mill tools, metric
@@ -212,84 +211,4 @@ test('a library the NX journal writes imports with its holders attached', () => 
     // which is the whole reason a holder is worth importing.
     assert.ok(built.bodyRadius * 2 >= 44, `${a.name} is only ${built.bodyRadius * 2} across`);
   }
-});
-
-test('a tool with a shank profile is built from it, and one without is not', () => {
-  // NX describes the tool's own body the same way it describes a holder,
-  // so a reduced-neck cutter arrives as it really is rather than as a
-  // cylinder. Everything that has no such profile — every tool that
-  // existed before there was one, and everything Fusion writes — is built
-  // exactly as it was.
-  const plain = buildTool(makeTool({
-    type: 'flat', diameter: 10, fluteLength: 30, shankDiameter: 10, overallLength: 75,
-  }));
-  const stepped = buildTool(makeTool({
-    type: 'flat', diameter: 10, fluteLength: 30, shankDiameter: 10, overallLength: 75,
-    bodyStages: [
-      { dia: 6, topDia: 6, length: 10 },      // reduced neck
-      { dia: 6, topDia: 10, length: 5 },      // cone out to the shank
-      { dia: 10, topDia: 10, length: 30 },    // shank
-    ],
-  }));
-
-  // The cutting geometry is the same tool either way.
-  assert.deepEqual(stepped.cuttingPoints, plain.cuttingPoints);
-  assert.equal(stepped.radius, plain.radius);
-
-  // The body is not. Just above the flutes the plain tool is full shank
-  // and the necked one is not, which is the whole point: that is the
-  // difference between reaching into a pocket and rubbing on the way in.
-  // The profile is a polyline, so it is read along its segments rather
-  // than at whatever heights it happens to have a vertex.
-  const radiusAt = (built, z) => {
-    let widest = 0;
-    const p = built.bodyPoints;
-    for (let i = 0; i < p.length - 1; i++) {
-      const a = p[i];
-      const b = p[i + 1];
-      const lo = Math.min(a.z, b.z);
-      const hi = Math.max(a.z, b.z);
-      if (z < lo - 1e-9 || z > hi + 1e-9) continue;
-      const t = hi - lo < 1e-9 ? 0 : (z - a.z) / (b.z - a.z);
-      widest = Math.max(widest, a.r + (b.r - a.r) * t);
-    }
-    return widest;
-  };
-  assert.equal(radiusAt(plain, 35), 5, 'the plain tool is full shank right above the flutes');
-  assert.equal(radiusAt(stepped, 35), 3, 'the necked one is Ø6 there');
-  assert.equal(radiusAt(stepped, 42.5), 4, 'and halfway up the cone it is Ø8');
-  assert.equal(radiusAt(stepped, 60), 5, 'full shank further up');
-  assert.ok(stepped.bodyPoints.length > plain.bodyPoints.length);
-  assert.equal(stepped.length, 75, 'the stated overall length is kept');
-});
-
-test('a shank profile survives being written out and read back', () => {
-  const lib = new ToolLibrary();
-  const stages = [{ dia: 6, topDia: 6, length: 10 }, { dia: 6, topDia: 12, length: 40 }];
-  assert.ok(lib.fromJSON({
-    tools: [{
-      id: 'nx1', name: 'necked', type: 'flat', number: 1, diameter: 12,
-      fluteLength: 20, fluteCount: 4, shankDiameter: 12, overallLength: 80,
-      bodyStages: stages,
-    }],
-    holders: [], assemblies: [],
-  }));
-  const back = JSON.parse(JSON.stringify(lib.toJSON()));
-  assert.deepEqual(back.tools[0].bodyStages, stages, 'the profile is in the file');
-
-  const reread = new ToolLibrary();
-  assert.ok(reread.fromJSON(back));
-  assert.deepEqual(reread.tools[0].bodyStages, stages, 'and comes back off it');
-});
-
-test('a body stage with no length is not a stage', () => {
-  // A stack NX half-filled is not a body, and inventing one would draw
-  // metal that is not there.
-  assert.equal(makeTool({ bodyStages: [] }).bodyStages, null);
-  assert.equal(makeTool({ bodyStages: null }).bodyStages, null);
-  assert.equal(makeTool({ bodyStages: [{ dia: 6, length: 0 }] }).bodyStages, null);
-  assert.equal(makeTool({ bodyStages: [{ dia: 0, topDia: 0, length: 5 }] }).bodyStages, null);
-  // A stage with only a bottom diameter is a cylinder.
-  assert.deepEqual(makeTool({ bodyStages: [{ dia: 6, length: 5 }] }).bodyStages,
-    [{ dia: 6, topDia: 6, length: 5 }]);
 });

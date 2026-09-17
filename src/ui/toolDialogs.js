@@ -259,11 +259,6 @@ export function openAssemblyDialog(app, assemblyId = null) {
       ['Cutting Ø', units.lenU(built.cutRadius * 2, 3)],
       ['Flute length', units.lenU(built.fluteLength, 2)],
       ['Stickout', units.lenU(built.stickout, 2)],
-      // The same measurement the other way up. NX and a few other systems
-      // ask how far the tool goes *into* the holder rather than how much
-      // of it is out, and it is the same number read from the other end —
-      // so it is shown rather than asked for twice.
-      ['In the holder', units.lenU(Math.max(built.tool.length - built.stickout, 0), 2)],
       ['Tip to gauge', units.lenU(built.gaugeLength, 1)],
       ['Widest body', units.lenU(built.bodyRadius * 2, 1)],
       ['Total length', units.lenU(built.totalLength, 1)],
