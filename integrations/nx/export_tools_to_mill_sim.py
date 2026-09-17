@@ -147,32 +147,147 @@ def inventory(builder):
                 out.append((name, "list(%s)" % kind, len(items),
                             [numbers_on(i) for i in items[:4]]))
             else:
-                out.append((name, kind, "", numbers_on(attr)))
+                # A sub-builder's numbers, how many sections it claims, and
+                # what it can be asked -- the section data is behind calls,
+                # so the call names are the useful half.
+                note = numbers_on(attr)
+                n = count_of(attr)
+                if n:
+                    note = dict(note)
+                    note["<sections>"] = n
+                    note["<calls>"] = ", ".join(nm for nm, _ in getters(attr))[:400]
+                    rows = sections_of(attr)
+                    if rows:
+                        note["<read>"] = rows[:4]
+                out.append((name, kind, "", note))
     return out
 
 
 def as_list(attr):
-    """The attribute as a list, if it is one. Strings are not lists here."""
+    """The attribute as a list, if it will simply iterate."""
     if isinstance(attr, (str, bytes)):
         return None
     try:
         items = list(attr)
     except Exception:
-        # A collection that will not iterate may still count and index.
-        for count in ("Length", "Count", "NumberOfSections", "NumberOfSteps"):
-            try:
-                n = int(getattr(attr, count))
-            except Exception:
-                continue
-            try:
-                return [attr[i] for i in range(n)]
-            except Exception:
-                try:
-                    return [attr.FindItem(i) for i in range(n)]
-                except Exception:
-                    return None
         return None
-    return items
+    return items or None
+
+
+def plain(v):
+    """A value, through the wrapper NX may have put round it."""
+    if v is None:
+        return None
+    if hasattr(v, "Value"):
+        try:
+            v = v.Value
+        except Exception:
+            return None
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def count_of(obj):
+    """How many sections this builder says it has.
+
+    The count arrives as an inheritable builder as often as a number, which
+    is why reading it with int() alone came back with nothing to iterate.
+    """
+    for name in ("NumberOfSections", "NumberOfSteps", "NumberOfStages",
+                 "Count", "Length", "Size"):
+        try:
+            v = plain(getattr(obj, name))
+        except Exception:
+            continue
+        if v is not None and v > 0:
+            return int(v)
+    return 0
+
+
+# Never called speculatively: these do something rather than say something.
+_DANGEROUS = ("set", "delete", "remove", "insert", "add", "create", "destroy",
+              "commit", "apply", "clear", "append", "move", "update", "reset")
+
+
+def getters(obj):
+    """Methods that might hand back section i, likeliest first.
+
+    The section data is not on the builder as properties -- a holder with
+    three sections shows a count and nothing else -- so it is behind calls.
+    Anything whose name says it changes something is left alone.
+    """
+    names = []
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        low = name.lower()
+        if any(low.startswith(d) for d in _DANGEROUS):
+            continue
+        if not (low.startswith("get") or "section" in low or "step" in low
+                or "item" in low or "element" in low):
+            continue
+        try:
+            m = getattr(obj, name)
+        except Exception:
+            continue
+        if callable(m):
+            names.append((name, m))
+
+    def rank(pair):
+        s = pair[0].lower()
+        return (0 if "section" in s or "step" in s else 1 if "item" in s else 2, len(pair[0]))
+
+    out = sorted(names, key=rank)
+    try:
+        out.insert(0, ("[]", obj.__getitem__))
+    except Exception:
+        pass
+    return out
+
+
+def sections_of(obj):
+    """The sections of a section builder, as dicts of numbers.
+
+    Two shapes are handled, because both are ways NX has described a
+    stepped profile: a call that hands back a section object, and a set of
+    calls that each hand back one number for section i.
+    """
+    items = as_list(obj)
+    if items:
+        return [numbers_on(i) for i in items]
+
+    n = count_of(obj)
+    if not n:
+        return []
+
+    columns = {}
+    for name, call in getters(obj):
+        got = []
+        for i in range(n):
+            try:
+                value = call(i)
+            except Exception:
+                got = []
+                break
+            if value is None:
+                got = []
+                break
+            got.append(value)
+        if len(got) != n:
+            continue
+        # A call that hands back whole sections settles it on its own.
+        if all(not isinstance(v, (int, float, str, bool)) and plain(v) is None for v in got):
+            rows = [numbers_on(v) for v in got]
+            if any(rows):
+                return rows
+        # ...otherwise it is one number per section, and it takes several
+        # such calls to make a section.
+        numbers = [plain(v) for v in got]
+        if all(v is not None for v in numbers):
+            columns[name] = numbers
+
+    if columns:
+        return [{name: col[i] for name, col in columns.items()} for i in range(n)]
+    return []
 
 
 # ---- the holder ----------------------------------------------------------
@@ -211,10 +326,15 @@ def holder_stages(builder, scale):
     step objects, a sub-builder holding one, and flat parameters numbered
     off the end of their names (HolderDia1, HolderLen1, ...).
     """
-    # 1: a list of steps, under something that says so in its name.
+    # 1: a section builder. This is what NX actually hands over -- a thing
+    # that knows how many sections there are and answers for each of them
+    # when asked, rather than laying them out as properties.
     for name in dir(builder):
         low = name.lower()
-        if name.startswith("_") or not ("holder" in low or "section" in low or "step" in low):
+        if name.startswith("_") or "holder" not in low:
+            continue
+        # The shank is a stepped profile too, and it is not the holder.
+        if "shank" in low:
             continue
         try:
             attr = getattr(builder, name)
@@ -222,15 +342,34 @@ def holder_stages(builder, scale):
             continue
         if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
             continue
-        items = as_list(attr)
-        if items:
-            stages = [stage_from(numbers_on(i), scale) for i in items]
-            stages = [s for s in stages if s]
-            if stages:
-                return stages
-        # 2: a sub-builder. Its own numbers may be one step, or numbered ones.
+        rows = sections_of(attr)
+        stages = [st for st in (stage_from(r, scale) for r in rows) if st]
+        if stages:
+            return stages
+        # A sub-builder that is one step, or that numbers them in its names.
         nums = numbers_on(attr)
-        stages = numbered_stages(nums, scale) or ([stage_from(nums, scale)] if stage_from(nums, scale) else [])
+        stages = numbered_stages(nums, scale)
+        if not stages:
+            one = stage_from(nums, scale)
+            stages = [one] if one else []
+        if stages:
+            return stages
+
+    # 2: anything else that is a list of steps.
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or not ("section" in low or "step" in low):
+            continue
+        if "shank" in low or "trackpoint" in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        rows = sections_of(attr)
+        stages = [st for st in (stage_from(r, scale) for r in rows) if st]
         if stages:
             return stages
 
@@ -307,10 +446,21 @@ def taper_of(text):
 
 
 def norm(name):
-    """A parameter name with the noise taken out, for matching."""
-    s = name.lower()
-    for junk in ("builder", "inheritable", "value", "tl", "_"):
-        s = s.replace(junk, "")
+    """A parameter name with the noise taken out, for matching.
+
+    NX's own prefix and the builder suffix go; nothing else does. Stripping
+    "tl" wherever it appeared turned GetLength into "geength", which is a
+    good reminder that a substring is not a word: only the ends are noise,
+    and only when they are the noise they look like.
+    """
+    s = name.lower().replace("_", "").replace(" ", "")
+    if s.startswith("inheritable"):
+        s = s[len("inheritable"):]
+    if s.startswith("tl"):
+        s = s[2:]
+    for tail in ("builder", "value"):
+        if s.endswith(tail):
+            s = s[: -len(tail)]
     return s
 
 
@@ -320,13 +470,16 @@ ALIASES = {
     "diameter": ["diameter", "dia", "cuttingdiameter", "cutterdiameter"],
     "cornerRadius": ["cor1rad", "cornerradius", "cornerrad", "corner1radius", "cornerradius1"],
     "tipDiameter": ["tipdia", "tipdiameter", "pointdiameter", "lowerdiameter"],
-    "tipAngle": ["tipangle", "pointangle", "includedangle"],
+    # NX writes TlTipAngBuilder, not TipAngle: without the short form a
+    # drill arrives with no point on it.
+    "tipAngle": ["tipang", "tipangle", "pointangle", "includedangle"],
     "taperAngle": ["taperang", "taperangle"],
     "fluteLength": ["fluteln", "flutelength", "cuttinglength", "lengthofcut"],
     "fluteCount": ["numflutes", "numberofflutes", "flutes", "numteeth", "teeth"],
     "shankDiameter": ["shankdia", "shankdiameter"],
-    "neckDiameter": ["neckdia", "neckdiameter"],
-    "neckLength": ["neckln", "necklength"],
+    # The relief is the necked-down section on a tool that has one.
+    "neckDiameter": ["neckdia", "neckdiameter", "reliefdiameter", "reliefdia"],
+    "neckLength": ["neckln", "necklength", "relieflength", "reliefln"],
     "overallLength": ["height", "overalllength", "toollength", "length"],
     "number": ["toolnumber", "tlnumber", "number", "adjustregister"],
     # How far the cutter stands out of the holder: Mill-Sim's stickout.
@@ -554,6 +707,12 @@ def main():
         # drill without a point is not a thing.
         tip_angle = read.get("tipAngle") or (118.0 if kind == "drill" else 90.0)
 
+        neck = read.get("neckDiameter", 0.0)
+        neck_len = read.get("neckLength", 0.0)
+        if not (0 < neck < diameter) or neck_len <= 0:
+            neck = 0.0
+            neck_len = 0.0
+
         number = int(read.get("number") or 0)
         if number <= 0:
             number = len(tools) + 1
@@ -575,8 +734,12 @@ def main():
             "fluteLength": round(flute, 4),
             "fluteCount": max(1, int(read.get("fluteCount") or 2)),
             "shankDiameter": round(read.get("shankDiameter") or diameter, 4),
-            "neckDiameter": round(read.get("neckDiameter", 0.0), 4),
-            "neckLength": round(read.get("neckLength", 0.0), 4),
+            # A neck is only a neck if it is narrower than the cutter. NX
+            # leaves a relief diameter sitting at something meaningless on
+            # a tool that has no relief, and a "neck" wider than the flutes
+            # would be drawn as a collar that is not there.
+            "neckDiameter": round(neck, 4),
+            "neckLength": round(neck_len, 4),
             "overallLength": round(overall, 4),
             "material": "carbide",
             "notes": "From NX: %s" % name,

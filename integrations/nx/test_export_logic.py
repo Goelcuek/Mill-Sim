@@ -166,10 +166,114 @@ class Bare:
 eq(j.holder_stages(Bare(), 1.0), [], 'no holder, no stages')
 
 print()
+print('a HolderSectionBuilder shaped the way their NX hands it over:')
+
+class IntB:
+    # NX wraps the count, which is why reading it with int() found nothing.
+    def __init__(self, v): self.Value = v
+
+class Section:
+    def __init__(self, lo, up, ln):
+        self.DiameterBuilder = Inh(lo)
+        self.UpperDiameterBuilder = Inh(up)
+        self.LengthBuilder = Inh(ln)
+
+class SectionBuilderObjects:
+    """Counts, and answers with a whole section when asked for one."""
+    def __init__(self):
+        self.NumberOfSections = IntB(3.0)
+        self.ProfileStartPosition = 0.0
+        self.TlHolderOffsetBuilder = Inh(1.0)
+        self._s = [Section(1.0, 1.4, 1.0), Section(1.4, 1.8, 0.9), Section(1.8, 2.5, 0.8)]
+    def GetSection(self, i): return self._s[i]
+    def SetSection(self, i): raise AssertionError('a setter was called')
+
+class ToolWithHolder:
+    def __init__(self, sb):
+        self.TlDiameterBuilder = Inh(0.75)
+        self.TlFluteLnBuilder = Inh(2.0)
+        self.TlHeightBuilder = Inh(3.0)
+        self.HolderSectionBuilder = sb
+        self.ShankSectionBuilder = SectionBuilderObjects()   # not the holder
+        self.HolderDescription = 'BT40 shrink'
+
+st = j.nose_first(j.holder_stages(ToolWithHolder(SectionBuilderObjects()), 25.4))
+eq(len(st), 3, 'three sections through GetSection(i)')
+eq(st[0]['dia'], 25.4, '1 in nose becomes 25.4 mm')
+eq(st[-1]['topDia'], 63.5, '2.5 in top becomes 63.5 mm')
+
+class SectionBuilderScalars:
+    """Counts, and answers one number at a time."""
+    def __init__(self):
+        self.NumberOfSections = IntB(2.0)
+        self._d = [20.0, 40.0]; self._u = [30.0, 50.0]; self._l = [25.0, 30.0]
+    def GetDiameter(self, i): return self._d[i]
+    def GetUpperDiameter(self, i): return self._u[i]
+    def GetLength(self, i): return self._l[i]
+st2 = j.nose_first(j.holder_stages(ToolWithHolder(SectionBuilderScalars()), 1.0))
+eq(len(st2), 2, 'two sections through one call per number')
+eq(st2[0], {'dia': 20.0, 'topDia': 30.0, 'length': 25.0}, 'assembled from the columns')
+
+print()
+print('...and it does not mistake the shank for the holder:')
+class ShankOnly:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(0.5)
+        self.ShankSectionBuilder = SectionBuilderObjects()
+eq(j.holder_stages(ShankOnly(), 1.0), [], 'a shank profile is not a holder')
+
+print()
+print('count_of() sees through the wrapper:')
+eq(j.count_of(SectionBuilderObjects()), 3, 'NumberOfSections behind .Value')
+class Bare2: pass
+eq(j.count_of(Bare2()), 0, 'nothing to count')
+
+print()
+print('getters() leaves anything that would change something alone:')
+names = [n for n, _ in j.getters(SectionBuilderObjects())]
+eq('SetSection' in names, False, 'SetSection is not called speculatively')
+eq('GetSection' in names, True, 'GetSection is')
+
+print()
 print('taper_of() reads the interface out of the name:')
 eq(j.taper_of('TK2105_FREZE_BT40'), 'BT40', 'BT40')
 eq(j.taper_of('HSK 63 A shrink'), 'HSK63A', 'HSK63-A however it is spelt')
 eq(j.taper_of('TKY60053_LOLIPOP'), 'none', 'nothing claimed')
+
+print()
+print('the real parameters off their TK1457_FREZE, all 34 of them:')
+real = {
+ 'ChamferLengthBuilder': 0.0, 'HelicalDiameter': 90.0, 'HelicalRampAngle': 15.0,
+ 'IncrementalTurretRotationBuilder': 0.0, 'IndexNotchBuilder': 0.0, 'MaxCutWidth': 50.0,
+ 'MinRampLength': 70.0, 'ReliefDiameterBuilder': 1.0, 'ReliefLengthBuilder': 0.0,
+ 'TaperedShankDiameterBuilder': 0.0, 'TaperedShankLengthBuilder': 0.0,
+ 'TaperedShankTaperLengthBuilder': 0.0, 'TlAdjRegBuilder': 0.0, 'TlCor1RadBuilder': 0.0,
+ 'TlCor2RadBuilder': 0.0, 'TlCutcomReg': 0.0, 'TlCutcomRegBuilder': 0.0,
+ 'TlDiameterBuilder': 0.75, 'TlFluteLnBuilder': 2.0, 'TlHeightBuilder': 3.0,
+ 'TlHolderNumberBuilder': 0.0, 'TlLowCorRadBuilder': 0.0, 'TlNumFlutesBuilder': 4.0,
+ 'TlNumberBuilder': 1.0, 'TlShankDiaBuilder': 0.0, 'TlTaperAngBuilder': 0.0,
+ 'TlTipAngBuilder': 0.0, 'TlUpCorRadBuilder': 0.0, 'TlXcenCor1Builder': 0.0,
+ 'TlXcenCor2Builder': 0.0, 'TlYcenCor1Builder': 0.0, 'TlYcenCor2Builder': 0.0,
+ 'TlZMountBuilder': 0.0, 'TlZOffsetBuilder': 0.0,
+}
+f = j.fields_from(real)
+eq(f.get('diameter'), 0.75, 'a 3/4 inch cutter')
+eq(f.get('fluteLength'), 2.0, 'two inches of flute')
+eq(f.get('overallLength'), 3.0, 'three inches overall, from TlHeightBuilder')
+eq(f.get('fluteCount'), 4.0, 'four flutes')
+eq(f.get('number'), 1.0, 'T1')
+eq('tipAngle' in f, True, 'the point angle is read at all')
+# The traps in that list: none of these is the cutting diameter.
+eq(f.get('diameter') != 90.0, True, 'HelicalDiameter is not the cutter')
+eq(f.get('overallLength') != 70.0, True, 'MinRampLength is not the length')
+eq(f.get('fluteLength') != 50.0, True, 'MaxCutWidth is not the flute length')
+
+print()
+print('norm() takes off the ends and nothing else:')
+eq(j.norm('GetLength'), 'getlength', 'an interior tl is not noise')
+eq(j.norm('TlDiameterBuilder'), 'diameter', 'the NX prefix and the suffix are')
+eq(j.norm('TotalLength'), 'totallength', 'nor is this one')
+eq(j.norm('TlHeightBuilder'), 'height', 'height')
 
 print()
 print('PASS' if ok else 'FAIL')
