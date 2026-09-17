@@ -22,6 +22,17 @@ spec = importlib.util.spec_from_file_location('j', 'integrations/nx/export_tools
 j = importlib.util.module_from_spec(spec); spec.loader.exec_module(j)
 
 ok = True
+def near(got, want, what, tol=1e-4):
+    """Same, for numbers that are the end of a conversion.
+
+    Stage lengths are rounded to four decimals on the way out, so a total
+    of several of them is a few ten-thousandths off an exact figure. That
+    is a tenth of a micron and it is not what these are checking.
+    """
+    eq(abs(got - want) < tol if isinstance(got, (int, float)) else got == want, True,
+       '%s (%s)' % (what, got))
+
+
 def eq(got, want, what):
     global ok
     if got != want:
@@ -76,7 +87,7 @@ class Missing:
     def CreateTToolBuilder(self, tool): return Thin()
     def CreateMillToolBuilder(self, tool): return Full()
 tried = []
-found, stages, nm = j.read_tool(Missing(), None, 'TK2105_FREZE', tried, 1.0)
+found, extra, nm = j.read_tool(Missing(), None, 'TK2105_FREZE', tried, 1.0)
 eq(nm, 'CreateMillToolBuilder', 'the builder that knew the most won')
 eq(j.fields_from(found).get('diameter'), 12.0, 'and it is the one with the diameter on it')
 
@@ -361,7 +372,7 @@ class Counting:
         return (['CreateMillToolBuilder', 'CreateDrillStdToolBuilder', 'CreateTToolBuilder']
                 + ['CreateJunk%dToolBuilder' % i for i in range(90)])
 c = Counting()
-found2, stages2, nm2 = j.read_tool(c, None, 'TK2105_FREZE', [], 1.0)
+found2, extra2, nm2 = j.read_tool(c, None, 'TK2105_FREZE', [], 1.0)
 eq(nm2, 'CreateMillToolBuilder', 'the mill builder answered for a FREZE')
 eq(len(c.built) <= 2, True, 'and it stopped there: %d builders made' % len(c.built))
 
@@ -395,6 +406,184 @@ print('getters() leaves anything that would change something alone:')
 names = [n for n, _ in j.getters(SectionBuilderObjects())]
 eq('SetSection' in names, False, 'SetSection is not called speculatively')
 eq('GetSection' in names, True, 'GetSection is')
+
+print()
+print('stickout, from however NX says it:')
+# A 3 in tool with 2 in of flute, inserted 1 in: 2 in of it is out.
+near(j.stickout_of(76.2, 50.8, 25.4, None), 50.8, 'overall less the insertion')
+eq(j.stickout_of(76.2, 50.8, None, 60.0), 60.0, 'a stated stickout is taken as stated')
+# An insertion that would put the holder on the flutes is the wrong
+# reading of that number, whatever it is.
+near(j.stickout_of(76.2, 50.8, 60.0, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'a stickout inside the flutes is refused')
+near(j.stickout_of(76.2, 50.8, 0.0, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'nothing gripped is refused too')
+near(j.stickout_of(76.2, 50.8, None, None), max(50.8 * 1.4, 50.8 + 5.0),
+     'and with nothing said, enough to clear the flutes')
+# Gripped right at the end of the flutes: allowed, because it is what a
+# short tool in a shrink fit actually looks like.
+near(j.stickout_of(100.0, 50.0, 50.0, None), 50.0, 'gripped at the flute line')
+
+print()
+print('the shank sections become the tool\'s own body, tip upwards:')
+class ToolWithShank:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(0.5)
+        self.ShankSectionBuilder = HandleSectionBuilder(
+            [(0.3, 0.4, 0.0), (0.5, 0.2, 0.0)])
+sh = j.shank_stages(ToolWithShank(), 25.4)
+eq(len(sh), 2, 'two shank sections')
+eq(sh[0]['dia'], 7.62, 'a reduced neck of 0.3 in')
+eq(sh[-1]['dia'], 12.7, 'up to a 0.5 in shank')
+# It is the tool's body, so it is not turned over the way a holder is.
+eq([x['dia'] for x in sh], sorted(x['dia'] for x in sh), 'read tip upwards')
+
+print()
+print('...and a tool with no shank sections says nothing rather than guessing:')
+class NoShank:
+    def __init__(self): self.TlDiameterBuilder = Inh(0.5)
+eq(j.shank_stages(NoShank(), 1.0), [], 'no sections, no body')
+
+print()
+print('a shank reading that cannot be true is refused, not drawn:')
+# The trap that put a 38 mm collar on a 3 mm cutter. Here the diameters
+# are in the second column, so reading the first as diameters gives a
+# stack that does not widen — and with nothing to check it against, that
+# wrong reading is what gets returned and drawn.
+# The lengths happen to grow upwards while the diameters shrink, so the
+# wrong column pair is the one that looks like a widening stack.
+swapped = [(1.0, 0.12, 0.0), (2.0, 0.06, 0.0)]
+loose = j.stages_from_rows(swapped, 25.4)
+eq([round(x['dia'], 2) for x in loose], [25.4, 50.8], 'unbounded, the lengths become diameters')
+
+# Bounded by the cutter the shank belongs to, that reading cannot be true,
+# and the bound does not merely refuse it — it steers to the pair that can.
+bounded = j.stages_from_rows(swapped, 25.4, (3.05 / 20.0, 3.05 * 4.0))
+eq([round(x['dia'], 2) for x in bounded], [3.05, 1.52], 'the real diameters, out of the other column')
+eq([round(x['length'], 1) for x in bounded], [25.4, 50.8], 'and the lengths out of the first')
+
+# When no pair could be true, nothing is claimed at all.
+nonsense = [(50.0, 60.0), (70.0, 80.0)]
+eq(j.stages_from_rows(nonsense, 1.0, (0.15, 12.2)), [], 'no reading is better than a wrong one')
+
+class TinyTool:
+    def __init__(self, rows):
+        self.TlDiameterBuilder = Inh(0.12)
+        self.ShankSectionBuilder = HandleSectionBuilder(rows)
+eq([round(x['dia'], 2) for x in j.shank_stages(TinyTool(swapped), 25.4, 3.05)], [3.05, 1.52],
+   'a 3 mm cutter gets its real shank')
+eq(j.shank_stages(TinyTool(nonsense), 1.0, 3.05), [], 'and no collar that exists nowhere')
+# With no cutter size to check against the old behaviour stands: this is a
+# bound, not a second guess at the geometry.
+eq([round(x['dia'], 2) for x in j.shank_stages(TinyTool(swapped), 25.4, 0.0)], [25.4, 50.8],
+   'nothing to check against, nothing refused')
+
+print('insertion_of() finds the offset wherever NX keeps it:')
+class WithOffset:
+    class HS:
+        def __init__(self):
+            self.NumberOfSections = IntB(3.0)
+            self.TlHolderOffsetBuilder = Inh(1.0)
+    def __init__(self):
+        self.HolderSectionBuilder = WithOffset.HS()
+eq(j.insertion_of(WithOffset(), 25.4), 25.4, 'one inch, on the section builder')
+eq(j.insertion_of(NoShank(), 1.0), None, 'nothing said')
+
+print()
+print('a tool is as long as its cutting part and its shank together:')
+# NX's height is the cutting part; the shank sections stand on top of it.
+# 3 in of tool with 2 in of flute, and 2 in of shank above, is 5 in long
+# — and a stickout worked out from the 3 came up two inches short.
+height, flute = 76.2, 50.8
+shank = [{'dia': 12.7, 'topDia': 12.7, 'length': 25.4},
+         {'dia': 19.05, 'topDia': 19.05, 'length': 25.4}]
+gap = height - flute
+body = [{'dia': 19.05, 'topDia': 19.05, 'length': gap}] + shank
+overall = flute + sum(x['length'] for x in body)
+near(overall, 127.0, 'five inches all told')
+near(j.stickout_of(overall, flute, 25.4, None), 101.6, 'inserted one inch, four inches out')
+# Which is what it was short by before: the height alone gave two inches,
+# exactly the flute length, and the holder sat on the flutes.
+near(j.stickout_of(height, flute, 25.4, None), 50.8, 'the old reading, short by the shank')
+
+print()
+print("the column order, read off a diagnostic and checked by its own arithmetic:")
+# The two shank rows off TKY60053_LOLIPOP, verbatim. The taper angle is
+# the angle from the lower diameter to the upper one over the length, so
+# the row proves its own column order rather than being guessed at.
+lolli_shank = [[0.07, 1.1500000000000001, 3.235015057784577, 0.2, 0.0],
+               [0.2, 1.8499999999999999, 0.0, 0.2, 0.0]]
+st = j.stages_from_rows(lolli_shank, 25.4)
+eq(len(st), 2, 'both sections read')
+near(st[0]['dia'], 1.778, 'Ø0.07 in at the bottom')
+near(st[0]['topDia'], 5.08, 'Ø0.2 in at the top, from the upper-diameter column')
+near(st[0]['length'], 29.21, '1.15 in long')
+near(st[1]['dia'], 5.08, 'then straight at Ø0.2 in')
+near(st[1]['length'], 46.99, 'for 1.85 in')
+# Which agrees with the three scalars NX states the same shank with.
+near(st[0]['length'] + st[1]['length'], 3.0 * 25.4, 'TaperedShankLength 3.0')
+near(st[0]['length'], 1.15 * 25.4, 'TaperedShankTaperLength 1.15')
+near(st[1]['topDia'], 0.2 * 25.4, 'TaperedShankDiameter 0.2')
+
+# The holder row off the same tool: one section, straight.
+near(j.stages_from_rows([[1.0826771653543308, 5.0, 0.0, 1.08268, 0.0]], 25.4)[0]['dia'],
+     27.5, 'the holder is Ø1.0827 in')
+
+print()
+print("...and a row whose taper angle does not corroborate is not those columns:")
+# Same numbers, a taper angle that cannot come from them. The reading is
+# refused rather than taken, which is the whole difference from guessing.
+eq(j.stage_from_nx_row([0.07, 1.15, 45.0, 0.2, 0.0], 25.4), None,
+   'the angle does not match the diameters over the length')
+eq(j.stage_from_nx_row([0.07, 1.15], 25.4), None, 'too few columns to be sure')
+eq(j.stage_from_nx_row([0.0, 1.15, 0.0, 0.2, 0.0], 25.4), None, 'no lower diameter')
+eq(j.stage_from_nx_row([0.2, 1.85, 0.0, 0.2, 0.0], 25.4),
+   {'dia': 5.08, 'topDia': 5.08, 'length': 46.99}, 'a straight section corroborates at zero')
+
+print()
+print("both tools land on the numbers their NX dialogs show:")
+
+def whole_tool(found, shank_rows, insertion_in):
+    read = j.fields_from(found)
+    for f in j.LENGTHS:
+        if f in read:
+            read[f] *= 25.4
+    D = read['diameter']
+    shank = j.stages_from_rows(shank_rows, 25.4, (D / 20.0, D * 4.0)) if shank_rows else []
+    flute = read.get('fluteLength') or D * 2
+    height = read.get('overallLength') or flute * 3
+    if not shank:
+        height = max(height, flute + 1.0)
+    body = []
+    if shank:
+        gap = height - flute
+        if gap > 0.01:
+            sd = read.get('shankDiameter') or D
+            body.append({'dia': round(sd, 4), 'topDia': round(sd, 4), 'length': round(gap, 4)})
+        body.extend(shank)
+    overall = flute + sum(x['length'] for x in body) if body else height
+    return overall, j.stickout_of(overall, flute, insertion_in * 25.4, None), body
+
+# TKY60053_LOLIPOP: head 0.12 in, shank 3.0 in, inserted 2.0 in.
+overall, out, body = whole_tool(
+    {'TlDiameterBuilder': 0.12, 'TlFluteLnBuilder': 0.10873397172404482,
+     'TlHeightBuilder': 0.12, 'TlNumFlutesBuilder': 8.0, 'TlShankDiaBuilder': 0.07,
+     'TlCor1RadBuilder': 0.06},
+    lolli_shank, 2.0)
+near(overall / 25.4, 3.12, 'the lollipop is 3.12 in: head 0.12 plus shank 3.0')
+near(out / 25.4, 1.12, 'and 1.12 in of it is out of the holder')
+eq(len(body), 3, 'the head, the taper and the straight shank')
+# No phantom millimetre: what is above the flutes is what NX says it is.
+near(body[0]['length'], (0.12 - 0.10873397172404482) * 25.4, 'the head above the flutes, exactly')
+
+# TK1457_FREZE: height 3.0 in, shank 2.0 in, inserted 1.0 in. The dialog
+# says (L) Length 5.0, and 5 less 1 is 4 out.
+overall2, out2, _ = whole_tool(
+    {'TlDiameterBuilder': 0.75, 'TlFluteLnBuilder': 2.0, 'TlHeightBuilder': 3.0,
+     'TlNumFlutesBuilder': 4.0, 'TlShankDiaBuilder': 0.0},
+    [[0.75, 1.0, 0.0, 0.75, 0.0], [0.75, 1.0, 0.0, 0.75, 0.0]], 1.0)
+near(overall2 / 25.4, 5.0, 'the end mill is 5 in, which is what (L) Length says')
+near(out2 / 25.4, 4.0, 'and 4 in out, which is 5 less the 1 in insertion')
 
 print()
 print('taper_of() reads the interface out of the name:')

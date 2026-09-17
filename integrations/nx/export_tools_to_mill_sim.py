@@ -31,6 +31,7 @@
 # MACH/resource/library/tool/metric (or .../english).
 
 import json
+import math
 import os
 import traceback
 
@@ -156,21 +157,26 @@ def read_tool(collection, tool, name, tried, scale):
     if best[1] is None:
         return None, [], None
 
-    # The holder comes off the winner alone. Reading it from every
-    # candidate was most of the half minute.
-    stages = []
+    # The holder, the shank and the insertion all come off the winner
+    # alone. Reading them from every candidate was most of the half minute.
+    extra = {"holder": [], "shank": [], "insertion": None}
+    # The cutter's own size, which is what says whether a shank reading
+    # could be true.
+    diameter = (fields_from(best[0]).get("diameter") or 0.0) * scale
     try:
         builder = getattr(collection, best[1])(tool)
         try:
-            stages = nose_first(holder_stages(builder, scale))
+            extra["holder"] = nose_first(holder_stages(builder, scale))
+            extra["shank"] = shank_stages(builder, scale, diameter)
+            extra["insertion"] = insertion_of(builder, scale)
         finally:
             try:
                 builder.Destroy()
             except Exception:
                 pass
     except Exception:
-        stages = []
-    return best[0], stages, best[1]
+        pass
+    return best[0], extra, best[1]
 
 
 def numbers_on(builder):
@@ -589,20 +595,63 @@ def holder_stages(builder, scale):
     return numbered_stages(holder_nums, scale)
 
 
-def stages_from_rows(rows, scale):
+def stage_from_nx_row(row, scale):
+    """One section, read by the column order NX actually uses.
+
+    A section comes back as [lower diameter, length, taper angle, upper
+    diameter, corner radius]. That is not inferred from the shape of the
+    numbers -- every earlier version of this guessed which column was the
+    diameter and drew collars that were not there -- it is read off a
+    diagnostic and then checked, because the row carries its own proof: the
+    taper angle is the angle from the lower diameter to the upper one over
+    the length, so if the three agree the columns are what they are said to
+    be, and if they do not, this is the wrong shape of row and says so.
+
+        [0.07, 1.15, 3.235015, 0.2, 0.0]
+        atan((0.2 - 0.07) / 2 / 1.15) = 3.235015 degrees
+
+    @returns a stage, or None to say "these are not those columns"
+    """
+    if len(row) < 4:
+        return None
+    lower, length, taper, upper = row[0], row[1], row[2], row[3]
+    if not (lower > 0 and length > 0 and upper > 0):
+        return None
+    implied = math.degrees(math.atan2((upper - lower) / 2.0, length))
+    if abs(implied - taper) > 0.05:
+        return None
+    return {"dia": round(lower * scale, 4), "topDia": round(upper * scale, 4),
+            "length": round(length * scale, 4)}
+
+
+def stages_from_rows(rows, scale, limits=None):
     """A stack of cones from however the sections came back.
 
     A row read by name is matched by name. A row read by position is the
     section as NX lists it — diameter first, then length, then the taper
     and corner radius this model has no use for — and that reading is
     checked rather than trusted: every diameter and every length has to be
-    positive, and a holder widens away from the tool, so a column pair that
-    says otherwise is the wrong pair and the next one is tried.
+    positive, and the stack should widen away from the tool, so a pair that
+    says otherwise is probably the wrong pair.
+
+    `limits` is what the diameters are allowed to be, in millimetres, and
+    it is the difference between a careful guess and a wrong one. Without
+    it, a stack that does not happen to widen falls through to reading the
+    lengths as diameters, which on a 3 mm cutter drew a 38 mm collar that
+    exists nowhere but on the screen. A reading that cannot be true is
+    worse than no reading: with limits given and nothing passing them,
+    this says so and the tool is built the plain way.
     """
     if not rows:
         return []
     if isinstance(rows[0], dict):
         return [st for st in (stage_from(r, scale) for r in rows) if st]
+
+    # The columns NX uses, when every row agrees it is using them. Nothing
+    # below this runs on a library that reads like this one.
+    known = [stage_from_nx_row(r, scale) for r in rows]
+    if all(st is not None for st in known):
+        return known
 
     width = min(len(r) for r in rows)
     if width < 2:
@@ -610,13 +659,15 @@ def stages_from_rows(rows, scale):
     order = [(0, 1), (1, 0)] + [(a, b) for a in range(width) for b in range(width) if a != b]
     best = None
     for dia_at, len_at in order:
-        dias = [r[dia_at] for r in rows]
-        lens = [r[len_at] for r in rows]
+        dias = [r[dia_at] * scale for r in rows]
+        lens = [r[len_at] * scale for r in rows]
         if not all(d > 0 for d in dias) or not all(l > 0 for l in lens):
             continue
+        if limits and not all(limits[0] <= d <= limits[1] for d in dias):
+            continue
         widening = all(dias[i] <= dias[i + 1] + 1e-9 for i in range(len(dias) - 1))
-        stack = [{"dia": round(d * scale, 4), "topDia": round(d * scale, 4),
-                  "length": round(l * scale, 4)} for d, l in zip(dias, lens)]
+        stack = [{"dia": round(d, 4), "topDia": round(d, 4), "length": round(l, 4)}
+                 for d, l in zip(dias, lens)]
         # A step is a cylinder unless the next one is wider, in which case
         # it is the cone up to it. That is what the table means.
         for i in range(len(stack) - 1):
@@ -658,6 +709,102 @@ def numbered_stages(nums, scale):
         if st:
             stages.append(st)
     return stages
+
+
+def shank_stages(builder, scale, diameter=0.0):
+    """The tool's own body above the flutes, as a stack of cones.
+
+    NX describes it exactly as it describes a holder — a run of sections —
+    and it is part of the tool rather than of the holder, so it goes on the
+    tool. A stepped shank, a reduced neck or a tapered shank is a real
+    difference to what will fit in a pocket, which is the only reason the
+    body is drawn at all.
+
+    Read tip-upwards, which is the order Mill-Sim wants, so it is not
+    turned over the way a holder is.
+    """
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "shank" not in low or "section" not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        rows = sections_of(attr)
+        # A tool's shank is not four times its cutter, nor a twentieth of
+        # it. Anything outside that is not a diameter and is refused.
+        limits = (diameter / 20.0, diameter * 4.0) if diameter > 0 else None
+        stages = stages_from_rows(rows, scale, limits)
+        if stages:
+            return stages
+    return []
+
+
+def insertion_of(builder, scale):
+    """How far the tool is pushed into the holder, if NX says.
+
+    Mill-Sim asks for the stickout — how much of the tool is *out* of the
+    holder — and NX states the other end of the same measurement. One is
+    the overall length less the other, so this is a reading rather than a
+    second number, and it is converted here rather than carried inside.
+    """
+    best = None
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_"):
+            continue
+        if not ("holderoffset" in low or "profilestartposition" in low
+                or "insertion" in low or "zmount" in low):
+            continue
+        try:
+            v = plain(getattr(builder, name))
+        except Exception:
+            continue
+        if v is not None and v > 0:
+            best = v * scale if best is None else min(best, v * scale)
+    # The same names live on the section builders, which is where the one
+    # that is actually set was seen.
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "holder" not in low or "section" not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
+            continue
+        for sub in dir(attr):
+            if "holderoffset" not in sub.lower() and "profilestart" not in sub.lower():
+                continue
+            try:
+                v = plain(getattr(attr, sub))
+            except Exception:
+                continue
+            if v is not None and v > 0:
+                best = v * scale if best is None else min(best, v * scale)
+    return best
+
+
+def stickout_of(overall, flute, insertion, stated):
+    """How much of the tool is out of the holder.
+
+    Three ways of knowing, in order of how much they are worth: a stickout
+    NX stated outright, the overall length less how far it is inserted, and
+    failing both, enough to clear the flutes and a little more. A reading
+    that would put the holder on the flutes, or that would leave the tool
+    held by nothing, is not the right reading and is not used.
+    """
+    for candidate in (stated, (overall - insertion) if insertion else None):
+        # Gripped right at the end of the flutes is a real setting and a
+        # common one, so the flute length itself is allowed; what is not is
+        # a holder sitting on the flutes, or a tool held by nothing.
+        if candidate and flute - 1e-9 <= candidate <= overall - 0.5:
+            return candidate
+    return max(flute * 1.4, flute + 5.0)
 
 
 def nose_first(stages):
@@ -885,11 +1032,16 @@ def main():
         how = ""
 
         stages = []
+        shank = []
+        insertion = None
         shape = []
         factory_name = None
         try:
-            found, stages, factory_name = read_tool(collection, group, name, tried, scale)
+            found, extra, factory_name = read_tool(collection, group, name, tried, scale)
             found = found or {}
+            stages = extra.get("holder", [])
+            shank = extra.get("shank", [])
+            insertion = extra.get("insertion")
             how = factory_name or ""
         except Exception:
             failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
@@ -950,7 +1102,29 @@ def main():
         corner = min(read.get("cornerRadius", 0.0), diameter / 2.0)
         kind = family(name, diameter, corner)
         flute = read.get("fluteLength") or diameter * 2.0
-        overall = max(read.get("overallLength") or flute * 3.0, flute + 1.0)
+
+        # NX's height is the cutting part of the tool; the shank sections
+        # stand on top of it and are the rest of its length. A tool is as
+        # long as both, and a stickout worked out from the height alone
+        # came up short by the whole shank.
+        height = read.get("overallLength") or flute * 3.0
+        if not shank:
+            # Nothing says how much tool is above the flutes, so a
+            # millimetre of it is assumed rather than none. With sections
+            # to go on, they say, and the floor only invents a stage.
+            height = max(height, flute + 1.0)
+        # The body above the flutes: what is left of the cutting part, then
+        # the shank sections. Mill-Sim's stages run from the top of the
+        # flutes upwards, so the gap is filled rather than left as a hole.
+        body = []
+        if shank:
+            gap = height - flute
+            if gap > 0.01:
+                shank_dia = read.get("shankDiameter") or diameter
+                body.append({"dia": round(shank_dia, 4), "topDia": round(shank_dia, 4),
+                             "length": round(gap, 4)})
+            body.extend(shank)
+        overall = flute + sum(st["length"] for st in body) if body else height
         # NX leaves the point angle at zero on a tool that never had one; a
         # drill without a point is not a thing.
         tip_angle = read.get("tipAngle") or (118.0 if kind == "drill" else 90.0)
@@ -991,6 +1165,10 @@ def main():
             "overallLength": round(overall, 4),
             "material": "carbide",
             "notes": "From NX: %s" % name,
+            # The shank profile, when NX described one. Left out otherwise,
+            # because a tool with no stages is built the way every tool was
+            # built before there were any.
+            "bodyStages": body or None,
         })
         # The holder, shared with every tool that runs in the same one.
         holder_id = ""
@@ -1014,14 +1192,18 @@ def main():
             "number": number,
             "toolId": tool_id,
             "holderId": holder_id,
-            # NX states how far the tool stands out of the holder; without
-            # one, enough to clear the flutes, which is what an operator
-            # would set.
-            "stickout": round(read.get("stickout") or max(flute * 1.4, flute + 5.0), 4),
+            # NX says how far the tool goes *into* the holder; Mill-Sim
+            # asks how much of it is out. One is the overall length less
+            # the other. The conversion is checked rather than trusted: a
+            # stickout that does not clear the flutes, or that leaves
+            # nothing gripped, is not the right reading of that number, and
+            # enough to clear the flutes is what an operator would set.
+            "stickout": round(stickout_of(overall, flute, insertion, read.get("stickout")), 4),
         })
-        lw.WriteLine("  T%-4d %-32s %-8s ø%.3f  %s [%s]"
-                     % (number, name, kind, diameter,
-                        ("holder, %d steps" % len(stages)) if stages else "no holder", how))
+        lw.WriteLine("  T%-4d %-32s %-8s ø%.3f  L%.1f out%.1f  %s [%s]"
+                     % (number, name, kind, diameter, overall, assemblies[-1]["stickout"],
+                        ("holder %d, shank %d" % (len(stages), len(body))) if stages
+                        else ("shank %d" % len(body)) if body else "bare", how))
 
     library = {
         "version": 1,

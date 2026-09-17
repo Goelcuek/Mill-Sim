@@ -76,6 +76,19 @@ export const DEFAULT_TOOL = {
   neckDiameter: 0,
   neckLength: 0,
   overallLength: 75,
+  /**
+   * The body above the flutes, as a stack of cones, when a tool has one.
+   *
+   * Most cutters are a neck and a shank and are described by the three
+   * numbers above. Some are not: a reduced-neck tool, a stepped shank, a
+   * tapered shank. NX describes that body the same way it describes a
+   * holder — a run of sections — and that is what comes across here.
+   *
+   * Null is the normal case and means exactly what it did before there was
+   * such a field: neck, blend, shank. Anything that already exists, and
+   * anything Fusion writes, has no stages and is built as it always was.
+   */
+  bodyStages: null,
   material: 'carbide',
   coating: 'AlTiN',
   color: '#c8ccd4',
@@ -89,11 +102,43 @@ export function toolFromInches(def) {
   for (const key of ['diameter', 'tipDiameter', 'cornerRadius', 'fluteLength', 'shankDiameter', 'neckDiameter', 'neckLength', 'overallLength']) {
     if (Number.isFinite(scaled[key])) scaled[key] *= MM_PER_INCH;
   }
+  if (Array.isArray(scaled.bodyStages)) {
+    scaled.bodyStages = scaled.bodyStages.map((s) => ({
+      dia: num(s.dia, 0) * MM_PER_INCH,
+      topDia: num(s.topDia, num(s.dia, 0)) * MM_PER_INCH,
+      length: num(s.length, 0) * MM_PER_INCH,
+    }));
+  }
   return scaled;
 }
 
 export function makeTool(patch = {}) {
-  return { ...DEFAULT_TOOL, ...patch, id: patch.id || uid('tool'), cutting: { ...DEFAULT_TOOL.cutting, ...(patch.cutting || {}) } };
+  return {
+    ...DEFAULT_TOOL,
+    ...patch,
+    id: patch.id || uid('tool'),
+    cutting: { ...DEFAULT_TOOL.cutting, ...(patch.cutting || {}) },
+    bodyStages: normaliseStages(patch.bodyStages),
+  };
+}
+
+/**
+ * A stack of cones, or null.
+ *
+ * Same shape as a holder's stages and read the same way: bottom diameter,
+ * top diameter, length, from the flutes upwards. A stage with no length is
+ * not a stage.
+ */
+export function normaliseStages(stages) {
+  if (!Array.isArray(stages) || !stages.length) return null;
+  const out = stages
+    .map((s) => ({
+      dia: Math.max(num(s.dia, 0), 0),
+      topDia: Math.max(num(s.topDia, num(s.dia, 0)), 0),
+      length: num(s.length, 0),
+    }))
+    .filter((s) => s.length > 0 && (s.dia > 0 || s.topDia > 0));
+  return out.length ? out : null;
 }
 
 const ARC_STEPS = 48;
@@ -216,6 +261,43 @@ export function buildTool(def) {
   let z = cutTopZ;
   let r = cutTopR;
   body.push({ r, z });
+
+  // A body described section by section is used as it stands. A reduced
+  // neck, a stepped shank or a tapered one is a real difference in a deep
+  // pocket, and it is the body that the crash model tests.
+  const stages = normaliseStages(t.bodyStages);
+  if (stages) {
+    for (const stage of stages) {
+      const bot = Math.max(stage.dia / 2, 0.05);
+      const top = Math.max(stage.topDia / 2, 0.05);
+      body.push({ r: bot, z });
+      body.push({ r: top, z: z + stage.length });
+      z += stage.length;
+      r = top;
+    }
+    // The stated overall length wins where it is longer: the sections
+    // describe the profile, and what is above the last of them is more of
+    // the last of them.
+    if (oal > z + 1e-6) body.push({ r, z: oal });
+    else oal = z;
+
+    const bodyPointsOnly = dedupe(body);
+    const silhouetteOnly = dedupe([...cut, ...bodyPointsOnly]);
+    let maxR = 0;
+    for (const p of cut) maxR = Math.max(maxR, p.r);
+    return {
+      def: { ...t, fluteLength: flute, overallLength: oal, bodyStages: stages },
+      cuttingPoints: cut,
+      bodyPoints: bodyPointsOnly,
+      silhouette: silhouetteOnly,
+      cutEnvelope: buildEnvelope(cut),
+      bodyEnvelope: buildEnvelope(bodyPointsOnly),
+      radius: maxR,
+      fluteLength: flute,
+      length: oal,
+      warnings,
+    };
+  }
 
   if (t.type === 'lollipop') {
     const nr = Math.max(neckD / 2, 0.2);

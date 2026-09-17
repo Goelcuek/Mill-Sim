@@ -74,7 +74,20 @@ For tools that live in a part's CAM setup rather than in the NX library,
 › Journal › Play…** — that walks the setup's tool group and writes a
 Mill-Sim library.
 
-It brings the holders too. NX describes a holder the way Mill-Sim does — a
+It brings the holders and the shanks too. NX describes both the way
+Mill-Sim does — a run of sections, each with a lower diameter, an upper
+diameter and a length — so a stepped holder and a reduced-neck cutter both
+come across as they are. The holder is shared between every tool that runs
+in it; the shank belongs to the tool, because it does.
+
+NX states how far a tool is pushed *into* its holder and Mill-Sim asks how
+much of it is *out*; one is the overall length less the other, so the
+journal converts and the library keeps one number. That reading is checked
+rather than trusted — a stickout that would put the holder on the flutes,
+or leave the tool held by nothing, is not the right reading of that
+number. The assembly window shows both ends of it.
+
+ NX describes a holder the way Mill-Sim does — a
 run of steps, each with a lower diameter, an upper diameter and a length —
 so the stack comes across as it stands, turned nose-first, shared between
 every tool that runs in it, and with the tool's projection as the
