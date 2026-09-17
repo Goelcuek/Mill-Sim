@@ -698,9 +698,9 @@ def shank_stages(builder, scale, diameter=0.0):
         if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
             continue
         rows = sections_of(attr)
-        # A tool's shank is not four times its cutter, nor a twentieth of
+        # A tool's shank is not three times its cutter, nor a twentieth of
         # it. Anything outside that is not a diameter and is refused.
-        limits = (diameter / 20.0, diameter * 4.0) if diameter > 0 else None
+        limits = (diameter / 20.0, diameter * 3.0) if diameter > 0 else None
         stages = stages_from_rows(rows, scale, limits)
         if stages:
             return stages
@@ -751,6 +751,33 @@ def insertion_of(builder, scale):
             if v is not None and v > 0:
                 best = v * scale if best is None else min(best, v * scale)
     return best
+
+
+def body_above_flutes(overall, flute, shank, shank_dia):
+    """The tool's body, from the top of the flutes to the top of the tool.
+
+    NX's (L) Length is the whole tool, so the shank sections are the
+    profile of what is above the flutes rather than extra length on top:
+    whatever they do not account for is the tool's own body at the shank
+    diameter, and it goes underneath them. Mill-Sim's stages run upwards
+    from the flutes, so that remainder is filled rather than left as a
+    hole.
+
+    Sections longer than the tool has room for are not the body above its
+    flutes, whatever they are. Building the tool plainly is better than
+    drawing a shank that cannot fit on it.
+    """
+    if not shank:
+        return []
+    gap = overall - flute - sum(st["length"] for st in shank)
+    if gap < -0.01:
+        return []
+    body = []
+    if gap > 0.01:
+        body.append({"dia": round(shank_dia, 4), "topDia": round(shank_dia, 4),
+                     "length": round(gap, 4)})
+    body.extend(shank)
+    return body
 
 
 def stickout_of(overall, flute, insertion, stated):
@@ -1037,6 +1064,9 @@ def main():
             diag.append("  holder steps read: %d" % len(stages))
             for st in stages:
                 diag.append("    %s" % st)
+            diag.append("  shank sections read: %d" % len(shank))
+            for st in shank:
+                diag.append("    %s" % st)
             # Everything on the builder, numbers and otherwise. A holder is
             # a list or a sub-builder rather than a float, so this is where
             # it shows up when the three ways of looking for it come back
@@ -1067,23 +1097,15 @@ def main():
         kind = family(name, diameter, corner)
         flute = read.get("fluteLength") or diameter * 2.0
 
-        # NX's height is the cutting part of the tool; the shank sections
-        # stand on top of it and are the rest of its length. A tool is as
-        # long as both, and a stickout worked out from the height alone
-        # came up short by the whole shank.
-        height = max(read.get("overallLength") or flute * 3.0, flute + 1.0)
-        # The body above the flutes: what is left of the cutting part, then
-        # the shank sections. Mill-Sim's stages run from the top of the
-        # flutes upwards, so the gap is filled rather than left as a hole.
-        body = []
-        if shank:
-            gap = height - flute
-            if gap > 0.01:
-                shank_dia = read.get("shankDiameter") or diameter
-                body.append({"dia": round(shank_dia, 4), "topDia": round(shank_dia, 4),
-                             "length": round(gap, 4)})
-            body.extend(shank)
-        overall = flute + sum(st["length"] for st in body) if body else height
+        # NX's (L) Length is the whole tool, tip to top, with the flute
+        # length inside it -- its own dialog draws L spanning all of it.
+        # So the shank is the profile of the part above the flutes, not
+        # extra length on top of it: adding it made a five inch tool seven
+        # inches long and stuck it seven inches out of the holder.
+        overall = max(read.get("overallLength") or flute * 3.0, flute + 1.0)
+
+        body = body_above_flutes(overall, flute, shank,
+                                 read.get("shankDiameter") or diameter)
         # NX leaves the point angle at zero on a tool that never had one; a
         # drill without a point is not a thing.
         tip_angle = read.get("tipAngle") or (118.0 if kind == "drill" else 90.0)
@@ -1159,6 +1181,12 @@ def main():
             # enough to clear the flutes is what an operator would set.
             "stickout": round(stickout_of(overall, flute, insertion, read.get("stickout")), 4),
         })
+        diag.append("")
+        diag.append("%s: ø%.4f flute %.4f length %.4f insertion %s stickout %.4f"
+                    % (name, diameter, flute, overall, insertion, assemblies[-1]["stickout"]))
+        diag.append("  body: %s" % (body or "plain"))
+        diag.append("  holder: %s" % (stages or "none"))
+
         lw.WriteLine("  T%-4d %-32s %-8s ø%.3f  L%.1f out%.1f  %s [%s]"
                      % (number, name, kind, diameter, overall, assemblies[-1]["stickout"],
                         ("holder %d, shank %d" % (len(stages), len(body))) if stages

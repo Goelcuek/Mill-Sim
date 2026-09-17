@@ -485,23 +485,42 @@ eq(j.insertion_of(WithOffset(), 25.4), 25.4, 'one inch, on the section builder')
 eq(j.insertion_of(NoShank(), 1.0), None, 'nothing said')
 
 print()
-print('a tool is as long as its cutting part and its shank together:')
-# NX's height is the cutting part; the shank sections stand on top of it.
-# 3 in of tool with 2 in of flute, and 2 in of shank above, is 5 in long
-# — and a stickout worked out from the 3 came up two inches short.
-height, flute = 76.2, 50.8
-shank = [{'dia': 12.7, 'topDia': 12.7, 'length': 25.4},
-         {'dia': 19.05, 'topDia': 19.05, 'length': 25.4}]
-gap = height - flute
-body = [{'dia': 19.05, 'topDia': 19.05, 'length': gap}] + shank
-overall = flute + sum(x['length'] for x in body)
-near(overall, 127.0, 'five inches all told')
-near(j.stickout_of(overall, flute, 25.4, None), 101.6, 'inserted one inch, four inches out')
-# Which is what it was short by before: the height alone gave two inches,
-# exactly the flute length, and the holder sat on the flutes.
-near(j.stickout_of(height, flute, 25.4, None), 50.8, 'the old reading, short by the shank')
+print("TK1457_FREZE, off the NX dialog exactly as it reads:")
+# (D) 0.75  (L) 5.0  (FL) 2.0  Flutes 4  (RD) 1.0  (RL) 0.0
+# Holder steps: Ø2.0 x 5.0, Ø2.0 x 1.0, Ø3.0 x 2.0
+# Tool Insertion (OS) Offset 1.0
+IN = 25.4
+D, L, FL, OS = 0.75 * IN, 5.0 * IN, 2.0 * IN, 1.0 * IN
+
+# L is the whole tool. Adding a shank on top of it made a five inch tool
+# seven inches long, which is what put it 178 mm out of the holder.
+shank = [{'dia': D, 'topDia': D, 'length': 2.0 * IN}]
+body = j.body_above_flutes(L, FL, shank, D)
+near(L, 127.0, 'five inches of tool, not seven')
+near(sum(x['length'] for x in body), L - FL, 'and the body fills what is above the flutes')
+eq(len(body), 2, 'the tool\'s own body, then the shank section on top of it')
+near(j.stickout_of(L, FL, OS, None), 101.6, 'inserted one inch, four inches out')
+
+# A shank longer than the tool has room for is not the body above its
+# flutes, whatever it is, and is not drawn.
+huge = [{'dia': D, 'topDia': D, 'length': 10.0 * IN}]
+eq(j.body_above_flutes(L, FL, huge, D), [], 'a shank that cannot fit is dropped')
+# One that fills it exactly needs no packing underneath.
+exact = [{'dia': D, 'topDia': D, 'length': L - FL}]
+eq(len(j.body_above_flutes(L, FL, exact, D)), 1, 'a shank that fills it exactly stands alone')
+eq(j.body_above_flutes(L, FL, [], D), [], 'no shank, no stages')
 
 print()
+print('a holder step Ø3 in is not a shank on a Ø0.75 in cutter:')
+# The holder's own steps, if they reached the shank reader, are two to
+# four times the cutter. Three times is the cap, so they do not.
+holder_rows = [(2.0, 5.0, 0.0), (2.0, 1.0, 0.0), (3.0, 2.0, 0.0)]
+eq(j.stages_from_rows(holder_rows, IN, (D / 20.0, D * 3.0)), [],
+   'nothing on that stack could be this tool\'s shank')
+# ...while a real shank at the cutter diameter passes untouched.
+eq(len(j.stages_from_rows([(0.75, 2.0, 0.0)], IN, (D / 20.0, D * 3.0))), 1,
+   'a shank the size of the cutter is fine')
+
 print('taper_of() reads the interface out of the name:')
 eq(j.taper_of('TK2105_FREZE_BT40'), 'BT40', 'BT40')
 eq(j.taper_of('HSK 63 A shrink'), 'HSK63A', 'HSK63-A however it is spelt')
