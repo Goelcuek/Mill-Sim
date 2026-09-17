@@ -440,6 +440,39 @@ class NoShank:
 eq(j.shank_stages(NoShank(), 1.0), [], 'no sections, no body')
 
 print()
+print('a shank reading that cannot be true is refused, not drawn:')
+# The trap that put a 38 mm collar on a 3 mm cutter. Here the diameters
+# are in the second column, so reading the first as diameters gives a
+# stack that does not widen — and with nothing to check it against, that
+# wrong reading is what gets returned and drawn.
+# The lengths happen to grow upwards while the diameters shrink, so the
+# wrong column pair is the one that looks like a widening stack.
+swapped = [(1.0, 0.12, 0.0), (2.0, 0.06, 0.0)]
+loose = j.stages_from_rows(swapped, 25.4)
+eq([round(x['dia'], 2) for x in loose], [25.4, 50.8], 'unbounded, the lengths become diameters')
+
+# Bounded by the cutter the shank belongs to, that reading cannot be true,
+# and the bound does not merely refuse it — it steers to the pair that can.
+bounded = j.stages_from_rows(swapped, 25.4, (3.05 / 20.0, 3.05 * 4.0))
+eq([round(x['dia'], 2) for x in bounded], [3.05, 1.52], 'the real diameters, out of the other column')
+eq([round(x['length'], 1) for x in bounded], [25.4, 50.8], 'and the lengths out of the first')
+
+# When no pair could be true, nothing is claimed at all.
+nonsense = [(50.0, 60.0), (70.0, 80.0)]
+eq(j.stages_from_rows(nonsense, 1.0, (0.15, 12.2)), [], 'no reading is better than a wrong one')
+
+class TinyTool:
+    def __init__(self, rows):
+        self.TlDiameterBuilder = Inh(0.12)
+        self.ShankSectionBuilder = HandleSectionBuilder(rows)
+eq([round(x['dia'], 2) for x in j.shank_stages(TinyTool(swapped), 25.4, 3.05)], [3.05, 1.52],
+   'a 3 mm cutter gets its real shank')
+eq(j.shank_stages(TinyTool(nonsense), 1.0, 3.05), [], 'and no collar that exists nowhere')
+# With no cutter size to check against the old behaviour stands: this is a
+# bound, not a second guess at the geometry.
+eq([round(x['dia'], 2) for x in j.shank_stages(TinyTool(swapped), 25.4, 0.0)], [25.4, 50.8],
+   'nothing to check against, nothing refused')
+
 print('insertion_of() finds the offset wherever NX keeps it:')
 class WithOffset:
     class HS:
@@ -450,6 +483,23 @@ class WithOffset:
         self.HolderSectionBuilder = WithOffset.HS()
 eq(j.insertion_of(WithOffset(), 25.4), 25.4, 'one inch, on the section builder')
 eq(j.insertion_of(NoShank(), 1.0), None, 'nothing said')
+
+print()
+print('a tool is as long as its cutting part and its shank together:')
+# NX's height is the cutting part; the shank sections stand on top of it.
+# 3 in of tool with 2 in of flute, and 2 in of shank above, is 5 in long
+# — and a stickout worked out from the 3 came up two inches short.
+height, flute = 76.2, 50.8
+shank = [{'dia': 12.7, 'topDia': 12.7, 'length': 25.4},
+         {'dia': 19.05, 'topDia': 19.05, 'length': 25.4}]
+gap = height - flute
+body = [{'dia': 19.05, 'topDia': 19.05, 'length': gap}] + shank
+overall = flute + sum(x['length'] for x in body)
+near(overall, 127.0, 'five inches all told')
+near(j.stickout_of(overall, flute, 25.4, None), 101.6, 'inserted one inch, four inches out')
+# Which is what it was short by before: the height alone gave two inches,
+# exactly the flute length, and the holder sat on the flutes.
+near(j.stickout_of(height, flute, 25.4, None), 50.8, 'the old reading, short by the shank')
 
 print()
 print('taper_of() reads the interface out of the name:')
