@@ -13,6 +13,7 @@
 import * as THREE from 'three';
 import { el } from '../ui/dom.js';
 import { fmt } from '../core/util.js';
+import * as units from '../core/units.js';
 
 const LINE_COLOR = 0x0a84ff;
 const CIRCLE_COLOR = 0xaf52de;
@@ -81,8 +82,8 @@ export class MeasureView {
       }
 
       const label = el('div.measure-label', {}, item.kind === 'circle'
-        ? `Ø${fmt(item.value, 3)}`
-        : fmt(item.value, 3));
+        ? `Ø${units.lenU(item.value, 3)}`
+        : units.lenU(item.value, 3));
       this.overlay.appendChild(label);
       this.labels.set(item.id, label);
     }

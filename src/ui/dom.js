@@ -1,6 +1,8 @@
 // A very small DOM helper. Not a framework — just enough to keep the panel
 // code readable.
 
+import * as units from '../core/units.js';
+
 /**
  * @param {string} tag  'div.class#id' style selector
  * @param {object|null} props
@@ -48,28 +50,77 @@ export function clear(node) {
   return node;
 }
 
-/** Labelled number input that reports changes as numbers. */
+/**
+ * Which field units are lengths, and so follow the display unit.
+ *
+ * A caller says what the number *is* — millimetres, or millimetres a
+ * minute — and this decides what to show. Everything above this line keeps
+ * working in millimetres whichever way the switch is set, which is the
+ * point: there is one set of numbers in the program, not two.
+ */
+const LENGTH_UNITS = new Set(['mm', 'mm/min']);
+
 export function field(label, value, opts = {}) {
+  /* eslint-disable-next-line no-param-reassign -- setValue keeps this in step */
+  const lengthy = opts.type !== 'text' && LENGTH_UNITS.has(opts.unit);
+  // Millimetres are shown exactly as they are held — rounding a number on
+  // its way into the box it came out of is how precision is lost. Inches
+  // are rounded to four places, which is a tenth of a thou and as fine as
+  // anybody sets a machine.
+  const shown = opts.unit === 'mm/min' ? 3 : 4;
+  const show = (v) => {
+    if (!lengthy || !Number.isFinite(v)) return v;
+    const d = units.toDisplay(v);
+    return units.isInch() || opts.unit === 'mm/min' ? Number(d.toFixed(shown)) : d;
+  };
+  /**
+   * What was typed, as millimetres.
+   *
+   * A rounded inch turned back into millimetres is not the millimetre it
+   * came from, so a box that is submitted without being edited hands back
+   * exactly what it was given rather than a value two microns away from
+   * it. Only a number somebody actually changed is converted.
+   */
+  let asShown = show(value);
+  const store = (v) => {
+    if (!lengthy || !Number.isFinite(v)) return v;
+    if (Number.isFinite(asShown) && v === asShown) return value;
+    return units.fromDisplay(v);
+  };
+  const unitText = !lengthy ? opts.unit
+    : (opts.unit === 'mm/min' ? units.feedLabel() : units.lengthLabel());
+
   const input = el('input', {
     type: opts.type || 'number',
-    value: value ?? '',
-    step: opts.step ?? 'any',
-    min: opts.min,
-    max: opts.max,
+    value: show(value) ?? '',
+    step: lengthy && Number.isFinite(opts.step) ? units.toStep(opts.step) : (opts.step ?? 'any'),
+    min: Number.isFinite(opts.min) ? show(opts.min) : opts.min,
+    max: Number.isFinite(opts.max) ? show(opts.max) : opts.max,
     disabled: opts.disabled,
     title: opts.title || '',
     oninput: (e) => {
       if (!opts.onInput) return;
       const raw = e.target.value;
-      opts.onInput(opts.type === 'text' ? raw : raw === '' ? null : parseFloat(raw), e);
+      opts.onInput(opts.type === 'text' ? raw : raw === '' ? null : store(parseFloat(raw)), e);
     },
-    onchange: (e) => opts.onChange && opts.onChange(opts.type === 'text' ? e.target.value : parseFloat(e.target.value), e),
+    onchange: (e) => opts.onChange && opts.onChange(opts.type === 'text' ? e.target.value : store(parseFloat(e.target.value)), e),
   });
   const wrap = el('label.field', { title: opts.title || '' }, [
-    label ? el('span.field-label', {}, [label, opts.unit ? el('span.unit', {}, ` ${opts.unit}`) : null]) : null,
+    label ? el('span.field-label', {}, [label, unitText ? el('span.unit', {}, ` ${unitText}`) : null]) : null,
     input,
   ]);
   wrap.input = input;
+  /**
+   * Put a value in from outside, in millimetres like everything else.
+   *
+   * Panels that write straight to `field.input.value` are handing the box
+   * a raw number, which in inch mode is the wrong one. This is the way in.
+   */
+  wrap.setValue = (v) => {
+    value = v;
+    asShown = show(v);
+    input.value = asShown ?? '';
+  };
   return wrap;
 }
 

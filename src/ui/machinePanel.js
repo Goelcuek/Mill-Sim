@@ -19,6 +19,7 @@ import { PRESETS } from '../machine/presets.js';
 import { MachineParts } from '../machine/parts.js';
 import { fmt, uid } from '../core/util.js';
 import { homeOf } from '../machine/config.js';
+import * as units from '../core/units.js';
 
 const KINDS = [
   { value: 'linear', label: 'Linear' },
@@ -159,8 +160,8 @@ export class MachinePanel extends Panel {
       const bad = app.jogLimit();
       alarm.hidden = !bad;
       if (bad) {
-        alarm.textContent = `Over travel: machine ${bad.axis}${fmt(bad.value, 2)} is past the `
-          + `${bad.value > bad.limit ? 'maximum' : 'minimum'} of ${fmt(bad.limit, 2)} mm.`;
+        alarm.textContent = `Over travel: machine ${bad.axis}${units.len(bad.value, 2)} is past the `
+          + `${bad.value > bad.limit ? 'maximum' : 'minimum'} of ${units.lenU(bad.limit, 2)}.`;
       }
     };
 
@@ -173,7 +174,9 @@ export class MachinePanel extends Panel {
       const value = Number(jog[node.letter] || 0);
       const step = rotary ? 1 : 1;
 
-      const readout = el('span.value', {}, `${fmt(value, 3)} ${rotary ? '°' : 'mm'}`);
+      // A rotary reads in degrees whatever lengths are shown in.
+      const say = (v) => (rotary ? `${fmt(v, 3)} °` : units.lenU(v, 3));
+      const readout = el('span.value', {}, say(value));
       const slider = el('input.jog-slider', {
         type: 'range',
         min: lo,
@@ -188,16 +191,16 @@ export class MachinePanel extends Panel {
           // itself it stays under the pointer and reads a position the
           // machine never reached.
           if (String(v) !== e.target.value) e.target.value = String(v);
-          readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
-          if (typed) typed.input.value = String(v);
+          readout.textContent = say(v);
+          if (typed) typed.setValue(v);
           showAlarm();
         },
       });
       const nudge = (d) => {
         const v = app.setJog(node.letter, (Number(app.jog[node.letter]) || 0) + d);
         slider.value = String(v);
-        readout.textContent = `${fmt(v, 3)} ${rotary ? '°' : 'mm'}`;
-        if (typed) typed.input.value = String(v);
+        readout.textContent = say(v);
+        if (typed) typed.setValue(v);
         showAlarm();
       };
       const typed = field('', value, {
@@ -206,7 +209,7 @@ export class MachinePanel extends Panel {
         onChange: (v) => {
           const next = app.setJog(node.letter, v || 0);
           slider.value = String(next);
-          readout.textContent = `${fmt(next, 3)} ${rotary ? '°' : 'mm'}`;
+          readout.textContent = say(next);
           showAlarm();
         },
       });
@@ -239,7 +242,10 @@ export class MachinePanel extends Panel {
       ...rows,
       alarm,
       over && over.length
-        ? el('div.inline-warning', {}, `Past the stops: ${over.map((v) => `${v.axis} at ${fmt(v.value, 2)}`).join(', ')}.`)
+        ? el('div.inline-warning', {}, `Past the stops: ${over.map((v) => {
+          const node = axes.find((n) => n.letter === v.axis);
+          return `${v.axis} at ${node && node.kind === 'rotary' ? `${fmt(v.value, 2)}°` : units.lenU(v.value, 2)}`;
+        }).join(', ')}.`)
         : null,
       actionRow([
         { label: 'All to zero', variant: 'primary', onClick: () => { for (const n of axes) app.setJog(n.letter, 0); this.render(); } },
@@ -493,7 +499,7 @@ export class MachinePanel extends Panel {
       if (this.app.envelopeGoverned(node)) {
         const r = this.app.jogRange(node.letter);
         body.push(el('div.hint', {}, `Travel comes from the envelope on the Travels page${
-          r && r.source === 'envelope' ? `: ${fmt(r.min, 1)} to ${fmt(r.max, 1)} mm on this joint` : ''
+          r && r.source === 'envelope' ? `: ${units.len(r.min, 1)} to ${units.lenU(r.max, 1)} on this joint` : ''
         }. Change it there and the jog sliders and the over-travel check follow.`));
       } else {
         body.push(row([
@@ -616,7 +622,7 @@ export class MachinePanel extends Panel {
           el('div.list-title', {}, part.name),
           el('div.list-sub', {}, [
             node ? (fixed ? `${node.name} · fixed` : node.name) : 'not assembled',
-            ` · ${part.size.map((v) => fmt(v, 0)).join(' × ')} mm`,
+            ` · ${units.triple(part.size, 0, ' × ')} ${units.lengthLabel()}`,
             placed ? ' · moved' : '',
           ].join('')),
         ]),
@@ -1087,7 +1093,7 @@ export class MachinePanel extends Panel {
           { label: 'Pick a point…', variant: 'primary', hint: 'Click where the tip stands at home', onClick: () => app.pickHome() },
           { label: 'Above the stock', hint: 'Over the middle of the block, clear of it', onClick: () => app.homeAboveStock() },
         ]),
-        el('div.hint', {}, `${wcsKey} zero reads ${TRAVEL_AXES.map((a, i) => `${a} ${fmt(wcs[i] - home[i], 3)}`).join('  ')} in machine coordinates — the numbers that go on the setup sheet.`),
+        el('div.hint', {}, `${wcsKey} zero reads ${TRAVEL_AXES.map((a, i) => `${a} ${units.len(wcs[i] - home[i], 3)}`).join('  ')} ${units.lengthLabel()} in machine coordinates — the numbers that go on the setup sheet.`),
       ]),
       section('Travel limits', [
         checkbox('Check travel limits', m.limits.enabled, (v) => {
@@ -1112,7 +1118,7 @@ export class MachinePanel extends Panel {
             app.setMachine({ limits: { ...m.limits, max } });
           },
         }))) : null,
-        m.limits.enabled ? el('div.hint', {}, `Travel: ${TRAVEL_AXES.map((a, i) => `${a} ${fmt(m.limits.max[i] - m.limits.min[i], 1)}`).join(' · ')} mm.`) : null,
+        m.limits.enabled ? el('div.hint', {}, `Travel: ${TRAVEL_AXES.map((a, i) => `${a} ${units.len(m.limits.max[i] - m.limits.min[i], 1)}`).join(' · ')} ${units.lengthLabel()}.`) : null,
         el('div.hint', {}, 'Machine coordinates, measured from home, which is how a control reads them out and a manual writes them down: at home the tip is at 0, 0, 0 and these say how far it goes from there. Each rotary has its own travel on the Axes page, and both are checked. View \u203a Show draws the envelope in the viewport.'),
       ]),
       section('Table and spindle', [
@@ -1143,5 +1149,5 @@ function emptyChainNote(kin, app) {
 
 function dirLabel(v) {
   const found = DIRECTIONS.find((d) => d.value === dirKey(v));
-  return found ? found.label : `${fmt(v[0], 2)}, ${fmt(v[1], 2)}, ${fmt(v[2], 2)}`;
+  return found ? found.label : units.triple(v, 2);
 }

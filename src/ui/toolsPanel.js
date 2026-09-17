@@ -15,6 +15,7 @@ import { describeAssembly } from '../tools/assembly.js';
 import { openToolDialog, openHolderDialog, openAssemblyDialog, openLibraryImportDialog } from './toolDialogs.js';
 import { confirmDialog } from './dialog.js';
 import { fmt } from '../core/util.js';
+import * as units from '../core/units.js';
 
 export class ToolsPanel extends Panel {
   constructor(app) {
@@ -320,7 +321,7 @@ export class ToolsPanel extends Panel {
         onOpen: () => openToolDialog(app, t.id),
         swatch: t.color || '#c8ccd4',
         title: t.name,
-        sub: `${TOOL_TYPES[t.type] ? TOOL_TYPES[t.type].label : t.type} · Ø${fmt(t.diameter, 2)} · ${t.fluteCount}F`,
+        sub: `${TOOL_TYPES[t.type] ? TOOL_TYPES[t.type].label : t.type} · Ø${units.lenU(t.diameter, 2)} · ${t.fluteCount}F`,
       }));
     }
     return section('Cutters', [

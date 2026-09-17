@@ -16,6 +16,7 @@ import { TOOL_TYPES, TOOL_FIELDS, DEFAULT_TOOL } from '../tools/toolDefs.js';
 import { TAPERS, HOLDER_TYPES, DEFAULT_HOLDER } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
 import { fmt, clone } from '../core/util.js';
+import * as units from '../core/units.js';
 
 /** A preview pane that rebuilds whenever the draft changes. */
 function previewPane() {
@@ -53,7 +54,7 @@ export function openToolDialog(app, toolId = null) {
     preview.show(built);
     clear(stats);
     stats.appendChild(el('div.stat-value.dim', {},
-      `Max cutting Ø ${fmt(built.cutRadius * 2, 3)} mm · flute ${fmt(built.fluteLength, 2)} mm · OAL ${fmt(built.tool.length, 1)} mm`));
+      `Max cutting Ø ${units.lenU(built.cutRadius * 2, 3)} · flute ${units.lenU(built.fluteLength, 2)} · OAL ${units.lenU(built.tool.length, 1)}`));
     for (const w of built.warnings) {
       stats.appendChild(el('div.inline-warning', {}, w));
     }
@@ -155,7 +156,7 @@ export function openHolderDialog(app, holderId = null) {
     clear(stats);
     if (built.holder) {
       stats.appendChild(el('div.stat-value.dim', {},
-        `Projection ${fmt(built.holder.length, 1)} mm from the gauge line · nose Ø${fmt(built.holder.noseDia, 1)} · widest Ø${fmt(built.holder.maxDia, 1)}`));
+        `Projection ${units.lenU(built.holder.length, 1)} from the gauge line · nose Ø${units.len(built.holder.noseDia, 1)} · widest Ø${units.lenU(built.holder.maxDia, 1)}`));
     }
   };
 
@@ -255,12 +256,12 @@ export function openAssemblyDialog(app, assemblyId = null) {
     preview.show(built);
     clear(stats);
     stats.appendChild(el('div.stat-grid', {}, [
-      ['Cutting Ø', `${fmt(built.cutRadius * 2, 3)} mm`],
-      ['Flute length', `${fmt(built.fluteLength, 2)} mm`],
-      ['Stickout', `${fmt(built.stickout, 2)} mm`],
-      ['Tip to gauge', `${fmt(built.gaugeLength, 1)} mm`],
-      ['Widest body', `${fmt(built.bodyRadius * 2, 1)} mm`],
-      ['Total length', `${fmt(built.totalLength, 1)} mm`],
+      ['Cutting Ø', units.lenU(built.cutRadius * 2, 3)],
+      ['Flute length', units.lenU(built.fluteLength, 2)],
+      ['Stickout', units.lenU(built.stickout, 2)],
+      ['Tip to gauge', units.lenU(built.gaugeLength, 1)],
+      ['Widest body', units.lenU(built.bodyRadius * 2, 1)],
+      ['Total length', units.lenU(built.totalLength, 1)],
     ].map(([k, v]) => el('div.stat', {}, [
       el('div.stat-label', {}, k),
       el('div.stat-value', {}, v),

@@ -9,6 +9,7 @@ import { el, select, checkbox, button, row, section, clear } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
 import { fmt } from '../core/util.js';
+import * as units from '../core/units.js';
 
 export class ViewPanel extends Panel {
   constructor(app) {
@@ -62,6 +63,13 @@ export class ViewPanel extends Panel {
     const t = (label, key) => checkbox(label, d[key], (v) => app.setDisplay({ [key]: v }));
 
     return [
+      section('Units', [
+        row([select('Show lengths in', [
+          { value: 'mm', label: 'Millimetres' },
+          { value: 'in', label: 'Inches' },
+        ], app.state.units, (v) => app.setUnits(v))]),
+        el('div.hint', {}, 'Every length on every page — the tool library, the machine\u2019s travels, the stock, what has been measured, the readout in the corner. The job itself is held in millimetres whichever way this is set, so switching it mid-job changes the reading and nothing else. It is not G20/G21: what the numbers in a program mean is the program\u2019s business, and a metric program stays metric.'),
+      ]),
       section('Show', [
         row([t('Stock', 'stock'), t('Tool', 'tool')]),
         row([t('Holder', 'holder'), t('Toolpath', 'toolpath')]),
@@ -160,10 +168,10 @@ export class ViewPanel extends Panel {
       list.appendChild(el('div.list-item', {}, [
         el('div.swatch', { style: { background: m.kind === 'circle' ? '#af52de' : '#0a7cff' } }),
         el('div.list-main', {}, [
-          el('div.list-title', {}, m.kind === 'circle' ? `Ø${fmt(m.value, 3)} mm` : `${fmt(m.value, 3)} mm`),
+          el('div.list-title', {}, m.kind === 'circle' ? `Ø${units.lenU(m.value, 3)}` : units.lenU(m.value, 3)),
           el('div.list-sub', {}, m.kind === 'circle'
-            ? `centre X ${fmt(m.centre[0], 3)}  Y ${fmt(m.centre[1], 3)}  Z ${fmt(m.centre[2], 3)}`
-            : `ΔX ${fmt(m.delta[0], 3)}  ΔY ${fmt(m.delta[1], 3)}  ΔZ ${fmt(m.delta[2], 3)}`),
+            ? `centre X ${units.len(m.centre[0], 3)}  Y ${units.len(m.centre[1], 3)}  Z ${units.len(m.centre[2], 3)}`
+            : `ΔX ${units.len(m.delta[0], 3)}  ΔY ${units.len(m.delta[1], 3)}  ΔZ ${units.len(m.delta[2], 3)}`),
         ]),
         el('div.list-actions', {}, [
           button('✕', () => app.removeMeasurement(m.id), { title: 'Remove', variant: 'warn' }),
@@ -207,7 +215,7 @@ export class ViewPanel extends Panel {
     const st = app.stock;
     if (st) {
       out.push(section('Simulation grid', [
-        el('div.hint', { html: `<b>${st.nx} × ${st.ny}</b> = ${(st.cellCount / 1e6).toFixed(2)} M columns · cell ${fmt(st.dx, 3)} mm` }),
+        el('div.hint', { html: `<b>${st.nx} × ${st.ny}</b> = ${(st.cellCount / 1e6).toFixed(2)} M columns · cell ${units.lenU(st.dx, 3)}` }),
         el('div.hint', { html: `Display mesh reduced ${app.stockView.renderStep}× to ${app.stockView.gridSize ? app.stockView.gridSize.join(' × ') : '–'} texels.` }),
         el('div.hint', {}, 'Resolution is set on Setup › Stock, because it is a property of the block rather than of the view.'),
       ]));

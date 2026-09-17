@@ -11,6 +11,7 @@ import { parseSTL, bounds } from '../io/stl.js';
 import { MM_PER_INCH } from '../core/util.js';
 import { Dialog } from './dialog.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
+import * as units from '../core/units.js';
 
 const KINDS = [
   { value: 'vice', label: 'Vice jaws', hint: 'A pair of jaws with the work held between them' },
@@ -169,7 +170,7 @@ export function openStockDialog(app, panel) {
             state.model = { name: file.name.replace(/\.stl$/i, ''), positions, triangles: stl.triangles, size: b.size };
             state.fileName = file.name;
             state.size = [...b.size];
-            fileLabel.textContent = `${file.name} — ${stl.triangles.toLocaleString()} triangles, ${b.size.map((v) => v.toFixed(1)).join(' × ')} mm`;
+            fileLabel.textContent = `${file.name} — ${stl.triangles.toLocaleString()} triangles, ${units.triple(b.size, 1, ' × ')} ${units.lengthLabel()}`;
             dialog.setConfirmEnabled(true);
           } catch (err) {
             fileLabel.textContent = `${file.name}: ${err.message}`;

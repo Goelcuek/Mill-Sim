@@ -49,6 +49,16 @@ lives inside the spindle bore and can never touch anything. The gauge line
 is the mating face, and the spindle nose starts exactly there. A tool plus a holder plus a stickout is an *assembly*, and
 an assembly is what a `T` number selects.
 
+**Millimetres or inches.** **View › Show › Units** switches every length on
+every page — the tool library, the machine's travels, the stock, what has
+been measured, the readout in the corner — between millimetres and inches.
+It is a reading, not a second set of numbers: the job is held in
+millimetres whichever way it is set, so a project or a library written in
+inch mode is the file that would have been written in metric, and
+switching mid-job changes the panels and nothing else. It is also not
+G20/G21 — what the numbers in a program mean is the programmer's business,
+and a metric program stays metric.
+
 A shop's tools arrive as a file rather than as forty sets of numbers to
 retype, so **Tools › Library › Import** reads four kinds directly:
 

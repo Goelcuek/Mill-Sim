@@ -34,6 +34,7 @@ import { writeZip, readZip } from './io/zip.js';
 import { writeProject, readProject, isProject } from './io/project.js';
 
 import { el, clear, button, download, pickFile } from './ui/dom.js';
+import * as units from './core/units.js';
 import { SetupPanel } from './ui/setupPanel.js';
 import { MachinePanel } from './ui/machinePanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
@@ -52,7 +53,7 @@ function placementText(move, turn) {
   const parts = [];
   const axes = ['X', 'Y', 'Z'];
   for (let i = 0; i < 3; i++) {
-    if (Math.abs(move[i]) > 5e-4) parts.push(`${axes[i]} ${move[i] > 0 ? '+' : '−'}${fmt(Math.abs(move[i]), 2)} mm`);
+    if (Math.abs(move[i]) > 5e-4) parts.push(`${axes[i]} ${move[i] > 0 ? '+' : '−'}${units.lenU(Math.abs(move[i]), 2)}`);
   }
   const deg = rad2deg(turn);
   if (Math.abs(deg) > 0.05) parts.push(`turned ${deg > 0 ? '+' : '−'}${fmt(Math.abs(deg), 1)}°`);
@@ -125,6 +126,8 @@ export class App {
       playing: false,
       speed: '4',
       activeAssemblyId: null,
+      /** What lengths are shown in. See setUnits: nothing else changes. */
+      units: 'mm',
       exportDecimate: 1,
       seekTarget: null,
       /** What has been measured on the part, newest last. */
@@ -156,6 +159,17 @@ export class App {
 
     this.buildLayout();
     this.buildScene();
+    // The unit someone reads in is a preference of theirs, not a property
+    // of the job, so it is remembered here rather than written into a
+    // project that somebody else may open.
+    try {
+      const saved = localStorage.getItem('millsim.units');
+      if (saved === 'in' || saved === 'mm') {
+        units.setUnits(saved);
+        this.state.units = units.units();
+      }
+    } catch (err) { /* private window: millimetres, then */ }
+
     this.buildPanels();
     this.buildTransport();
 
@@ -477,13 +491,13 @@ export class App {
       this.pickBar.appendChild(el('span.pick-kind', { dataset: { kind: s.hover.kind } },
         `${s.hover.kind === 'surface' ? 'surface' : s.hover.kind} · ${s.hover.label || ''}`.trim()));
       this.pickBar.appendChild(el('span.pick-coord', {},
-        `X ${fmt(s.hover.point[0], 2)}  Y ${fmt(s.hover.point[1], 2)}  Z ${fmt(s.hover.point[2], 2)}`));
+        `X ${units.len(s.hover.point[0], 2)}  Y ${units.len(s.hover.point[1], 2)}  Z ${units.len(s.hover.point[2], 2)} ${units.lengthLabel()}`));
     }
     if (s.step === 1 && s.hover) {
       const a = s.points[0];
       const d = [s.hover.point[0] - a[0], s.hover.point[1] - a[1], s.hover.point[2] - a[2]];
       this.pickBar.appendChild(el('span.pick-coord', {},
-        `Δ ${fmt(d[0], 2)}, ${fmt(d[1], 2)}, ${fmt(d[2], 2)}`));
+        `Δ ${units.triple(d, 2)} ${units.lengthLabel()}`));
       this.pickBar.appendChild(el('span.pick-lock', {},
         s.axisLock === null ? 'X / Y / Z to lock an axis' : `locked to ${'XYZ'[s.axisLock]}`));
       if (s.axisLock !== null) this.pickBar.lastChild.classList.add('on');
@@ -777,7 +791,7 @@ export class App {
         this.machineParts.nudge(part, [delta.x, delta.y, delta.z]);
         this.applyMachineParts();
         if (this.panels && this.panels.machine) this.panels.machine.refresh();
-        this.notify(`${part.name} moved ${fmt(delta.x, 2)}, ${fmt(delta.y, 2)}, ${fmt(delta.z, 2)} mm on its axis.`, 'ok');
+        this.notify(`${part.name} moved ${units.triple([delta.x, delta.y, delta.z], 2)} ${units.lengthLabel()} on its axis.`, 'ok');
       },
     });
     this.buildRibbon();
@@ -854,7 +868,7 @@ export class App {
             return;
           }
           world = found.centre;
-          this.notify(`Pivot set to the centre of a Ø${fmt(found.radius * 2, 3)} circle.`, 'ok');
+          this.notify(`Pivot set to the centre of a Ø${units.lenU(found.radius * 2, 3)} circle.`, 'ok');
         }
         // The pivot is a fixed vector in the parent's frame, so the picked
         // point is brought into that frame whatever pose the rig is in.
@@ -866,7 +880,7 @@ export class App {
         }
         this.setAxisPivot(id, [v.x, v.y, v.z], opts.hold !== false);
         if (!circle) {
-          this.notify(`${node.name} turns about ${fmt(v.x, 2)}, ${fmt(v.y, 2)}, ${fmt(v.z, 2)} in ${node.parent ? (kin.byId.get(node.parent) || {}).name : 'the machine'}.`, 'ok');
+          this.notify(`${node.name} turns about ${units.triple([v.x, v.y, v.z], 2)} ${units.lengthLabel()} in ${node.parent ? (kin.byId.get(node.parent) || {}).name : 'the machine'}.`, 'ok');
         }
       },
     });
@@ -1254,7 +1268,7 @@ export class App {
       hints: ['Click where the tool tip stands at home'],
       onDone: ([p]) => {
         this.setHome(p);
-        this.notify(`Machine zero is now ${p.map((v) => fmt(v, 2)).join(', ')}. G53, G28 and the travel limits all measure from there.`, 'ok');
+        this.notify(`Machine zero is now ${units.triple(p, 2)} ${units.lengthLabel()}. G53, G28 and the travel limits all measure from there.`, 'ok');
       },
     });
     this.buildRibbon();
@@ -1339,6 +1353,35 @@ export class App {
     if (this.panels && this.panels.setup) this.panels.setup.refresh();
     this.viewer.invalidate();
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
+  }
+
+  /**
+   * Show every length in millimetres or in inches.
+   *
+   * Nothing but the panels changes. The stock grid, the kinematics, the
+   * tool library and every file this writes stay in millimetres, so this
+   * is a reading of the same numbers rather than a different set of them —
+   * switch it mid-job and the cut on screen is the cut that was there.
+   *
+   * It is not G20/G21: what the numbers in a program mean is the
+   * programmer's business, and a metric program stays metric.
+   *
+   * @param {'mm'|'in'} next
+   */
+  setUnits(next) {
+    if (!units.setUnits(next)) return;
+    this.state.units = units.units();
+    try { localStorage.setItem('millsim.units', this.state.units); } catch (err) { /* private window */ }
+    // Everything on screen is a number in the old unit until it is drawn
+    // again, including the parts of the ribbon that carry one.
+    for (const panel of Object.values(this.panels || {})) panel.render();
+    this.buildHud();
+    this.updateHud();
+    this.refreshMeasurements();
+    this.buildRibbon();
+    this.notify(next === 'in'
+      ? 'Showing inches. Everything is still held in millimetres — this is how it is read, not what it is.'
+      : 'Showing millimetres.', 'ok');
   }
 
   setDisplay(patch) {
@@ -2036,6 +2079,8 @@ export class App {
     // slide such as W. A 3-axis mill gets no second row at all.
     const extras = this.machineView ? this.machineView.kinematics.extras() : [];
     this.hudExtras = extras.map((n) => n.letter);
+    /** Which of those read in degrees rather than in a length. */
+    this.hudRotaries = new Set(extras.filter((n) => n.kind === 'rotary').map((n) => n.letter));
     const extraRow = extras.length
       ? el('div.hud-row', {}, extras.flatMap((n) => [cell('span.hud-axis', n.letter), val(`ax${n.letter}`)]))
       : null;
@@ -2044,6 +2089,7 @@ export class App {
     this.hud.append(...[
       el('div.hud-row', {}, [
         cell('span', 'X'), val('x'), cell('span', 'Y'), val('y'), cell('span', 'Z'), val('z'),
+        cell('span.hud-unit', units.lengthLabel()),
       ]),
       extraRow,
       el('div.hud-row.dim', {}, [dim('tool'), dim('toolName'), dim('feed'), dim('rpm')]),
@@ -2062,21 +2108,25 @@ export class App {
     const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
     // Jogging, the readout is the axes as jogged; otherwise it is the run.
     const at = this.jog || null;
-    set(f.x, fmt(at ? at.X || 0 : sim.pos[0], 3));
-    set(f.y, fmt(at ? at.Y || 0 : sim.pos[1], 3));
-    set(f.z, fmt(at ? at.Z || 0 : sim.pos[2], 3));
+    set(f.x, units.len(at ? at.X || 0 : sim.pos[0], 3));
+    set(f.y, units.len(at ? at.Y || 0 : sim.pos[1], 3));
+    set(f.z, units.len(at ? at.Z || 0 : sim.pos[2], 3));
     if (this.hudExtras && this.hudExtras.length) {
       const values = at || sim.currentPose().values || {};
       for (const L of this.hudExtras) {
         const node = f[`ax${L}`];
-        if (node) set(node, fmt(values[L] || 0, 3));
+        // A rotary reads in degrees whatever lengths are shown in; an
+        // extra slide such as W is a length like any other.
+        if (node) set(node, (this.hudRotaries && this.hudRotaries.has(L)) ? fmt(values[L] || 0, 3) : units.len(values[L] || 0, 3));
       }
     }
     set(f.tool, `T${sim.currentTool || '–'}`);
     set(f.toolName, slot ? slot.built.tool.def.name : 'no tool');
-    set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${fmt(mv.feed, 0)}`) : '');
+    // The feed is shown in what the reader works in, which is not
+    // necessarily the F word in the file.
+    set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${units.feed(mv.feed, 0)}`) : '');
     set(f.rpm, mv && mv.rpm ? `S${mv.rpm}` : '');
-    set(f.removed, `${fmt(sim.removedVolume / 1000, 2)} cm³`);
+    set(f.removed, units.volumeU(sim.removedVolume, 2));
 
     this.toolView.setAlert(errors.length > 0 && this.state.playing && errors[errors.length - 1].moveIndex >= sim.moveIndex - 2);
 
@@ -2146,7 +2196,7 @@ export class App {
       origin: [b.min[0] - pad, b.min[1] - pad, -depth],
     });
     this.fitToScene();
-    this.notify(`Stock set to ${fmt(size[0], 1)} × ${fmt(size[1], 1)} × ${fmt(depth, 1)} mm.`, 'ok');
+    this.notify(`Stock set to ${units.triple([size[0], size[1], depth], 1, ' × ')} ${units.lengthLabel()}.`, 'ok');
   }
 
   addPrimitiveFixture(kind) {
@@ -2240,8 +2290,8 @@ export class App {
     this.refreshMeasurements();
     const m = this.state.measurements[this.state.measurements.length - 1];
     this.notify(m.kind === 'circle'
-      ? `Ø${fmt(m.value, 3)} mm, centre X ${fmt(m.centre[0], 3)} Y ${fmt(m.centre[1], 3)} Z ${fmt(m.centre[2], 3)}.`
-      : `${fmt(m.value, 3)} mm — ΔX ${fmt(m.delta[0], 3)}  ΔY ${fmt(m.delta[1], 3)}  ΔZ ${fmt(m.delta[2], 3)}.`, 'ok');
+      ? `Ø${units.lenU(m.value, 3)}, centre X ${units.len(m.centre[0], 3)} Y ${units.len(m.centre[1], 3)} Z ${units.len(m.centre[2], 3)}.`
+      : `${units.lenU(m.value, 3)} — ΔX ${units.len(m.delta[0], 3)}  ΔY ${units.len(m.delta[1], 3)}  ΔZ ${units.len(m.delta[2], 3)}.`, 'ok');
   }
 
   removeMeasurement(id) {
@@ -2274,7 +2324,7 @@ export class App {
         const origin = this.state.stock.origin.map((v, i) => v + (b[i] - a[i]));
         this.setStock({ origin });
         this.panels.setup.refresh();
-        this.notify(`Stock moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm. The cut was reset.`, 'ok');
+        this.notify(`Stock moved ${units.triple([b[0] - a[0], b[1] - a[1], b[2] - a[2]], 2)} ${units.lengthLabel()}. The cut was reset.`, 'ok');
       },
     });
     this.buildRibbon();
@@ -2296,7 +2346,7 @@ export class App {
         this.models.setTransform(model, { position: [p.x + (b[0] - a[0]), p.y + (b[1] - a[1]), p.z + (b[2] - a[2])] });
         this.refreshFixtures();
         this.panels.setup.refresh();
-        this.notify(`${model.name} moved ${fmt(b[0] - a[0], 2)}, ${fmt(b[1] - a[1], 2)}, ${fmt(b[2] - a[2], 2)} mm.`, 'ok');
+        this.notify(`${model.name} moved ${units.triple([b[0] - a[0], b[1] - a[1], b[2] - a[2]], 2)} ${units.lengthLabel()}.`, 'ok');
       },
     });
     this.buildRibbon();
@@ -2336,7 +2386,7 @@ export class App {
     const wcs = { ...this.state.wcs, [key]: [point[0], point[1], point[2]] };
     this.setWcs(wcs);
     this.panels.setup.refresh();
-    this.notify(`${key} zero set to X ${fmt(point[0], 3)}  Y ${fmt(point[1], 3)}  Z ${fmt(point[2], 3)}.`, 'ok');
+    this.notify(`${key} zero set to X ${units.len(point[0], 3)}  Y ${units.len(point[1], 3)}  Z ${units.len(point[2], 3)} ${units.lengthLabel()}.`, 'ok');
   }
 
   setWcsEdit(key) {
@@ -2407,9 +2457,9 @@ export class App {
       lines.push(`- Estimated cycle time: ${fmtDuration(program.stats.cycleTime)}`);
     }
     const s = this.state.stock;
-    lines.push(`- Stock: ${s.size.join(' × ')} mm at origin ${s.origin.join(', ')}`);
-    lines.push(`- Simulation grid: ${this.stock.nx} × ${this.stock.ny} columns, ${fmt(this.stock.dx, 3)} mm cells`);
-    lines.push(`- Material removed: ${fmt(sim.removedVolume / 1000, 2)} cm³ of ${fmt(this.stock.stockVolume / 1000, 2)} cm³`);
+    lines.push(`- Stock: ${units.triple(s.size, 3, ' × ')} ${units.lengthLabel()} at origin ${units.triple(s.origin, 3)}`);
+    lines.push(`- Simulation grid: ${this.stock.nx} × ${this.stock.ny} columns, ${units.lenU(this.stock.dx, 3)} cells`);
+    lines.push(`- Material removed: ${units.volume(sim.removedVolume, 2)} of ${units.volumeU(this.stock.stockVolume, 2)}`);
     lines.push(`- Simulated: ${(sim.progress * 100).toFixed(1)}% of the program`, '');
 
     lines.push('## Tool assemblies', '');
@@ -2418,7 +2468,7 @@ export class App {
     for (const a of this.library.assemblies) {
       const built = this.library.build(a.id, this.state.machine);
       if (!built) continue;
-      lines.push(`| ${a.number} | ${a.name} | Ø${fmt(built.cutRadius * 2, 2)} ${built.tool.def.type} | ${built.holder ? built.holder.def.name : '—'} | ${fmt(built.stickout, 1)} mm |`);
+      lines.push(`| ${a.number} | ${a.name} | Ø${units.len(built.cutRadius * 2, 2)} ${built.tool.def.type} | ${built.holder ? built.holder.def.name : '—'} | ${units.lenU(built.stickout, 1)} |`);
     }
     lines.push('');
 

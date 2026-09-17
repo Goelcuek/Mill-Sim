@@ -19,6 +19,7 @@ import { fmt, fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
 import { DIALECTS } from '../gcode/dialects.js';
 import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
+import * as units from '../core/units.js';
 
 /**
  * Which file the machine is in right now.
@@ -520,8 +521,9 @@ export class ProgramPanel extends Panel {
       ['Moves', String(s.moveCount)],
       ['Blocks', String(s.blockCount)],
       ['Cycle time', fmtDuration(s.cycleTime)],
-      ['Cutting', `${fmt(s.feedDistance / 1000, 2)} m`],
-      ['Rapids', `${fmt(s.rapidDistance / 1000, 2)} m`],
+      // Path length is quoted the way a shop quotes it: metres, or feet.
+      ['Cutting', units.distanceU(s.feedDistance)],
+      ['Rapids', units.distanceU(s.rapidDistance)],
       ['Tools used', program.toolChanges.length ? [...new Set(program.toolChanges.map((t) => `T${t.tool}`))].join(' ') : 'none'],
     ].map(([k, v]) => el('div.stat', {}, [el('div.stat-label', {}, k), el('div.stat-value', {}, v)])));
 
@@ -529,9 +531,9 @@ export class ProgramPanel extends Panel {
       el('tr', {}, [el('th', {}, ''), el('th', {}, 'min'), el('th', {}, 'max'), el('th', {}, 'span')]),
       ...['X', 'Y', 'Z'].map((axis, i) => el('tr', {}, [
         el('th', {}, axis),
-        el('td', {}, fmt(b.min[i], 3)),
-        el('td', {}, fmt(b.max[i], 3)),
-        el('td', {}, fmt(b.max[i] - b.min[i], 3)),
+        el('td', {}, units.len(b.min[i], 3)),
+        el('td', {}, units.len(b.max[i], 3)),
+        el('td', {}, units.len(b.max[i] - b.min[i], 3)),
       ])),
     ]);
 

@@ -13,6 +13,7 @@ import { fmt } from '../core/util.js';
 import { describeShape } from '../sim/stockShape.js';
 import { homeOf } from '../machine/config.js';
 import { RESOLUTIONS } from '../app.js';
+import * as units from '../core/units.js';
 
 const AXES = ['X', 'Y', 'Z'];
 const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']];
@@ -113,7 +114,11 @@ export class SetupPanel extends Panel {
     return [
       section('Clearance', [
         el('label.field', {}, [
-          el('span.field-label', {}, ['Near miss ', el('span.value', {}, c.nearMiss > 0 ? `${fmt(c.nearMiss, 2)} mm` : 'off')]),
+          el('span.field-label', {}, ['Near miss ', el('span.value', {}, c.nearMiss > 0 ? units.lenU(c.nearMiss, 2) : 'off')]),
+          // The slider is millimetres of clearance whichever way the unit
+          // switch is set; only the readout changes, because a slider you
+          // cannot land on a round number is worse than one in the other
+          // unit.
           el('input', {
             type: 'range', min: 0, max: 10, step: 0.25, value: c.nearMiss,
             oninput: (e) => { app.state.checks.nearMiss = parseFloat(e.target.value); this.refresh(); },
@@ -121,7 +126,7 @@ export class SetupPanel extends Panel {
           }),
         ]),
         el('div.hint', {}, c.nearMiss > 0
-          ? `Anything that passes within ${fmt(c.nearMiss, 2)} mm of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
+          ? `Anything that passes within ${units.lenU(c.nearMiss, 2)} of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
           : 'Off: only metal in metal is reported. Ask for room and the run also tells you where it came close, which is what you want before the first part rather than after it.'),
         checkbox('Report rapids that touch material', c.rapidIntoStock !== false, (v) => app.setChecks({ rapidIntoStock: v })),
         el('div.hint', {}, 'A G0 that removes material is a crash on the machine. Some posts rapid to the surface on purpose, so this can be turned off.'),
@@ -161,8 +166,8 @@ export class SetupPanel extends Panel {
       if (!st) { info.textContent = ''; return; }
       const asked = app.state.stock.resolution;
       info.innerHTML = st.cell > asked * 1.05
-        ? `Asked for <b>${asked} mm</b> cells; this block needs more columns than the memory budget allows, so it is simulated at <b>${fmt(st.cell, 3)} mm</b>.`
-        : `Simulated at <b>${fmt(st.cell, 3)} mm</b> per column.`;
+        ? `Asked for <b>${units.lenU(asked, 3)}</b> cells; this block needs more columns than the memory budget allows, so it is simulated at <b>${units.lenU(st.cell, 3)}</b>.`
+        : `Simulated at <b>${units.lenU(st.cell, 3)}</b> per column.`;
     };
     updateInfo();
 
@@ -171,11 +176,11 @@ export class SetupPanel extends Panel {
     // are. Committing only on release keeps a 12M-column rebuild off every
     // drag frame.
     const nearest = RESOLUTIONS.reduce((best, v) => (Math.abs(v - s.resolution) < Math.abs(best - s.resolution) ? v : best), RESOLUTIONS[0]);
-    const resLabel = el('span.value', {}, `${nearest} mm`);
+    const resLabel = el('span.value', {}, units.lenU(nearest, 3));
     const res = el('input', {
       type: 'range', min: 0, max: RESOLUTIONS.length - 1, step: 1,
       value: RESOLUTIONS.indexOf(nearest),
-      oninput: (e) => { resLabel.textContent = `${RESOLUTIONS[Number(e.target.value)]} mm`; },
+      oninput: (e) => { resLabel.textContent = units.lenU(RESOLUTIONS[Number(e.target.value)], 3); },
       onchange: (e) => {
         app.setStock({ resolution: RESOLUTIONS[Number(e.target.value)] });
         updateInfo();
@@ -199,9 +204,9 @@ export class SetupPanel extends Panel {
         stat('Shape', describeShape(s)),
         stat('Grid', `${st.nx} × ${st.ny}`),
         stat('Columns', st.cellCount >= 1e6 ? `${(st.cellCount / 1e6).toFixed(1)}M` : `${(st.cellCount / 1000).toFixed(0)}k`),
-        stat('Cell', `${fmt(st.dx, 3)} × ${fmt(st.dy, 3)} mm`, true),
-        stat('Stock', `${fmt(st.stockVolume / 1000, 2)} cm³`),
-        stat('Removed', `${fmt(cut / 1000, 2)} cm³ · ${st.stockVolume > 0 ? ((cut / st.stockVolume) * 100).toFixed(1) : '0'}%`),
+        stat('Cell', `${units.len(st.dx, 3)} × ${units.lenU(st.dy, 3)}`, true),
+        stat('Stock', units.volumeU(st.stockVolume, 2)),
+        stat('Removed', `${units.volumeU(cut, 2)} · ${st.stockVolume > 0 ? ((cut / st.stockVolume) * 100).toFixed(1) : '0'}%`),
       );
     };
     updateDetail();
@@ -225,7 +230,7 @@ export class SetupPanel extends Panel {
       ])]
       : s.shape === 'model'
         ? [
-          el('div.hint', {}, `${s.model ? s.model.name : 'A model'} — ${s.model ? s.model.triangles.toLocaleString() : '0'} triangles, ${s.size.map((v) => fmt(v, 1)).join(' × ')} mm. Its top surface is the starting surface; the size comes from the model and is not typed in.`),
+          el('div.hint', {}, `${s.model ? s.model.name : 'A model'} — ${s.model ? s.model.triangles.toLocaleString() : '0'} triangles, ${units.triple(s.size, 1, ' × ')} ${units.lengthLabel()}. Its top surface is the starting surface; the size comes from the model and is not typed in.`),
         ]
         : [row(AXES.map((a, i) => field(`Size ${a}`, s.size[i], {
           min: 0.2, step: 1, unit: 'mm', onChange: (v) => setSize(i, v),
@@ -264,7 +269,7 @@ export class SetupPanel extends Panel {
         res,
       ]),
       info,
-      el('div.hint', {}, 'Finer cells give sharper corners and scallops but cost memory. 0.2–0.4 mm suits most parts; 0.025 mm is for inspecting a finish.'),
+      el('div.hint', {}, `Finer cells give sharper corners and scallops but cost memory. ${units.len(0.2, 3)}\u2013${units.lenU(0.4, 3)} suits most parts; ${units.lenU(0.025, 3)} is for inspecting a finish.`),
     ]);
   }
 
@@ -369,7 +374,7 @@ export class SetupPanel extends Panel {
       // Machine zero is the machine's, not the job's: it is where the home
       // switches are, and the travel limits are measured from it too. Both
       // live together on Machine > Travels rather than half here.
-      el('div.hint', {}, `G53 and G28 measure from machine zero, which is at ${homeOf(app.state.machine).map((v) => fmt(v, 2)).join(', ')}. ${editing} zero sits ${homeOf(app.state.machine).map((v, i) => fmt(wcs[editing][i] - v, 2)).join(', ')} from it in machine coordinates.`),
+      el('div.hint', {}, `G53 and G28 measure from machine zero, which is at ${units.triple(homeOf(app.state.machine), 2)} ${units.lengthLabel()}. ${editing} zero sits ${units.triple(homeOf(app.state.machine).map((v, i) => wcs[editing][i] - v), 2)} ${units.lengthLabel()} from it in machine coordinates.`),
       actionRow([
         { label: 'Machine zero and travels…', hint: 'On Machine \u203a Travels, with the envelope it measures', onClick: () => app.setPage('machine', 'limits') },
       ]),
@@ -509,7 +514,7 @@ export class SetupPanel extends Panel {
         el('span.field-label', {}, 'Opacity'),
         el('input', { type: 'range', min: 0.1, max: 1, step: 0.05, value: m.material.opacity, oninput: (e) => app.models.setOpacity(m, parseFloat(e.target.value)) }),
       ]),
-      el('div.hint', {}, `Local size ${fmt(size.x, 1)} × ${fmt(size.y, 1)} × ${fmt(size.z, 1)} mm. Collision uses each model's oriented bounding box — import an awkward fixture as a few simple pieces for a tighter fit.`),
+      el('div.hint', {}, `Local size ${units.triple([size.x, size.y, size.z], 1, ' × ')} ${units.lengthLabel()}. Collision uses each model's oriented bounding box — import an awkward fixture as a few simple pieces for a tighter fit.`),
       // Rules this one carries itself, because a fixture the tool is meant
       // to touch and a fragile probe are both exceptions to the same rule.
       row([
@@ -533,7 +538,7 @@ export class SetupPanel extends Panel {
       el('div.hint', {}, m.ignore
         ? 'Ignored: the assembly passes through this one without a word.'
         : Number.isFinite(m.clearance)
-          ? `Asks for ${fmt(m.clearance, 2)} mm of its own, whatever Setup › Checks says.`
+          ? `Asks for ${units.lenU(m.clearance, 2)} of its own, whatever Setup › Checks says.`
           : 'Follows the near-miss distance on Setup › Checks. Leave the clearance blank unless this one is special.'),
       row([
         button('Drop onto table', () => {

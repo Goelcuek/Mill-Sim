@@ -9,6 +9,7 @@ import { el, section, field, download } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { COLLISION_TYPES } from '../sim/simulator.js';
 import { fmt, fmtDuration } from '../core/util.js';
+import * as units from '../core/units.js';
 
 export class ResultsPanel extends Panel {
   constructor(app) {
@@ -54,8 +55,8 @@ export class ResultsPanel extends Panel {
       ['Progress', `${(sim.progress * 100).toFixed(1)} %`],
       ['Simulated', fmtDuration(sim.time)],
       ['Cycle time', program ? fmtDuration(program.stats.cycleTime) : '–'],
-      ['Removed', `${fmt(removed / 1000, 2)} cm³`],
-      ['Remaining', `${fmt(Math.max(remaining, 0) / 1000, 2)} cm³`],
+      ['Removed', units.volumeU(removed, 2)],
+      ['Remaining', units.volumeU(Math.max(remaining, 0), 2)],
       ['Of stock', `${pct.toFixed(1)} %`],
     ];
 
@@ -89,19 +90,19 @@ export class ResultsPanel extends Panel {
 
     return section('Against the reference part', [
       el(`div.verdict.${clean ? 'ok' : 'bad'}`, {}, clean
-        ? `No cut passes the reference surface by more than ${fmt(tol, 3)} mm.`
-        : `Gouged in ${cmp.gougeCells.toLocaleString()} places — up to ${fmt(cmp.maxGouge, 3)} mm past the surface.`),
+        ? `No cut passes the reference surface by more than ${units.lenU(tol, 3)}.`
+        : `Gouged in ${cmp.gougeCells.toLocaleString()} places — up to ${units.lenU(cmp.maxGouge, 3)} past the surface.`),
       el('div.stat-grid', {}, [
-        ['Max gouge', `${fmt(cmp.maxGouge, 3)} mm`],
+        ['Max gouge', units.lenU(cmp.maxGouge, 3)],
         ['Gouged area', `${pct(cmp.gougeCells)} %`],
-        ['Stock left', `${fmt(cmp.maxExcess, 2)} mm`],
+        ['Stock left', units.lenU(cmp.maxExcess, 2)],
         ['Walls skipped', `${walls} %`],
       ].map(([k, v]) => el('div.stat', {}, [
         el('div.stat-label', {}, k),
         el('div.stat-value', {}, v),
       ]))),
       el('label.field', {}, [
-        el('span.field-label', {}, ['Gouge tolerance ', el('span.value', {}, `${fmt(tol, 3)} mm`)]),
+        el('span.field-label', {}, ['Gouge tolerance ', el('span.value', {}, units.lenU(tol, 3))]),
         el('input', {
           type: 'range', min: 0, max: 0.2, step: 0.005, value: tol,
           onchange: (e) => {
@@ -111,7 +112,7 @@ export class ResultsPanel extends Panel {
         }),
       ]),
       el('div.hint', {}, `Cutting deeper than the reference surface by more than this counts as a gouge and is listed with the collisions. "Stock left" is the thickest material still standing above the part.`),
-      el('div.hint', {}, `The check looks straight down, so it can only speak about surfaces it can see: columns standing on a wall — the side of a pocket, the bore of a hole, the outline of the part — are left out, ${walls} % of the part here. That is what keeps a 5 mm drill in a 5 mm reference hole from reading as a gouge the depth of the hole: the reference bore is a polygon inscribed in the circle, so the two disagree sideways by a fraction of a column while the measurement is vertical. The price is that sideways error up to about ${fmt(cmp.lateral, 3)} mm — one grid column — can hide at a wall. Finer stock resolution narrows it.`),
+      el('div.hint', {}, `The check looks straight down, so it can only speak about surfaces it can see: columns standing on a wall — the side of a pocket, the bore of a hole, the outline of the part — are left out, ${walls} % of the part here. That is what keeps a 5 mm drill in a 5 mm reference hole from reading as a gouge the depth of the hole: the reference bore is a polygon inscribed in the circle, so the two disagree sideways by a fraction of a column while the measurement is vertical. The price is that sideways error up to about ${units.lenU(cmp.lateral, 3)} — one grid column — can hide at a wall. Finer stock resolution narrows it.`),
     ]);
   }
 
@@ -138,7 +139,7 @@ export class ResultsPanel extends Panel {
         el('div.collision-msg', {}, c.message),
         el('div.collision-meta', {}, [
           c.count > 1 ? `${c.count} occurrences · ` : '',
-          c.position ? `at X${fmt(c.position[0], 2)} Y${fmt(c.position[1], 2)} Z${fmt(c.position[2], 2)}` : '',
+          c.position ? `at X${units.len(c.position[0], 2)} Y${units.len(c.position[1], 2)} Z${units.len(c.position[2], 2)}` : '',
         ].join('')),
       ]));
       body.push(el('div.collision-list', {}, items));

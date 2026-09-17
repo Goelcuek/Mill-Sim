@@ -1052,6 +1052,92 @@ try {
     await page.waitForTimeout(300);
   }
 
+  // ---- inches are a reading, not a second set of numbers ----------------
+  //
+  // The switch has one job and one rule. The job: every length on every
+  // page, the boxes as well as the prose. The rule: nothing but the
+  // reading changes — the library, the machine and the cut stay in
+  // millimetres, so a file written in inch mode is the file that would
+  // have been written in metric.
+  {
+    const unitCheck = await page.evaluate(async () => {
+      const app = window.millsim;
+      app.setMachine({ preset: 'vmc3', mode: 'machine' });
+      app.setUnits('mm');
+      const tool = app.library.addTool({
+        name: 'unit check', type: 'flat', number: 61,
+        diameter: 25.4, fluteLength: 50.8, overallLength: 101.6, shankDiameter: 25.4, fluteCount: 4,
+      });
+      const limitsBefore = JSON.parse(JSON.stringify(app.state.machine.limits));
+      const libBefore = JSON.stringify(app.library.toJSON().tools);
+
+      app.setPage('tools', 'tools');
+      await new Promise((r) => setTimeout(r, 250));
+      const metricRow = [...document.querySelectorAll('.list-sub')]
+        .find((n) => /unit check/.test(n.parentElement.textContent) || /25\.4/.test(n.textContent));
+
+      app.setUnits('in');
+      await new Promise((r) => setTimeout(r, 300));
+      const inchRow = [...document.querySelectorAll('.list-item')]
+        .find((n) => /unit check/.test(n.textContent));
+
+      // Every page, in inches, with nothing still claiming millimetres and
+      // nothing throwing on the way.
+      const saidMm = [];
+      for (const tab of ['setup', 'machine', 'tools', 'program', 'results', 'view']) {
+        app.setTab ? app.setTab(tab) : app.setPage(tab, null);
+        const pages = [...document.querySelectorAll('.ribbon-page')].map((p) => p.dataset.page);
+        for (const pg of pages) {
+          app.setPage(tab, pg);
+          await new Promise((r) => setTimeout(r, 40));
+          const host = document.querySelector('.panel-body') || document.body;
+          if (/\bmm\b|cm³/.test(host.innerText)) saidMm.push(`${tab}/${pg}`);
+        }
+      }
+
+      // The travel boxes, submitted as drawn, ten times over. A rounded
+      // inch turned back into millimetres would walk the envelope.
+      app.setPage('machine', 'limits');
+      await new Promise((r) => setTimeout(r, 250));
+      for (let i = 0; i < 10; i++) {
+        for (const input of document.querySelectorAll('input[type=number]')) {
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
+      const limitsAfter = JSON.parse(JSON.stringify(app.state.machine.limits));
+
+      // ...and a real edit still means what it says: -10 in is -254 mm.
+      const box = [...document.querySelectorAll('.field')].find((x) => /X min/.test(x.textContent));
+      const input = box && box.querySelector('input');
+      if (input) {
+        input.value = '-10';
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      await new Promise((r) => setTimeout(r, 150));
+      const edited = app.state.machine.limits.min[0];
+
+      const libAfter = JSON.stringify(app.library.toJSON().tools);
+      app.library.removeMany('tools', [tool.id]);
+      app.setUnits('mm');
+      return {
+        metric: metricRow ? metricRow.textContent : '',
+        inch: inchRow ? inchRow.textContent : '',
+        saidMm,
+        drift: [0, 1, 2].map((i) => Math.abs(limitsAfter.min[i] - limitsBefore.min[i])),
+        edited,
+        libUnchanged: libBefore === libAfter,
+        hud: document.querySelector('.hud').textContent,
+      };
+    });
+    console.log('units:', JSON.stringify({ ...unitCheck, hud: undefined }));
+    check(/25\.4\s*mm/.test(unitCheck.metric), `the metric row read "${unitCheck.metric}"`);
+    check(/\b1 in\b/.test(unitCheck.inch), `the inch row read "${unitCheck.inch}"`);
+    check(unitCheck.saidMm.length === 0, `these pages still say mm in inch mode: ${unitCheck.saidMm.join(', ')}`);
+    check(unitCheck.drift.every((d) => d === 0), `the envelope drifted ${unitCheck.drift.join(', ')} mm from being redrawn in inches`);
+    check(Math.abs(unitCheck.edited + 254) < 1e-6, `typing -10 in stored ${unitCheck.edited}, not -254 mm`);
+    check(unitCheck.libUnchanged, 'the library changed when the unit did');
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you
