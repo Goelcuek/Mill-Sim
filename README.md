@@ -72,9 +72,21 @@ retype, so **Tools › Library › Import** reads four kinds directly:
 For tools that live in a part's CAM setup rather than in the NX library,
 `integrations/nx/export_tools_to_mill_sim.py` is an NX Open journal — **Tools
 › Journal › Play…** — that walks the setup's tool group and writes a
-Mill-Sim library. It reads each parameter by trying the names NX has used
-for it across versions and tool classes, so a parameter it cannot find is
-left out and defaulted rather than guessed at.
+Mill-Sim library.
+
+It does not assume it knows NX Open's spelling. The call that hands you a
+tool's parameters has moved between versions and differs between tool
+classes, so the journal asks the objects in front of it what they can do:
+it looks for anything on the group collection that makes a builder, tries
+each in turn, and reads the builder's parameters by matching what it finds
+rather than by naming them in advance. Failing all that it falls back to
+the UF parameter calls. Either way it writes
+`mill-sim-tools-diagnostic.txt` beside the library saying what it found
+and what it tried — if a seat still comes up empty, that file names the
+call it wants.
+
+`python3 integrations/nx/test_export_logic.py` exercises everything in the
+journal that decides something, on a machine with no NX on it.
 
 **G-code interpretation.** A full modal interpreter: linear and helical
 arcs in all three planes, both `I/J/K` and `R` forms, inch and metric,

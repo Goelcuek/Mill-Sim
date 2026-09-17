@@ -133,3 +133,20 @@ test('an NX library imports into a library beside the tools already there', () =
   const numbers = lib.assemblies.map((a) => a.number);
   assert.equal(new Set(numbers).size, numbers.length);
 });
+
+test('a shop that names its tools in Turkish is read too', () => {
+  // Off a real machine: FREZE is a milling cutter, MATKAP a drill, RAYBA a
+  // reamer. A tool called only FREZE says nothing about its end, so the
+  // corner radius decides, the same as a tool called only MILL.
+  assert.equal(nxToolType('TK1314_MATKAP', {}), 'drill');
+  assert.equal(nxToolType('TK2206_RAYBA', {}), 'drill');
+  assert.equal(nxToolType('TKY60053_LOLIPOP', {}), 'lollipop');
+  assert.equal(nxToolType('TK2105_FREZE', { diameter: 10, cornerRadius: 0 }), 'flat');
+  assert.equal(nxToolType('TK1457_FREZE', { diameter: 10, cornerRadius: 5 }), 'ball');
+  assert.equal(nxToolType('TK---.250_FREZE', { diameter: 6.35, cornerRadius: 0.8 }), 'bull');
+  assert.equal(nxToolType('HAVŞA 90', {}), 'chamfer');
+  assert.equal(nxToolType('KILAVUZ M8', {}), 'drill');
+  // ...and the English names still land where they did.
+  assert.equal(nxToolType('Ball Mill', {}), 'ball');
+  assert.equal(nxToolType('Spot Drill', {}), 'chamfer');
+});

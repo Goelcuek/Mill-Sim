@@ -73,16 +73,22 @@ const COLUMNS = {
  * are recognised. The specific patterns come first: a spot drill is a
  * chamfer tool rather than a drill, and "bull" and "ball" both contain
  * "mill".
+ *
+ * The words are English and Turkish, because a shop names its tools in the
+ * language it works in and a library full of FREZE and MATKAP is a library
+ * of milling cutters and drills. A tool called only FREZE — a mill, with
+ * nothing said about the end — falls through to the geometry, which is
+ * what decides between a flat, a bull and a ball anyway.
  */
 const TYPES = [
-  [/ball|sphere|sphericalmill/, 'ball'],
-  [/bull|torus|toroid|cornerrad|radiusmill/, 'bull'],
-  [/chamfer|spot|cent(er|re)|countersink|engrav|v-?bit/, 'chamfer'],
-  [/barrel|taper/, 'taper'],
-  [/t-?cutter|t-?slot|lollipop|undercut|dovetail/, 'lollipop'],
-  [/face|shell/, 'face'],
-  [/drill|reamer|\btap\b|\bbore\b|boring|counterbore/, 'drill'],
-  [/mill|\bend\b|flat/, 'flat'],
+  [/ball|sphere|sphericalmill|k[uü]re|bilye/, 'ball'],
+  [/bull|torus|toroid|cornerrad|radiusmill|radyus/, 'bull'],
+  [/chamfer|spot|cent(er|re)|countersink|engrav|v-?bit|hav[sş]a|punta|\bpah\b/, 'chamfer'],
+  [/barrel|taper|konik|f[iı][cç][iı]/, 'taper'],
+  [/t-?cutter|t-?slot|lol[li]?[li]pop|undercut|dovetail|k[iı]rlang[iı][cç]/, 'lollipop'],
+  [/face|shell|tarama|al[iı]n/, 'face'],
+  [/drill|reamer|\btap\b|\bbore\b|boring|counterbore|matkap|rayba|k[iı]lavuz|delik/, 'drill'],
+  [/mill|\bend\b|flat|freze|parmak/, 'flat'],
 ];
 
 /**
