@@ -82,33 +82,62 @@ def score_of(found):
     return (essential, len([v for v in fields.values() if v]), len(found))
 
 
-def read_tool(collection, tool, tried, scale):
+# What sort of builder a tool of each family wants, so the right one is
+# tried first rather than found by exhaustion.
+_PREFERRED = {
+    "drill": ("drill",),
+    "lollipop": ("ttool", "tcutter"),
+    "chamfer": ("drill", "mill"),
+    "taper": ("barrel", "mill"),
+    "face": ("mill",),
+    "ball": ("mill",),
+    "bull": ("mill",),
+    "flat": ("mill",),
+}
+
+
+def ordered_factories(collection, tool_name):
+    """Factories, likeliest for this tool first.
+
+    Building an NX builder is not free and there are ninety of them on the
+    collection; trying all ninety for each of seven tools is half a minute
+    of a workstation's life. The tool's own name says what it is, so the
+    builder that suits it is tried first and the rest are only reached if
+    it does not answer.
+    """
+    names = builder_factories(collection)
+    if "probe" in (tool_name or "").lower():
+        want = ("probe",)
+    else:
+        want = _PREFERRED.get(family(tool_name, 0, 0), ("mill",))
+    return sorted(names, key=lambda n: 0 if any(w in n.lower() for w in want) else 1)
+
+
+def read_tool(collection, tool, name, tried, scale):
     """The best reading of this tool any factory can give.
 
     @returns (numbers, holder stages, which factory)
     """
-    best = (None, [], None, (0, 0, 0))
-    for name in builder_factories(collection):
+    best = (None, None, (0, 0, 0))
+    tries = 0
+    for factory_name in ordered_factories(collection, name):
         try:
-            factory = getattr(collection, name)
+            factory = getattr(collection, factory_name)
         except Exception:
             continue
         try:
             builder = factory(tool)
         except Exception as err:
-            tried.append("%s -> %s" % (name, str(err).splitlines()[0][:70]))
+            tried.append("%s -> %s" % (factory_name, str(err).splitlines()[0][:70]))
             continue
         if builder is None:
             continue
+        tries += 1
         try:
             found = numbers_on(builder)
-            stages = nose_first(holder_stages(builder, scale))
             rank = score_of(found)
-            if rank > best[3]:
-                best = (found, stages, name, rank)
-            # Everything that matters, from one builder: nothing to beat.
-            if rank[0] == len(_ESSENTIAL) and stages:
-                return best[0], best[1], best[2]
+            if rank > best[2]:
+                best = (found, factory_name, rank)
         except Exception:
             pass
         finally:
@@ -116,7 +145,32 @@ def read_tool(collection, tool, tried, scale):
                 builder.Destroy()
             except Exception:
                 pass
-    return best[0], best[1], best[2]
+        # Everything that matters, from one builder: nothing left to beat,
+        # and no reason to keep building.
+        if best[2][0] == len(_ESSENTIAL):
+            break
+        # A tool nothing suits is not worth ninety attempts either.
+        if tries >= 12:
+            break
+
+    if best[1] is None:
+        return None, [], None
+
+    # The holder comes off the winner alone. Reading it from every
+    # candidate was most of the half minute.
+    stages = []
+    try:
+        builder = getattr(collection, best[1])(tool)
+        try:
+            stages = nose_first(holder_stages(builder, scale))
+        finally:
+            try:
+                builder.Destroy()
+            except Exception:
+                pass
+    except Exception:
+        stages = []
+    return best[0], stages, best[1]
 
 
 def numbers_on(builder):
@@ -197,10 +251,12 @@ def inventory(builder):
                     rows = sections_of(attr)
                     note["<read>"] = rows[:4] if rows else "nothing"
                     note["<stages>"] = stages_from_rows(rows, 1.0)[:4]
-                    # What every call actually does, verbatim. A name says
-                    # nothing about what comes back, and what comes back is
-                    # the whole question.
-                    note["<probe>"] = probe_calls(attr, n)
+                    # What every call actually does, verbatim -- but only
+                    # when the sections could not be read, because that is
+                    # the only time anybody needs it and calling everything
+                    # twice is not free.
+                    if not rows:
+                        note["<probe>"] = probe_calls(attr, n)
                 out.append((name, kind, "", note))
     return out
 
@@ -308,6 +364,59 @@ def row_of_numbers(value):
     return out if all(v is not None for v in out) else None
 
 
+def reader_calls(obj):
+    """Calls that might read a section handed back to them.
+
+    GetSection(i) does not give you the numbers, it gives you a handle;
+    the numbers come from passing that handle back to the builder. The
+    ones that say they return everything are tried first.
+    """
+    out = []
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        low = name.lower()
+        if any(low.startswith(d) for d in _DANGEROUS):
+            continue
+        if not low.startswith("get"):
+            continue
+        try:
+            m = getattr(obj, name)
+        except Exception:
+            continue
+        if callable(m):
+            out.append((name, m))
+    out.sort(key=lambda pair: (0 if "all" in pair[0].lower() or "parameter" in pair[0].lower() else 1,
+                               len(pair[0])))
+    return out
+
+
+def rows_from_handles(builder, handles):
+    """Numbers for each section, given whatever GetSection handed back."""
+    named = [numbers_on(h) for h in handles]
+    if any(named):
+        return named
+    for _, call in reader_calls(builder):
+        out = []
+        for h in handles:
+            try:
+                v = call(h)
+            except Exception:
+                out = []
+                break
+            row = row_of_numbers(v)
+            if row is None:
+                nums = numbers_on(v)
+                row = nums if nums else None
+            if not row:
+                out = []
+                break
+            out.append(row)
+        if len(out) == len(handles):
+            return out
+    return []
+
+
 def sections_of(obj):
     """The sections of a section builder.
 
@@ -353,11 +462,12 @@ def sections_of(obj):
         if all(r is not None and len(r) >= 2 for r in rows):
             return rows
 
-        # A section object, whose numbers are on it.
+        # A handle per section. The numbers are not on it — it is an
+        # opaque NXObject — so it goes back to the builder to be read.
         if all(not isinstance(v, (int, float, str, bool)) and plain(v) is None for v in got):
-            named = [numbers_on(v) for v in got]
-            if any(named):
-                return named
+            rows = rows_from_handles(obj, got)
+            if rows:
+                return rows
 
         # ...otherwise one number per section, and it takes several such
         # calls to make a section.
@@ -778,7 +888,7 @@ def main():
         shape = []
         factory_name = None
         try:
-            found, stages, factory_name = read_tool(collection, group, tried, scale)
+            found, stages, factory_name = read_tool(collection, group, name, tried, scale)
             found = found or {}
             how = factory_name or ""
         except Exception:

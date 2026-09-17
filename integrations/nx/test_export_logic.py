@@ -76,10 +76,19 @@ class Missing:
     def CreateTToolBuilder(self, tool): return Thin()
     def CreateMillToolBuilder(self, tool): return Full()
 tried = []
-found, stages, nm = j.read_tool(Missing(), None, tried, 1.0)
+found, stages, nm = j.read_tool(Missing(), None, 'TK2105_FREZE', tried, 1.0)
 eq(nm, 'CreateMillToolBuilder', 'the builder that knew the most won')
 eq(j.fields_from(found).get('diameter'), 12.0, 'and it is the one with the diameter on it')
-eq(any('CreateToolBuilder' in t for t in tried), True, 'the one that raised is recorded')
+
+# When the one that suits the tool raises, the next is reached and the
+# failure is written down rather than swallowed.
+class MillMissing:
+    def CreateMillToolBuilder(self, tool): raise AttributeError("no attribute 'CreateMillToolBuilder'")
+    def CreateTToolBuilder(self, tool): return Full()
+tried2 = []
+_, _, nm4 = j.read_tool(MillMissing(), None, 'TK2105_FREZE', tried2, 1.0)
+eq(nm4, 'CreateTToolBuilder', 'fell through to one that works')
+eq(any('CreateMillToolBuilder' in t for t in tried2), True, 'the one that raised is recorded')
 
 print()
 print('...and a builder that answers with almost nothing does not win:')
@@ -291,6 +300,89 @@ print('probe_calls() says what each call did, not just its name:')
 lines = j.probe_calls(holder, 3)
 eq(any('GetSection(0) -> tuple' in l for l in lines), True, 'GetSection is reported with its return')
 eq(any('RetrieveStepsFromSolid(0) -> needs a solid' in l for l in lines), True, 'and a failure is reported too')
+
+print()
+print('GetSection(i) hands back a handle, which goes back to the builder:')
+
+class Handle:
+    """An opaque NXObject: nothing readable on it at all."""
+    def __init__(self, row): self._row = row
+
+class HandleSectionBuilder:
+    """Exactly their seat: GetSection(i) -> NXObject, and Get/GetAllParameters
+    want that object passed back to them."""
+    def __init__(self, rows):
+        self.NumberOfSections = IntB(float(len(rows)))
+        self.ProfileStartPosition = 0.0
+        self._h = [Handle(r) for r in rows]
+    def GetSection(self, i):
+        if not isinstance(i, int): raise TypeError('First parameter is invalid.')
+        return self._h[i]
+    def GetAllParameters(self, section):
+        if not isinstance(section, Handle):
+            raise TypeError('First parameter is invalid. Expecting NXOpen.NXObject type')
+        return tuple(section._row)
+    def Get(self, section):
+        if not isinstance(section, Handle):
+            raise TypeError('First parameter is invalid. Expecting NXOpen.NXObject type')
+        return section._row[0]
+    def RetrieveStepsFromSolid(self): raise Exception('takes no arguments')
+
+hb = HandleSectionBuilder([(1.25, 1.6, 0.0, 0.0), (1.75, 1.0, 0.0, 0.0), (2.5, 0.8, 0.0, 0.0)])
+rows = j.sections_of(hb)
+eq(len(rows), 3, 'three sections through the handle')
+eq(rows[0], [1.25, 1.6, 0.0, 0.0], 'read by handing the handle back')
+st3 = j.nose_first(j.stages_from_rows(rows, 25.4))
+eq([round(x['dia'], 2) for x in st3], [31.75, 44.45, 63.5], 'a real BT-sized stack, in mm')
+
+print()
+print('...and a handle with nothing on it is not mistaken for a section:')
+class DeadEnd:
+    def __init__(self):
+        self.NumberOfSections = IntB(2.0)
+    def GetSection(self, i): return Handle((1.0, 2.0))
+    # Nothing that will read it back.
+eq(j.sections_of(DeadEnd()), [], 'no way to read it, so nothing claimed')
+
+print()
+print('a tool is read without building ninety builders:')
+class Counting:
+    """Ninety factories; only the mill one knows anything."""
+    def __init__(self): self.built = []
+    def __getattr__(self, name):
+        if not (name.startswith('Create') and name.endswith('Builder')):
+            raise AttributeError(name)
+        def make(tool):
+            self.built.append(name)
+            if 'Mill' in name: return Full()
+            return Thin()
+        return make
+    def __dir__(self):
+        return (['CreateMillToolBuilder', 'CreateDrillStdToolBuilder', 'CreateTToolBuilder']
+                + ['CreateJunk%dToolBuilder' % i for i in range(90)])
+c = Counting()
+found2, stages2, nm2 = j.read_tool(c, None, 'TK2105_FREZE', [], 1.0)
+eq(nm2, 'CreateMillToolBuilder', 'the mill builder answered for a FREZE')
+eq(len(c.built) <= 2, True, 'and it stopped there: %d builders made' % len(c.built))
+
+c2 = Counting()
+j.read_tool(c2, None, 'TK1314_MATKAP', [], 1.0)
+eq(c2.built[0], 'CreateDrillStdToolBuilder', 'a MATKAP tries a drill builder first')
+
+class AllThin(Counting):
+    """Ninety factories and not one of them knows this tool."""
+    def __getattr__(self, name):
+        if not (name.startswith('Create') and name.endswith('Builder')):
+            raise AttributeError(name)
+        def make(tool):
+            self.built.append(name)
+            return Thin()
+        return make
+c3 = AllThin()
+found3, _, nm3 = j.read_tool(c3, None, 'NOTHING_SUITS_THIS', [], 1.0)
+# Twelve tries, then one more to read the holder off whichever did best.
+eq(len(c3.built), 13, 'a tool nothing suits gives up after twelve, not ninety')
+eq(nm3 is not None, True, 'and still reports the best it managed')
 
 print()
 print('count_of() sees through the wrapper:')
