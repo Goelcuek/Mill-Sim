@@ -3,3 +3,7 @@ node_modules/
 .DS_Store
 .vscode/
 .idea/
+
+# Python bytecode from the NX journal helpers
+__pycache__/
+*.pyc
