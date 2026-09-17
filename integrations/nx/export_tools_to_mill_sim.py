@@ -64,8 +64,30 @@ def builder_factories(collection):
     return sorted(names, key=rank)
 
 
-def make_builder(collection, tool, tried):
-    """First factory that will build this tool, or None."""
+# The essentials. A builder that knows these knows the tool.
+_ESSENTIAL = ("diameter", "fluteLength", "overallLength", "fluteCount")
+
+
+def score_of(found):
+    """How much of a tool a builder actually knew.
+
+    Several factories will answer for the same tool and they do not all
+    know the same amount about it: a T-cutter builder answers for a drill
+    and hands back four numbers, none of them a diameter. Taking the first
+    that answers took that. Taking the one that knows the most takes the
+    right one.
+    """
+    fields = fields_from(found)
+    essential = sum(1 for f in _ESSENTIAL if (fields.get(f) or 0) > 0)
+    return (essential, len([v for v in fields.values() if v]), len(found))
+
+
+def read_tool(collection, tool, tried, scale):
+    """The best reading of this tool any factory can give.
+
+    @returns (numbers, holder stages, which factory)
+    """
+    best = (None, [], None, (0, 0, 0))
     for name in builder_factories(collection):
         try:
             factory = getattr(collection, name)
@@ -74,11 +96,27 @@ def make_builder(collection, tool, tried):
         try:
             builder = factory(tool)
         except Exception as err:
-            tried.append("%s -> %s" % (name, str(err).splitlines()[0][:90]))
+            tried.append("%s -> %s" % (name, str(err).splitlines()[0][:70]))
             continue
-        if builder is not None:
-            return builder, name
-    return None, None
+        if builder is None:
+            continue
+        try:
+            found = numbers_on(builder)
+            stages = nose_first(holder_stages(builder, scale))
+            rank = score_of(found)
+            if rank > best[3]:
+                best = (found, stages, name, rank)
+            # Everything that matters, from one builder: nothing to beat.
+            if rank[0] == len(_ESSENTIAL) and stages:
+                return best[0], best[1], best[2]
+        except Exception:
+            pass
+        finally:
+            try:
+                builder.Destroy()
+            except Exception:
+                pass
+    return best[0], best[1], best[2]
 
 
 def numbers_on(builder):
@@ -157,8 +195,12 @@ def inventory(builder):
                     note["<sections>"] = n
                     note["<calls>"] = ", ".join(nm for nm, _ in getters(attr))[:400]
                     rows = sections_of(attr)
-                    if rows:
-                        note["<read>"] = rows[:4]
+                    note["<read>"] = rows[:4] if rows else "nothing"
+                    note["<stages>"] = stages_from_rows(rows, 1.0)[:4]
+                    # What every call actually does, verbatim. A name says
+                    # nothing about what comes back, and what comes back is
+                    # the whole question.
+                    note["<probe>"] = probe_calls(attr, n)
                 out.append((name, kind, "", note))
     return out
 
@@ -244,12 +286,42 @@ def getters(obj):
     return out
 
 
-def sections_of(obj):
-    """The sections of a section builder, as dicts of numbers.
+def row_of_numbers(value):
+    """A returned value as a plain row of numbers, or None.
 
-    Two shapes are handled, because both are ways NX has described a
-    stepped profile: a call that hands back a section object, and a set of
-    calls that each hand back one number for section i.
+    A C++ call with several out-parameters comes back into Python as a
+    tuple, which is neither an object with attributes nor a single number
+    — and that is what GetSection hands over. It was falling between the
+    two cases and being dropped.
+    """
+    if isinstance(value, (str, bytes)) or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return None
+    try:
+        items = list(value)
+    except Exception:
+        return None
+    if not items:
+        return None
+    out = [plain(v) for v in items]
+    return out if all(v is not None for v in out) else None
+
+
+def sections_of(obj):
+    """The sections of a section builder.
+
+    Every shape NX has been seen to use, because which one a build uses is
+    not something this can know:
+
+      * something that simply iterates;
+      * a call that hands back a section object, whose numbers are on it;
+      * a call that hands back a row of numbers — several out-parameters,
+        which Python receives as a tuple;
+      * a set of calls that each hand back one number for section i.
+
+    A row of numbers comes back as a list rather than a dict, and is read
+    by position; anything else is read by name.
     """
     items = as_list(obj)
     if items:
@@ -274,13 +346,21 @@ def sections_of(obj):
             got.append(value)
         if len(got) != n:
             continue
-        # A call that hands back whole sections settles it on its own.
+
+        # A row of numbers per section settles it: that is the whole
+        # section, in the order NX lists it.
+        rows = [row_of_numbers(v) for v in got]
+        if all(r is not None and len(r) >= 2 for r in rows):
+            return rows
+
+        # A section object, whose numbers are on it.
         if all(not isinstance(v, (int, float, str, bool)) and plain(v) is None for v in got):
-            rows = [numbers_on(v) for v in got]
-            if any(rows):
-                return rows
-        # ...otherwise it is one number per section, and it takes several
-        # such calls to make a section.
+            named = [numbers_on(v) for v in got]
+            if any(named):
+                return named
+
+        # ...otherwise one number per section, and it takes several such
+        # calls to make a section.
         numbers = [plain(v) for v in got]
         if all(v is not None for v in numbers):
             columns[name] = numbers
@@ -288,6 +368,24 @@ def sections_of(obj):
     if columns:
         return [{name: col[i] for name, col in columns.items()} for i in range(n)]
     return []
+
+
+def probe_calls(obj, n):
+    """What each call on a section builder actually does.
+
+    Written into the diagnostic verbatim. A name on its own says nothing
+    about what comes back, and what comes back is the whole question.
+    """
+    out = []
+    for name, call in getters(obj)[:8]:
+        for args, label in (((0,), "(0)"), ((), "()")):
+            try:
+                v = call(*args)
+            except Exception as err:
+                out.append("%s%s -> %s" % (name, label, str(err).splitlines()[0][:60]))
+                continue
+            out.append("%s%s -> %s %s" % (name, label, type(v).__name__, repr(v)[:110]))
+    return out
 
 
 # ---- the holder ----------------------------------------------------------
@@ -343,7 +441,7 @@ def holder_stages(builder, scale):
         if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
             continue
         rows = sections_of(attr)
-        stages = [st for st in (stage_from(r, scale) for r in rows) if st]
+        stages = stages_from_rows(rows, scale)
         if stages:
             return stages
         # A sub-builder that is one step, or that numbers them in its names.
@@ -369,7 +467,7 @@ def holder_stages(builder, scale):
         if attr is None or callable(attr) or isinstance(attr, (int, float, str, bool)):
             continue
         rows = sections_of(attr)
-        stages = [st for st in (stage_from(r, scale) for r in rows) if st]
+        stages = stages_from_rows(rows, scale)
         if stages:
             return stages
 
@@ -379,6 +477,45 @@ def holder_stages(builder, scale):
         if "holder" in k.lower() or "hld" in k.lower():
             holder_nums[k] = v
     return numbered_stages(holder_nums, scale)
+
+
+def stages_from_rows(rows, scale):
+    """A stack of cones from however the sections came back.
+
+    A row read by name is matched by name. A row read by position is the
+    section as NX lists it — diameter first, then length, then the taper
+    and corner radius this model has no use for — and that reading is
+    checked rather than trusted: every diameter and every length has to be
+    positive, and a holder widens away from the tool, so a column pair that
+    says otherwise is the wrong pair and the next one is tried.
+    """
+    if not rows:
+        return []
+    if isinstance(rows[0], dict):
+        return [st for st in (stage_from(r, scale) for r in rows) if st]
+
+    width = min(len(r) for r in rows)
+    if width < 2:
+        return []
+    order = [(0, 1), (1, 0)] + [(a, b) for a in range(width) for b in range(width) if a != b]
+    best = None
+    for dia_at, len_at in order:
+        dias = [r[dia_at] for r in rows]
+        lens = [r[len_at] for r in rows]
+        if not all(d > 0 for d in dias) or not all(l > 0 for l in lens):
+            continue
+        widening = all(dias[i] <= dias[i + 1] + 1e-9 for i in range(len(dias) - 1))
+        stack = [{"dia": round(d * scale, 4), "topDia": round(d * scale, 4),
+                  "length": round(l * scale, 4)} for d, l in zip(dias, lens)]
+        # A step is a cylinder unless the next one is wider, in which case
+        # it is the cone up to it. That is what the table means.
+        for i in range(len(stack) - 1):
+            stack[i]["topDia"] = max(stack[i]["dia"], stack[i + 1]["dia"])
+        if widening:
+            return stack
+        if best is None:
+            best = stack
+    return best or []
 
 
 def stage_from(nums, scale):
@@ -639,21 +776,22 @@ def main():
 
         stages = []
         shape = []
-        builder, factory_name = make_builder(collection, group, tried)
-        if builder is not None:
+        factory_name = None
+        try:
+            found, stages, factory_name = read_tool(collection, group, tried, scale)
+            found = found or {}
+            how = factory_name or ""
+        except Exception:
+            failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
+
+        # The whole shape of the winning builder, once, for the diagnostic.
+        if first_dump and factory_name:
             try:
-                found = numbers_on(builder)
-                stages = nose_first(holder_stages(builder, scale))
-                how = "%s" % factory_name
-                if first_dump:
-                    shape = inventory(builder)
+                probe = getattr(collection, factory_name)(group)
+                shape = inventory(probe)
+                probe.Destroy()
             except Exception:
-                failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
-            finally:
-                try:
-                    builder.Destroy()
-                except Exception:
-                    pass
+                shape = []
 
         if not found:
             found, how = uf_fields(group)
@@ -687,7 +825,7 @@ def main():
 
         read = fields_from(found)
         if not read:
-            failed.append((name, "no parameters could be read" + (("; tried " + tried[0]) if tried else "")))
+            failed.append((name, "no parameters could be read from any of %d builders" % len(builder_factories(collection))))
             continue
 
         for field in LENGTHS:

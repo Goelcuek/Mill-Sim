@@ -30,6 +30,11 @@ def eq(got, want, what):
     else:
         print('  ok   %-38s %r' % (what, got))
 
+class Inh:
+    """Stands in for NX's inheritable builders: a value behind .Value."""
+    def __init__(self, v): self.Value = v
+
+
 print('family(), on the names off their machine:')
 eq(j.family('TK1314_MATKAP', 8.5, 0), 'drill', 'MATKAP is a drill')
 eq(j.family('TK2206_RAYBA', 10, 0), 'drill', 'RAYBA is a reamer')
@@ -55,20 +60,35 @@ eq('CreateGeometryGroupBuilder' in got, True, 'others are still tried')
 eq(got[-1], 'CreateGeometryGroupBuilder', 'the least likely is last')
 
 print()
-print('make_builder() walks past the one that is not there:')
+print('read_tool() walks past the factory that is not there:')
+class Thin:
+    # What a T-cutter builder gave for a drill: four numbers, no diameter.
+    def __init__(self): self.ChamferLengthBuilder = Inh(0.0); self.MaxCutWidth = 50.0
+    def Destroy(self): pass
+class Full:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(12.0); self.TlFluteLnBuilder = Inh(26.0)
+        self.TlHeightBuilder = Inh(75.0); self.TlNumFlutesBuilder = Inh(4)
+    def Destroy(self): pass
 class Missing:
     # Exactly the failure off their seat: the generic name raises.
     def CreateToolBuilder(self, tool): raise AttributeError("no attribute 'CreateToolBuilder'")
-    def CreateMillToolBuilder(self, tool): return 'BUILDER'
+    def CreateTToolBuilder(self, tool): return Thin()
+    def CreateMillToolBuilder(self, tool): return Full()
 tried = []
-b, nm = j.make_builder(Missing(), None, tried)
-eq(b, 'BUILDER', 'fell through to the one that works')
-eq(nm, 'CreateMillToolBuilder', 'and says which it used')
+found, stages, nm = j.read_tool(Missing(), None, tried, 1.0)
+eq(nm, 'CreateMillToolBuilder', 'the builder that knew the most won')
+eq(j.fields_from(found).get('diameter'), 12.0, 'and it is the one with the diameter on it')
+eq(any('CreateToolBuilder' in t for t in tried), True, 'the one that raised is recorded')
+
+print()
+print('...and a builder that answers with almost nothing does not win:')
+eq(j.score_of({'ChamferLengthBuilder': 0.0, 'MaxCutWidth': 50.0})[0], 0, 'no essentials')
+eq(j.score_of({'TlDiameterBuilder': 12.0, 'TlFluteLnBuilder': 26.0,
+               'TlHeightBuilder': 75.0, 'TlNumFlutesBuilder': 4})[0], 4, 'all four essentials')
 
 print()
 print('numbers_on() and fields_from() read a builder by shape, not by name:')
-class Inh:
-    def __init__(self, v): self.Value = v
 class MillBuilder:
     def __init__(self):
         self.TlDiameterBuilder = Inh(12.0)
@@ -221,6 +241,56 @@ class ShankOnly:
         self.TlDiameterBuilder = Inh(0.5)
         self.ShankSectionBuilder = SectionBuilderObjects()
 eq(j.holder_stages(ShankOnly(), 1.0), [], 'a shank profile is not a holder')
+
+print()
+print('GetSection(i) handing back a tuple, which is what their seat does:')
+
+class TupleSectionBuilder:
+    """Counts, and answers with a row of out-parameters.
+
+    Exactly what the diagnostic showed: NumberOfSections 3, and calls named
+    GetSection, RetrieveStepsFromSolid, Get, GetAllParameters.
+    """
+    def __init__(self, rows):
+        self.NumberOfSections = IntB(float(len(rows)))
+        self.ProfileStartPosition = 0.0
+        self.TlHolderOffsetBuilder = Inh(1.0)
+        self._rows = rows
+    # diameter, length, taper angle, corner radius
+    def GetSection(self, i): return tuple(self._rows[i])
+    def RetrieveStepsFromSolid(self, i): raise Exception('needs a solid')
+    def Get(self, i): raise TypeError('wrong arguments')
+    def GetAllParameters(self): raise TypeError('takes no index')
+
+holder = TupleSectionBuilder([(1.25, 1.6, 0.0, 0.0), (1.75, 1.0, 0.0, 0.0), (2.5, 0.8, 0.0, 0.0)])
+rows = j.sections_of(holder)
+eq(len(rows), 3, 'three rows out of GetSection')
+eq(rows[0], [1.25, 1.6, 0.0, 0.0], 'the row comes through as numbers')
+st = j.nose_first(j.stages_from_rows(rows, 25.4))
+eq(len(st), 3, 'three stages')
+eq(st[0]['dia'], 31.75, '1.25 in nose is 31.75 mm')
+eq(st[0]['topDia'], 44.45, 'the nose step cones up to the next one')
+eq(st[-1]['dia'], 63.5, '2.5 in at the gauge line')
+eq([s2['length'] for s2 in st], [40.64, 25.4, 20.32], 'lengths, converted')
+
+print()
+print('...and the column pair is checked rather than trusted:')
+# Length first, diameter second: taking (0,1) would give a stack that
+# narrows towards the gauge line, so the other pair has to win.
+swapped = TupleSectionBuilder([(1.6, 1.25, 0.0), (1.0, 1.75, 0.0), (0.8, 2.5, 0.0)])
+st2 = j.stages_from_rows(j.sections_of(swapped), 1.0)
+eq([s2['dia'] for s2 in st2], [1.25, 1.75, 2.5], 'the widening column is the diameter')
+
+print()
+print('a row with a zero length is not a section:')
+bad = TupleSectionBuilder([(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)])
+eq(j.stages_from_rows(j.sections_of(bad), 1.0), [], 'nothing usable, nothing invented')
+
+print()
+print('probe_calls() says what each call did, not just its name:')
+lines = j.probe_calls(holder, 3)
+eq(any('GetSection(0) -> tuple' in l for l in lines), True, 'GetSection is reported with its return')
+eq(any('RetrieveStepsFromSolid(0) -> needs a solid' in l for l in lines), True, 'and a failure is reported too')
 
 print()
 print('count_of() sees through the wrapper:')
