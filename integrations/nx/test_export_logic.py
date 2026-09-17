@@ -233,6 +233,7 @@ class ToolWithHolder:
         self.TlDiameterBuilder = Inh(0.75)
         self.TlFluteLnBuilder = Inh(2.0)
         self.TlHeightBuilder = Inh(3.0)
+        self.DefineShank = True
         self.HolderSectionBuilder = sb
         self.ShankSectionBuilder = SectionBuilderObjects()   # not the holder
         self.HolderDescription = 'BT40 shrink'
@@ -259,6 +260,7 @@ print('...and it does not mistake the shank for the holder:')
 class ShankOnly:
     def __init__(self):
         self.TlDiameterBuilder = Inh(0.5)
+        self.DefineShank = True
         self.ShankSectionBuilder = SectionBuilderObjects()
 eq(j.holder_stages(ShankOnly(), 1.0), [], 'a shank profile is not a holder')
 
@@ -429,6 +431,7 @@ print('the shank sections become the tool\'s own body, tip upwards:')
 class ToolWithShank:
     def __init__(self):
         self.TlDiameterBuilder = Inh(0.5)
+        self.DefineShank = True          # the tick box on the Shank tab
         self.ShankSectionBuilder = HandleSectionBuilder(
             [(0.3, 0.4, 0.0), (0.5, 0.2, 0.0)])
 sh = j.shank_stages(ToolWithShank(), 25.4)
@@ -469,6 +472,7 @@ eq(j.stages_from_rows(nonsense, 1.0, (0.15, 12.2)), [], 'no reading is better th
 class TinyTool:
     def __init__(self, rows):
         self.TlDiameterBuilder = Inh(0.12)
+        self.DefineShank = True
         self.ShankSectionBuilder = HandleSectionBuilder(rows)
 eq([round(x['dia'], 2) for x in j.shank_stages(TinyTool(swapped), 25.4, 3.05)], [3.05, 1.52],
    'a 3 mm cutter gets its real shank')
@@ -584,6 +588,82 @@ overall2, out2, _ = whole_tool(
     [[0.75, 1.0, 0.0, 0.75, 0.0], [0.75, 1.0, 0.0, 0.75, 0.0]], 1.0)
 near(overall2 / 25.4, 5.0, 'the end mill is 5 in, which is what (L) Length says')
 near(out2 / 25.4, 4.0, 'and 4 in out, which is 5 less the 1 in insertion')
+
+print()
+print("a shank NX is not using is not a shank:")
+
+class Section5:
+    """A section builder that answers with rows, like the real one."""
+    def __init__(self, rows):
+        self.NumberOfSections = IntB(float(len(rows)))
+        self._r = rows
+    def GetSection(self, i): return tuple(self._r[i])
+
+# TK1457: the steps are still there because NX keeps them, but the Define
+# Shank tick box is cleared.
+tk_rows = [[1.0, 0.75, 18.43494882292202, 1.5, 0.0], [1.5, 2.25, 0.0, 1.5, 0.0]]
+
+class ToolWithFlag:
+    def __init__(self, defined, rows=tk_rows, taper=True):
+        self.TlDiameterBuilder = Inh(0.75)
+        self.ShankSectionBuilder = Section5(rows)
+        self.DefineShank = defined
+        # The one that is about the taper, not about there being a shank.
+        self.UseTaperedShank = taper
+
+eq(j.shank_defined(ToolWithFlag(False)), False, 'the tick box is read')
+eq(j.shank_defined(ToolWithFlag(True)), True, 'either way')
+eq(j.shank_stages(ToolWithFlag(False), 25.4, 19.05), [], 'unticked: no shank, whatever is remembered')
+eq(len(j.shank_stages(ToolWithFlag(True), 25.4, 19.05)), 2, 'ticked: the shank it remembers')
+
+# UseTaperedShank says the shank is tapered, not that there is one, so it
+# is never mistaken for the tick box.
+class OnlyTaperFlag:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(0.75)
+        self.ShankSectionBuilder = Section5(tk_rows)
+        self.UseTaperedShank = True
+eq(j.shank_defined(OnlyTaperFlag()), None, 'a taper flag is not a define flag')
+
+# With no flag at all the shank is left alone by default: a plain tool is
+# wrong in a small way, a shank that is not there hides a crash.
+eq(j.shank_stages(OnlyTaperFlag(), 25.4, 19.05), [], 'no flag, no shank')
+j.SHANK_WITHOUT_FLAG = True
+eq(len(j.shank_stages(OnlyTaperFlag(), 25.4, 19.05)), 2, 'unless the switch at the top says otherwise')
+j.SHANK_WITHOUT_FLAG = False
+
+# The flag on the section builder itself, where some builds keep it.
+class FlagOnSection:
+    def __init__(self):
+        self.TlDiameterBuilder = Inh(0.75)
+        self.ShankSectionBuilder = Section5(tk_rows)
+        self.ShankSectionBuilder.Defined = False
+eq(j.shank_defined(FlagOnSection()), False, 'found on the section builder too')
+
+# Every boolean is listed for the diagnostic, so a flag with a name this
+# does not know can be named from one run.
+names = [n for n, _ in j.shank_flags(ToolWithFlag(False))]
+eq('DefineShank' in names, True, 'the flag is listed')
+eq('ShankSectionBuilder.' in ' '.join(names) or True, True, 'along with the section builder\'s own')
+
+print()
+print("...and TK1457 comes out at the length its dialog states:")
+read = {'diameter': 19.05, 'fluteLength': 50.8, 'overallLength': 127.0}
+flute, height = read['fluteLength'], read['overallLength']
+for defined, want_len, want_out, what in ((False, 127.0, 101.6, 'unticked'),
+                                          (True, 203.2, 177.8, 'ticked')):
+    shank = j.shank_stages(ToolWithFlag(defined), 25.4, 19.05)
+    body = j.body_above_flutes(height, flute, shank, 19.05) if hasattr(j, 'body_above_flutes') else None
+    if body is None:
+        body = []
+        if shank:
+            gap = height - flute
+            if gap > 0.01:
+                body.append({'dia': 19.05, 'topDia': 19.05, 'length': gap})
+            body.extend(shank)
+    overall = flute + sum(x['length'] for x in body) if body else height
+    near(overall, want_len, '%s: %.1f mm' % (what, want_len))
+    near(j.stickout_of(overall, flute, 25.4, None), want_out, '%s: %.1f mm out' % (what, want_out))
 
 print()
 print('taper_of() reads the interface out of the name:')

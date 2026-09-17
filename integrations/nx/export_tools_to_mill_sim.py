@@ -160,7 +160,8 @@ def read_tool(collection, tool, name, tried, scale):
     # The holder, the shank and the insertion all come off the winner
     # alone. Reading them from every candidate was most of the half minute.
     extra = {"holder": [], "shank": [], "insertion": None,
-             "holderRows": [], "shankRows": []}
+             "holderRows": [], "shankRows": [], "shankDefined": None,
+             "shankFlags": []}
     # The cutter's own size, which is what says whether a shank reading
     # could be true.
     diameter = (fields_from(best[0]).get("diameter") or 0.0) * scale
@@ -176,6 +177,8 @@ def read_tool(collection, tool, name, tried, scale):
             # is on another is how three rounds of this were wasted.
             extra["holderRows"] = raw_rows(builder, "holder")
             extra["shankRows"] = raw_rows(builder, "shank")
+            extra["shankDefined"] = shank_defined(builder)
+            extra["shankFlags"] = shank_flags(builder)
         finally:
             try:
                 builder.Destroy()
@@ -737,6 +740,103 @@ def numbered_stages(nums, scale):
     return stages
 
 
+# When a build exposes no Define Shank flag at all, is a remembered shank
+# used or ignored? Ignoring is the safe answer -- a tool with no shank is a
+# plain cylinder, which is wrong in a small way, while a shank that is not
+# there is extra metal in the collision model, which is wrong in a way that
+# hides a crash. Set this True if your seat has no flag and your shanks are
+# real.
+SHANK_WITHOUT_FLAG = False
+
+_DEFINED_WORDS = ("define", "defined", "enable", "enabled", "active", "specify")
+
+
+def truth(v):
+    """A value as a boolean, through whatever wrapper holds it."""
+    if hasattr(v, "Value"):
+        try:
+            v = v.Value
+        except Exception:
+            return None
+    return v if isinstance(v, bool) else None
+
+
+def shank_flags(builder):
+    """Every boolean that might be the Define Shank tick box, with its value.
+
+    Written into the diagnostic whether or not one of them is recognised,
+    so a flag this does not know the name of can be named from one run
+    rather than guessed at.
+    """
+    out = []
+    holders = [("", builder)]
+    section = section_builder(builder, "shank")
+    if section is not None:
+        holders.append(("ShankSectionBuilder.", section))
+    for prefix, obj in holders:
+        for name in dir(obj):
+            if name.startswith("_"):
+                continue
+            try:
+                v = truth(getattr(obj, name))
+            except Exception:
+                continue
+            if v is not None:
+                out.append(("%s%s" % (prefix, name), v))
+    return out
+
+
+def shank_defined(builder):
+    """Is the shank NX remembers actually in use?
+
+    The Shank tab has a Define Shank tick box, and unticking it does not
+    clear the steps -- NX keeps them. Reading them regardless put a Ø38 mm
+    shank on a Ø19 mm end mill that has none, and made it eight inches long
+    instead of five.
+
+    UseTaperedShank is deliberately not taken as the answer: it says the
+    shank is tapered, not that there is one.
+
+    @returns True, False, or None when nothing here says
+    """
+    for prefix, obj in (("", builder), ("shank", section_builder(builder, "shank"))):
+        if obj is None:
+            continue
+        for name in dir(obj):
+            low = name.lower()
+            if name.startswith("_") or "taper" in low:
+                continue
+            if not any(w in low for w in _DEFINED_WORDS):
+                continue
+            # On the tool builder the name has to say which thing it is
+            # defining; on the shank's own builder it is about the shank
+            # by virtue of being there.
+            if not prefix and "shank" not in low:
+                continue
+            try:
+                v = truth(getattr(obj, name))
+            except Exception:
+                continue
+            if v is not None:
+                return v
+    return None
+
+
+def section_builder(builder, which):
+    """The holder's or the shank's section builder, if it has one."""
+    for name in dir(builder):
+        low = name.lower()
+        if name.startswith("_") or "section" not in low or which not in low:
+            continue
+        try:
+            attr = getattr(builder, name)
+        except Exception:
+            continue
+        if attr is not None and not callable(attr) and not isinstance(attr, (int, float, str, bool)):
+            return attr
+    return None
+
+
 def shank_stages(builder, scale, diameter=0.0):
     """The tool's own body above the flutes, as a stack of cones.
 
@@ -749,6 +849,13 @@ def shank_stages(builder, scale, diameter=0.0):
     Read tip-upwards, which is the order Mill-Sim wants, so it is not
     turned over the way a holder is.
     """
+    # A shank NX is not using is not a shank. It keeps the steps after the
+    # tick box is cleared, and they read perfectly well -- they are just
+    # not on the tool.
+    defined = shank_defined(builder)
+    if defined is False or (defined is None and not SHANK_WITHOUT_FLAG):
+        return []
+
     for name in dir(builder):
         low = name.lower()
         if name.startswith("_") or "shank" not in low or "section" not in low:
@@ -1062,6 +1169,8 @@ def main():
         insertion = None
         holder_rows = []
         shank_rows = []
+        shank_defined_flag = None
+        shank_flag_list = []
         shape = []
         factory_name = None
         try:
@@ -1072,6 +1181,8 @@ def main():
             insertion = extra.get("insertion")
             holder_rows = extra.get("holderRows", [])
             shank_rows = extra.get("shankRows", [])
+            shank_defined_flag = extra.get("shankDefined")
+            shank_flag_list = extra.get("shankFlags", [])
             how = factory_name or ""
         except Exception:
             failed.append((name, traceback.format_exc().strip().splitlines()[-1]))
@@ -1239,6 +1350,14 @@ def main():
         diag.append("  ø%.4f  flute %.4f  length %.4f  insertion %s  stickout %.4f  (%s)"
                     % (diameter, flute, overall, insertion,
                        assemblies[-1]["stickout"], kind))
+        diag.append("  shank defined: %s%s" % (
+            shank_defined_flag,
+            "" if shank_defined_flag is not None else
+            " (no flag found; shank %s)" % ("used" if SHANK_WITHOUT_FLAG else "ignored")))
+        if shank_defined_flag is None:
+            # Nothing here was recognised as the Define Shank tick box, so
+            # every boolean is listed: one of them is it.
+            diag.append("  shank flags: %s" % (shank_flag_list or "none"))
         diag.append("  shank rows:  %s" % (shank_rows or "none"))
         diag.append("  shank read:  %s" % (shank or "none"))
         diag.append("  body built:  %s" % (body or "plain"))
