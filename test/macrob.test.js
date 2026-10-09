@@ -141,3 +141,17 @@ test('a program with no macros in it is read exactly as before', () => {
   assert.deepEqual(p.variables, [], 'and it set no variables');
   assert.ok(p.moves.some((m) => m.kind === 'arc'));
 });
+
+test('two-argument ATAN keeps its quadrant, in both spellings', () => {
+  const read = (expr) => {
+    const p = interpret(`#500=${expr}\nM30`);
+    return p.variables.find((v) => v.n === 500).value;
+  };
+  assert.equal(read('ATAN[1]/[1]'), 45);
+  assert.equal(read('ATAN[1]/[-1]'), 135);
+  assert.equal(read('ATAN[-1]/[-1]'), 225);
+  assert.equal(read('ATAN[-1]/[1]'), 315);
+  assert.equal(read('ATAN[-1,-1]'), 225);
+  assert.equal(read('ATAN[1]/[2]*2'), (Math.atan2(1, 2) * 180 / Math.PI) * 2);
+  assert.ok(Math.abs(read('ATAN[1]') - 45) < 1e-12, 'one argument is still the plain arctangent');
+});

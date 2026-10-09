@@ -376,7 +376,21 @@ class Parser {
       const name = this.next().text;
       this.expect('[');
       const arg = this.expression();
+      // ATAN[y]/[x] — and ATAN[y,x] on the newer controls — is one function
+      // of two arguments that knows its quadrant, not an arctangent divided
+      // by something: ATAN[-1]/[-1] is 225, and reading it as atan(1) put
+      // the third hole of a bolt circle in the first quadrant.
+      if (name === 'ATAN' && this.is('other', ',')) {
+        this.next();
+        const x = this.expression();
+        this.expect(']');
+        return { op: 'atan2', left: arg, right: x };
+      }
       this.expect(']');
+      if (name === 'ATAN' && this.is('/') && this.peek(1).kind === '[') {
+        this.next();
+        return { op: 'atan2', left: arg, right: this.primary() };
+      }
       return { op: 'fn', name, left: arg };
     }
     if (this.peek().kind === 'number') return { op: 'num', value: this.next().value };
@@ -404,6 +418,11 @@ export function evaluate(node, vars) {
     case 'var': return vars.get(evaluate(node.left, vars));
     case 'neg': return -evaluate(node.left, vars);
     case 'fn': return FUNCTIONS[node.name](evaluate(node.left, vars));
+    case 'atan2': {
+      // Fanuc's range is 0 to 360, not -180 to 180.
+      const deg = (Math.atan2(evaluate(node.left, vars), evaluate(node.right, vars)) * 180) / Math.PI;
+      return deg < 0 ? deg + 360 : deg;
+    }
     case 'cmp': return COMPARE[node.name](evaluate(node.left, vars), evaluate(node.right, vars));
     case '+': return evaluate(node.left, vars) + evaluate(node.right, vars);
     case '-': return evaluate(node.left, vars) - evaluate(node.right, vars);
