@@ -4,7 +4,7 @@
 // so a shop can build a library once and carry it between machines.
 
 import { defaultTools, makeTool, buildTool } from './toolDefs.js';
-import { defaultHolders, makeHolder, buildHolder } from './holderDefs.js';
+import { defaultHolders, makeHolder, buildHolder, defaultHolder } from './holderDefs.js';
 import { buildAssembly, makeAssembly } from './assembly.js';
 import { fromFusion } from './fusionLibrary.js';
 import { fromNX } from './nxLibrary.js';
@@ -207,13 +207,26 @@ export class ToolLibrary {
   assembly(id) { return this.assemblies.find((a) => a.id === id) || null; }
   assemblyByNumber(n) { return this.assemblies.find((a) => Number(a.number) === Number(n)) || null; }
 
+  /**
+   * The holder an assembly is actually held in.
+   *
+   * Its own, when it names one that exists; otherwise the default, because
+   * a cutter held in nothing is a crash model with a hole in it.
+   */
+  holderFor(asm, toolDef = null) {
+    const own = asm ? this.holder(asm.holderId) : null;
+    return own || defaultHolder(toolDef || (asm ? this.tool(asm.toolId) : null));
+  }
+
   /** Build (and cache) the geometry for an assembly. */
   build(assemblyId, machine = {}) {
     const key = `${assemblyId}|${machine.spindleDiameter || 0}|${machine.spindleLength || 0}`;
     if (this.cache.has(key)) return this.cache.get(key);
     const asm = this.assembly(assemblyId);
     if (!asm) return null;
-    const built = buildAssembly(asm, this.tool(asm.toolId), this.holder(asm.holderId), machine);
+    const tool = this.tool(asm.toolId);
+    const built = buildAssembly(asm, tool, this.holderFor(asm, tool), machine);
+    built.defaultHolder = !this.holder(asm.holderId);
     this.cache.set(key, built);
     return built;
   }
@@ -339,7 +352,7 @@ export class ToolLibrary {
     const numbers = new Map();
     for (const a of this.assemblies) {
       if (!a.toolId || !this.tool(a.toolId)) issues.push({ level: 'error', text: `${a.name}: no cutter assigned.` });
-      if (a.holderId && !this.holder(a.holderId)) issues.push({ level: 'error', text: `${a.name}: holder is missing.` });
+      if (a.holderId && !this.holder(a.holderId)) issues.push({ level: 'warning', text: `${a.name}: its holder is missing, so it runs in the default one.` });
       const n = Number(a.number);
       if (!n) issues.push({ level: 'warning', text: `${a.name}: no T number, so no G-code tool change can select it.` });
       else if (numbers.has(n)) issues.push({ level: 'error', text: `T${n} is used by both "${numbers.get(n)}" and "${a.name}".` });

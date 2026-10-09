@@ -158,3 +158,33 @@ test('holders and assemblies go the same way', () => {
   assert.equal(lib.removeMany('assemblies', ids), 2);
   for (const id of ids) assert.equal(lib.assembly(id), null);
 });
+
+test('an assembly that names no holder is held in the default one', () => {
+  // A cutter held in nothing left the crash model blind above the stickout
+  // and put the spindle nose where the holder should be.
+  const lib = new ToolLibrary().loadDefaults();
+  const bare = lib.addAssembly({ name: 'bare', number: 90, toolId: 'tool_flat10', holderId: '', stickout: 40 });
+  const built = lib.build(bare.id, {});
+  assert.ok(built.holder, 'it has a holder');
+  assert.equal(built.defaultHolder, true);
+  assert.equal(built.holder.maxDia, 25, 'Ø25');
+  assert.equal(built.holder.length, 150, '150 long');
+  assert.equal(built.gaugeLength, 40 + 150, 'the gauge line is at the top of it');
+
+  // A holder that has since been deleted gets the same, and says so.
+  const orphan = lib.addAssembly({ name: 'orphan', number: 91, toolId: 'tool_flat10', holderId: 'gone', stickout: 40 });
+  assert.equal(lib.build(orphan.id, {}).defaultHolder, true);
+  assert.ok(lib.audit({}).some((i) => /holder is missing.*default/.test(i.text)));
+
+  // An assembly with its own holder keeps it.
+  assert.equal(lib.build('asm_10flat', {}).defaultHolder, false);
+});
+
+test('the default holder is never narrower than the shank it holds', () => {
+  const lib = new ToolLibrary().loadDefaults();
+  const fat = lib.addTool({ name: 'fat shank', type: 'flat', diameter: 32, shankDiameter: 32, fluteLength: 40, overallLength: 120 });
+  const a = lib.addAssembly({ name: 'fat', number: 92, toolId: fat.id, holderId: '', stickout: 60 });
+  const built = lib.build(a.id, {});
+  assert.equal(built.holder.maxDia, 32);
+  assert.ok(!built.warnings.some((w) => /bore/i.test(w)), 'no warning about a bore it chose itself');
+});

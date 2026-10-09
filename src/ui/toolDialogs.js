@@ -13,7 +13,7 @@ import { el, field, select, row, button, clear, pickFile } from './dom.js';
 import { Dialog } from './dialog.js';
 import { PreviewViewer } from './preview.js';
 import { TOOL_TYPES, TOOL_FIELDS, DEFAULT_TOOL } from '../tools/toolDefs.js';
-import { TAPERS, HOLDER_TYPES, DEFAULT_HOLDER } from '../tools/holderDefs.js';
+import { TAPERS, HOLDER_TYPES, DEFAULT_HOLDER, defaultHolder, DEFAULT_HOLDER_DIAMETER, DEFAULT_HOLDER_LENGTH } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
 import { fmt, clone } from '../core/util.js';
 import * as units from '../core/units.js';
@@ -252,7 +252,9 @@ export function openAssemblyDialog(app, assemblyId = null) {
       preview.show(null);
       return;
     }
-    const built = lib.buildDraft(tool, lib.holder(draft.holderId), draft.stickout, app.state.machine);
+    // The preview is what will run, so an assembly that names no holder is
+    // shown in the default one it will actually get.
+    const built = lib.buildDraft(tool, lib.holder(draft.holderId) || defaultHolder(tool), draft.stickout, app.state.machine);
     preview.show(built);
     clear(stats);
     stats.appendChild(el('div.stat-grid', {}, [
@@ -293,7 +295,7 @@ export function openAssemblyDialog(app, assemblyId = null) {
       button('New…', () => openToolDialog(app, null), { title: 'Create a cutter without leaving this window' }),
     ]));
     form.appendChild(row([
-      select('Holder', [{ value: '', label: '— bare cutter —' }, ...lib.holders.map((h) => ({ value: h.id, label: h.name }))], draft.holderId, (v) => {
+      select('Holder', [{ value: '', label: `\u2014 default (\u00d8${DEFAULT_HOLDER_DIAMETER} \u00d7 ${DEFAULT_HOLDER_LENGTH}) \u2014` }, ...lib.holders.map((h) => ({ value: h.id, label: h.name }))], draft.holderId, (v) => {
         draft.holderId = v;
         rebuild();
       }),

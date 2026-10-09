@@ -73,6 +73,44 @@ export function makeHolder(patch = {}) {
   };
 }
 
+/** What an assembly is held in when it names no holder. */
+export const DEFAULT_HOLDER_DIAMETER = 25;
+export const DEFAULT_HOLDER_LENGTH = 150;
+export const DEFAULT_HOLDER_ID = 'hld__default';
+
+/**
+ * The holder an assembly gets when it does not name one.
+ *
+ * A bare cutter is not a thing that exists on a machine: something holds
+ * it, and that something is usually what hits the clamp. Leaving it out
+ * made the crash model blind above the stickout and put the spindle nose
+ * where the holder should have been. So an assembly with no holder — an
+ * import that did not carry one, a holder that has since been deleted —
+ * is held in a plain Ø25 × 150 mm cylinder rather than in nothing.
+ *
+ * It is a plain cylinder with no flange because it is a stand-in, not a
+ * claim about any real holder. The bore is never smaller than the shank,
+ * so a tool with a fat shank does not get a holder it could not fit in.
+ *
+ * Never stored in the library: it is what "none" means, worked out at
+ * build time, and changing the constants above changes it everywhere.
+ *
+ * @param {object} [toolDef] the cutter it is to hold
+ */
+export function defaultHolder(toolDef = null) {
+  const shank = toolDef ? num(toolDef.shankDiameter, 0) || num(toolDef.diameter, 0) : 0;
+  const dia = Math.max(DEFAULT_HOLDER_DIAMETER, shank);
+  return makeHolder({
+    id: DEFAULT_HOLDER_ID,
+    name: `Default holder \u00d8${+dia.toFixed(2)} \u00d7 ${DEFAULT_HOLDER_LENGTH}`,
+    type: 'custom',
+    taper: 'none',
+    color: '#9aa3b2',
+    stages: [{ dia, topDia: dia, length: DEFAULT_HOLDER_LENGTH }],
+    notes: 'Used for any assembly that names no holder.',
+  });
+}
+
 /**
  * Build the holder silhouette.
  *
