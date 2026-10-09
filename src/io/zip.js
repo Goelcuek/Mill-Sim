@@ -18,6 +18,13 @@ const END = 0x06054b50;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+/**
+ * General-purpose flag bit 11: the names are UTF-8. Without it Windows
+ * reads them as an old DOS code page, and a casting called "Kızak" comes
+ * out of the folder as "K─▒zak".
+ */
+const UTF8_NAMES = 0x0800;
+
 /** CRC-32, the one every zip entry carries. */
 const TABLE = (() => {
   const t = new Uint32Array(256);
@@ -92,7 +99,7 @@ export async function writeZip(files, { compress = true } = {}) {
     const head = new DataView(new ArrayBuffer(30));
     head.setUint32(0, LOCAL, true);
     head.setUint16(4, 20, true);            // version needed
-    head.setUint16(6, 0, true);             // flags
+    head.setUint16(6, UTF8_NAMES, true);    // flags
     head.setUint16(8, method, true);
     head.setUint16(10, stamp.time, true);
     head.setUint16(12, stamp.day, true);
@@ -107,7 +114,7 @@ export async function writeZip(files, { compress = true } = {}) {
     dir.setUint32(0, CENTRAL, true);
     dir.setUint16(4, 20, true);             // version made by
     dir.setUint16(6, 20, true);             // version needed
-    dir.setUint16(8, 0, true);
+    dir.setUint16(8, UTF8_NAMES, true);     // flags
     dir.setUint16(10, method, true);
     dir.setUint16(12, stamp.time, true);
     dir.setUint16(14, stamp.day, true);
@@ -175,6 +182,9 @@ export async function readZip(buffer) {
     const localExtraLen = view.getUint16(local + 28, true);
     const start = local + 30 + localNameLen + localExtraLen;
     const body = bytes.subarray(start, start + packedSize);
+    if (method !== 0 && method !== 8) {
+      throw new Error(`${name} is packed in a way this reader does not know (method ${method}); save the zip with ordinary compression.`);
+    }
     out.set(name, method === 8 ? await inflateRaw(body) : body.slice());
   }
   return out;

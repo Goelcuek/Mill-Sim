@@ -158,3 +158,28 @@ test('a zip that compressed well still reads back exactly', async () => {
 test('something that is not a zip is refused, not misread', async () => {
   await assert.rejects(() => readZip(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])), /not a zip/);
 });
+
+test('ASCII STL numbers with no digit before the point are read whole', () => {
+  const text = [
+    'solid dots',
+    'facet normal 0 0 +1',
+    ' outer loop',
+    '  vertex .5 -.25 0',
+    '  vertex +1.5 0 0',
+    '  vertex 0 1. 0',
+    ' endloop',
+    'endfacet',
+    'endsolid dots',
+  ].join('\n');
+  const stl = parseSTL(new TextEncoder().encode(text).buffer);
+  assert.deepEqual(Array.from(stl.positions), [0.5, -0.25, 0, 1.5, 0, 0, 0, 1, 0]);
+  assert.equal(stl.normals[2], 1);
+});
+
+test('zip names are marked UTF-8 and come back as written', async () => {
+  const zip = await writeZip([{ name: 'castings/Kızak gövdesi.stl', data: 'x' }]);
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  assert.equal(view.getUint16(6, true) & 0x0800, 0x0800, 'local header says UTF-8');
+  const back = await readZip(zip);
+  assert.ok(back.has('castings/Kızak gövdesi.stl'));
+});

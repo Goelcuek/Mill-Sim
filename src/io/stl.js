@@ -70,7 +70,9 @@ function parseAscii(buffer) {
   const verts = [];
   const norms = [];
   const facetRe = /facet\s+normal\s+([^\r\n]*)([\s\S]*?)endfacet/gi;
-  const numRe = /-?\d+\.?\d*(?:[eE][-+]?\d+)?/g;
+  // A number may have no digit before its point — .5, -.25 — and some
+  // writers sign their positives. Without that, .5 was read as 5.
+  const numRe = /[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g;
 
   let m;
   while ((m = facetRe.exec(text)) !== null) {
