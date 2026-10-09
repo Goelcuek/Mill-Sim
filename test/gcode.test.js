@@ -190,3 +190,64 @@ test('flattenArc chords stay inside the tolerance', () => {
     assert.ok(sagitta <= 0.0055, `sagitta ${sagitta}`);
   }
 });
+
+test('G04 X is a time, not a move — with or without a drilling cycle in force', () => {
+  const plain = run(['G90 G1 X10 Y0 Z0 F100', 'G4 X2.', 'M30']);
+  assert.deepEqual(plain.moves.map((m) => m.kind), ['feed', 'dwell']);
+  assert.equal(plain.moves[1].time, 2);
+  const inCycle = run(['G90 G0 X0 Y0 Z10', 'G81 X5 Y5 Z-5 R2 F100', 'G4 X1.', 'G80', 'M30']);
+  assert.equal(inCycle.moves.filter((m) => m.kind === 'feed').length, 1, 'one hole, not two');
+});
+
+test('G82 dwell P is read in the same units as G04 P', () => {
+  const p = run(['G90 G0 X0 Y0 Z10', 'G82 X5 Y5 Z-5 R2 P500 F100', 'G80', 'M30']);
+  assert.equal(p.moves.find((m) => m.kind === 'dwell').time, 0.5);
+});
+
+test('incremental drilling measures R from the initial level and Z from R', () => {
+  const p = run(['G90 G0 X0 Y0 Z10', 'G91 G81 X5 Y0 Z-7 R-8 F100', 'G80', 'G90', 'M30']);
+  const bottom = Math.min(...p.moves.map((m) => m.to[2]));
+  assert.ok(Math.abs(bottom - -5) < 1e-9, `bottom ${bottom}`);
+});
+
+test('a G98 hole after G99 holes goes back to the initial level, not R', () => {
+  const p = run(['G90 G0 X0 Y0 Z50', 'G99 G81 X5 Y5 Z-5 R2 F100', 'X10', 'G98 X15', 'G80', 'M30']);
+  const last = p.moves[p.moves.length - 1];
+  assert.equal(last.to[2], 50);
+  // The G99 holes travel at R and do not make a nothing-move down to it.
+  assert.ok(p.moves.every((m) => m.kind === 'dwell' || m.length > 1e-9));
+});
+
+test('cycle time understands feed per revolution and inverse time', () => {
+  const perRev = run(['G90 G0 X0 Y0 Z0', 'S1000 M3', 'G95 G1 X100 F0.1', 'M30']);
+  assert.equal(feeds(perRev)[0].time, 60);                 // 100 mm at 100 mm/min
+  assert.equal(feeds(perRev)[0].feed, 100);
+  const inverse = run(['G90 G0 X0 Y0 Z0', 'G93 G1 X100 F2.', 'G94', 'M30']);
+  assert.equal(feeds(inverse)[0].time, 30);                // half a minute, whatever the length
+});
+
+test('a tilted plane picks up a position set from outside it', () => {
+  const p = run(['G90 G0 X0 Y0 Z0', 'G68.2 X0 Y0 Z0 I0 J0 K0', 'G53 Z0', 'G91 G1 X10 F100', 'M30']);
+  const last = p.moves[p.moves.length - 1];
+  assert.deepEqual(last.to.map((v) => +v.toFixed(6)), [10, 0, 250]);
+});
+
+test('G43 in the tool-change block is checked against the incoming tool', () => {
+  const ok = run(['T1 M6', 'G43 H1 Z50', 'T5 M6 G43 H5', 'G0 X0 Y0 Z10', 'M30']);
+  assert.ok(!ok.warnings.some((w) => /does not match/.test(w.message)), JSON.stringify(ok.warnings));
+  const bad = run(['T1 M6', 'T5 M6 G43 H1', 'G0 X0 Y0 Z10', 'M30']);
+  assert.ok(bad.warnings.some((w) => /G43 H1 does not match the active tool T5/.test(w.message)));
+});
+
+test('a full turn of a helix is a full turn even when the ends differ by rounding', () => {
+  const path = flattenArc([10, 0, 0], [10, 5e-11, -2], [0, 0, 0], 17, true, 0.01);
+  let turned = 0;
+  for (let i = 3; i < path.length; i += 3) {
+    const a0 = Math.atan2(path[i - 2], path[i - 3]);
+    const a1 = Math.atan2(path[i + 1], path[i]);
+    let d = a1 - a0;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    turned += d;
+  }
+  assert.ok(Math.abs(turned - 2 * Math.PI) < 1e-6, `turned ${turned}`);
+});

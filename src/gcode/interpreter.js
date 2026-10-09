@@ -110,6 +110,8 @@ class State {
     this.arcAbsolute = !!ctl.arcCentreAbsolute;
     this.feedMode = ctl.feedMode ?? 94;
     this.feed = 0;
+    /** The F word as written, for G93, where it is a rate and not a length. */
+    this.feedRaw = 0;
     this.rpm = 0;
     this.spindleDir = 0;         // -1 CCW, 0 off, 1 CW
     this.coolant = 'off';
@@ -144,6 +146,8 @@ class State {
     this.cycleQ = 0;
     this.cycleP = 0;
     this.cycleF = 0;
+    /** Where the tool stood when the cycle began: G98 comes back up to it. */
+    this.cycleInit = 0;
     this.g92 = [0, 0, 0];
     /** Tool-vector mode: the block says where the tool points, not the angles. */
     this.vector = false;
@@ -317,8 +321,10 @@ export function flattenArc(from, to, center, plane, ccw, tolerance) {
   } else {
     while (sweep >= -1e-12) sweep -= Math.PI * 2;
   }
-  // Coincident endpoints with a valid centre mean a full circle.
-  if (Math.abs(dist3(from, to)) < 1e-9) sweep = ccw ? Math.PI * 2 : -Math.PI * 2;
+  // Coincident endpoints with a valid centre mean a full circle — judged in
+  // the plane, so a full turn of a helix, which ends higher than it began,
+  // is one too and not a sliver decided by the last bit of rounding.
+  if (Math.hypot(ea - sa, eb - sb) < 1e-9) sweep = ccw ? Math.PI * 2 : -Math.PI * 2;
 
   const tol = Math.max(tolerance, 1e-4);
   let stepAngle = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - tol / r)));
@@ -512,10 +518,26 @@ export function interpret(text, config = {}) {
     return move;
   };
 
+  /**
+   * How fast a move goes, in mm/min, and how long it takes.
+   *
+   * F is only a speed under G94. Under G95 it is a length per turn of the
+   * spindle, and under G93 it is how many of these moves fit in a minute —
+   * the form 5-axis posts write, because a swing of the table has no
+   * sensible speed along the tip. Read as mm/min, F0.1 at S1000 took a
+   * thousand minutes over a 100 mm line, and a G93 F2 took fifty.
+   */
+  const timing = (kind, len, feed) => {
+    if (kind === 'rapid') return { feed: cfg.rapidRate, time: len > 0 ? (len / cfg.rapidRate) * 60 : 0 };
+    if (st.feedMode === 93 && st.feedRaw > 0) return { feed: len * st.feedRaw, time: 60 / st.feedRaw };
+    const rate = st.feedMode === 95 && st.rpm > 0 ? feed * st.rpm : feed;
+    return { feed: rate, time: len > 0 ? (len / Math.max(rate, 1e-6)) * 60 : 0 };
+  };
+
   const emitLinear = (line, kind, target, feed) => {
     const from = st.pos.slice();
     const len = dist3(from, target);
-    const rate = kind === 'rapid' ? cfg.rapidRate : Math.max(feed, 1e-6);
+    const pace = timing(kind, len, feed);
     const move = push({
       kind,
       line,
@@ -525,14 +547,14 @@ export function interpret(text, config = {}) {
       rotFrom: { ...st.rotPrev },
       rotTo: { ...st.rot },
       tcp: st.tcp,
-      feed: kind === 'rapid' ? cfg.rapidRate : feed,
+      feed: pace.feed,
       rpm: st.rpm,
       spindleDir: st.spindleDir,
       tool: st.tool,
       wcs: st.wcs,
       coolant: st.coolant,
       length: len,
-      time: len > 0 ? (len / rate) * 60 : 0,
+      time: pace.time,
     });
     st.pos = target.slice();
     return move;
@@ -564,7 +586,7 @@ export function interpret(text, config = {}) {
     for (let i = 3; i < path.length; i += 3) {
       len += Math.hypot(path[i] - path[i - 3], path[i + 1] - path[i - 2], path[i + 2] - path[i - 1]);
     }
-    const rate = Math.max(feed, 1e-6);
+    const pace = timing('arc', len, feed);
     const move = push({
       kind: 'arc',
       line,
@@ -577,14 +599,14 @@ export function interpret(text, config = {}) {
       plane: st.plane,
       ccw,
       path,
-      feed,
+      feed: pace.feed,
       rpm: st.rpm,
       spindleDir: st.spindleDir,
       tool: st.tool,
       wcs: st.wcs,
       coolant: st.coolant,
       length: len,
-      time: len > 0 ? (len / rate) * 60 : 0,
+      time: pace.time,
     });
     st.pos = target.slice();
     return move;
@@ -625,7 +647,13 @@ export function interpret(text, config = {}) {
       // and an arc's I/J are offsets in the plane. Keeping the local point
       // rather than re-deriving it from the machine position is what lets
       // arcs stay circles once the frame is tilted.
-      const prev = st.tiltLocal;
+      //
+      // Unless something moved the tool outside the plane since — a G53, a
+      // G28, a drilling cycle — in which case the plane's idea of where the
+      // tool is has gone stale, and the next G91 step would start from
+      // where it used to be.
+      let prev = st.tiltLocal;
+      if (dist3(planeToWork(prev), st.pos) > 1e-6) prev = workToPlane(st.pos);
       const local = [0, 1, 2].map((i) => {
         const w = [axis.X, axis.Y, axis.Z][i];
         const d = w === undefined ? undefined : toMM(w, metric);
@@ -1180,6 +1208,7 @@ export function interpret(text, config = {}) {
     }
 
     // ---- Non-modal and modal G codes -------------------------------------
+    const motionBefore = st.motion;
     let motionThisBlock = null;
     let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false;
     /** Set by codes whose X/Y/Z words are data, not a destination. */
@@ -1201,6 +1230,9 @@ export function interpret(text, config = {}) {
               ? (cfg.dwellPUnits === 'ms' ? p / 1000 : p)
               : 0;
           emitDwell(b.line, secs);
+          // G04 X2. is two seconds, not a move to X2 — nor, with a drilling
+          // cycle in force, another hole there.
+          axesConsumed = true;
           break;
         }
         case 10: g10 = true; break;
@@ -1282,7 +1314,12 @@ export function interpret(text, config = {}) {
           st.lengthComp = true;
           st.hNumber = h !== undefined ? h : st.hNumber;
           if (h === undefined) warn(b.line, 'G43 without an H word; the control would use the last offset.', 'error');
-          else if (st.tool && h !== st.tool) warn(b.line, `G43 H${h} does not match the active tool T${st.tool}. On the machine this is a length-offset crash.`, 'error');
+          else {
+            // T5 M06 G43 H5 changes the tool in the same block, so it is the
+            // new tool the offset has to match, not the one going back.
+            const holding = m.includes(6) ? (t !== undefined ? t : st.pendingTool) || st.tool : st.tool;
+            if (holding && h !== holding) warn(b.line, `G43 H${h} does not match the active tool T${holding}. On the machine this is a length-offset crash.`, 'error');
+          }
           break;
         case 44: st.lengthComp = true; st.hNumber = h !== undefined ? h : st.hNumber; break;
         case 49:
@@ -1359,7 +1396,14 @@ export function interpret(text, config = {}) {
     // A Fidia writes its feed a hundred times over: F80000 is 800 a minute.
     // It is how the control's own screen reads, so the number in the block
     // is not the number in the machine — see feedScale.
-    if (f !== undefined) st.feed = toMM(f, st.metric) * (dialect.feedScale || 1);
+    if (f !== undefined) {
+      st.feed = toMM(f, st.metric) * (dialect.feedScale || 1);
+      st.feedRaw = f;
+    }
+    if (st.feedMode === 95 && !(st.rpm > 0) && !spokenFor.has('G95')) {
+      spokenFor.add('G95');
+      warn(b.line, 'Feed per revolution (G95) with no spindle speed; F is read as mm/min for the times.');
+    }
     if (s !== undefined) st.rpm = s;
     if (t !== undefined) st.pendingTool = t;
 
@@ -1509,8 +1553,16 @@ export function interpret(text, config = {}) {
     const motion = motionThisBlock !== null ? motionThisBlock : st.motion;
 
     if (MOTION_CYCLES.has(motion)) {
-      if (r !== undefined) st.cycleR = st.absolute ? st.offset()[2] + toMM(r, st.metric) : st.pos[2] + toMM(r, st.metric);
-      if (axis.Z !== undefined) st.cycleZ = resolveAxis(2, axis.Z, st.metric, false);
+      // The initial level is where the tool stood when the cycle started,
+      // and it stays put for every hole after: a G99 hole leaves the tool
+      // at R, and the G98 hole after it still goes all the way back up.
+      if (!MOTION_CYCLES.has(motionBefore)) st.cycleInit = st.pos[2];
+      // In G91 R is measured from the initial level and Z from R, not
+      // both from wherever the tool is — which drilled 8 mm short.
+      if (r !== undefined) st.cycleR = st.absolute ? st.offset()[2] + toMM(r, st.metric) : st.cycleInit + toMM(r, st.metric);
+      if (axis.Z !== undefined) {
+        st.cycleZ = st.absolute ? resolveAxis(2, axis.Z, st.metric, false) : st.cycleR + toMM(axis.Z, st.metric);
+      }
       if (q !== undefined) st.cycleQ = toMM(q, st.metric);
       if (p !== undefined) st.cycleP = p;
       st.cycleF = st.feed;
@@ -1679,9 +1731,10 @@ export function interpret(text, config = {}) {
     const feed = st.cycleF > 0 ? st.cycleF : 100;
     const startZ = Math.max(st.pos[2], rPlane);
 
-    // Position over the hole at the current (safe) height, then to the R plane.
+    // Position over the hole at the current (safe) height, then to the R
+    // plane — the second of which is no move at all after a G99 hole.
     emitLinear(line, 'rapid', [hx, hy, startZ], cfg.rapidRate);
-    emitLinear(line, 'rapid', [hx, hy, rPlane], cfg.rapidRate);
+    if (Math.abs(startZ - rPlane) > 1e-9) emitLinear(line, 'rapid', [hx, hy, rPlane], cfg.rapidRate);
 
     const peck = st.cycleQ;
     if ((code === 83 || code === 73) && peck > 0.001) {
@@ -1703,10 +1756,12 @@ export function interpret(text, config = {}) {
       emitLinear(line, 'feed', [hx, hy, zBottom], feed);
     }
 
-    if (code === 82 && st.cycleP > 0) emitDwell(line, st.cycleP / (st.cycleP > 1000 ? 1000 : 1));
+    // P is in the same units as G04's: P500 is half a second on a Fanuc,
+    // and guessing from the size of the number made it eight minutes.
+    if ((code === 82 || code === 89) && st.cycleP > 0) emitDwell(line, cfg.dwellPUnits === 'ms' ? st.cycleP / 1000 : st.cycleP);
     if (code === 84) emitDwell(line, 0.1);
 
-    const retractTo = st.retractMode === 98 ? Math.max(startZ, rPlane) : rPlane;
+    const retractTo = st.retractMode === 98 ? Math.max(st.cycleInit, rPlane) : rPlane;
     const retractKind = code === 85 || code === 89 ? 'feed' : 'rapid';
     emitLinear(line, retractKind, [hx, hy, retractTo], retractKind === 'feed' ? feed : cfg.rapidRate);
   }
