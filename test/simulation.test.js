@@ -295,18 +295,21 @@ test('an unknown T number falls back and says so', () => {
 });
 
 test('a near miss is a near miss, not a crash and not silence', () => {
-  // A clamp 4 mm to the side of the tool: nothing touches it, but nobody
-  // wants to find that out with a hand on the feed hold.
+  // A clamp whose top edge sits just under the holder's nose corner — Ø36
+  // at 30.5 up the tool, the clamp's inner edge 21 out and its top at 30 —
+  // so about 3 mm away: nothing touches it, but nobody wants to find that
+  // out with a hand on the feed hold.
   const holder = slot(1, 0, 30);
-  const clamp = boxFixture([26, 0, -10], [10, 20, 40]);
+  const clamp = boxFixture([26, 0, -10], [10, 20, 80]);
 
   const bare = checkFixtures(holder.spheres, [0, 0, 0], [clamp], 0, 0);
   assert.equal(bare, null, 'nothing is touching, so nothing is reported');
 
   const asked = checkFixtures(holder.spheres, [0, 0, 0], [clamp], 0, 12);
   assert.ok(asked, 'asked for room, and it says how much there is');
-  assert.ok(asked.gap > 0, 'a gap, not a depth');
-  assert.ok(asked.gap < 12);
+  // Nearest is the holder's taper (Ø36 at 30.5 opening to Ø50 at 62.5),
+  // square to which the clamp's top edge stands (3·32 + 0.5·7)/|7, 32| off.
+  assert.ok(Math.abs(asked.gap - 99.5 / Math.hypot(7, 32)) < 1e-4, `gap ${asked.gap}`);
   assert.equal(asked.depth, 0, 'nothing is buried in anything');
 
   // Push the tool into it and the same call reports a real collision.
@@ -317,7 +320,7 @@ test('a near miss is a near miss, not a crash and not silence', () => {
 
 test('a fixture can carry its own rule', () => {
   const holder = slot(1, 0, 30);
-  const clamp = boxFixture([26, 0, -10], [10, 20, 40]);
+  const clamp = boxFixture([26, 0, -10], [10, 20, 80]);
 
   // Ignored: it is not in the crash model at all, however close anything is.
   assert.equal(checkFixtures(holder.spheres, [24, 0, 0], [{ ...clamp, ignore: true }], 0, 5), null);
@@ -460,4 +463,46 @@ test('the envelope floor is the axis floor, not the tip', () => {
   const tooDeep = run(45, -(deep.gauge + 80));
   assert.equal(tooDeep.limits.length > 0, true, 'the axis went through its own floor unreported');
   assert.match(tooDeep.limits[0].message, /Z travel limit/);
+});
+
+test('a flat end is as low as it goes: no phantom radius below the tip', () => {
+  // A Ø10 end mill 2 mm over a clamp and over the table is clear of both.
+  // Read as spheres, the one at the tip hung 5 mm below it and both said
+  // "3 mm in".
+  const spheres = silhouetteSpheres([{ r: 0, z: 0 }, { r: 5, z: 0 }, { r: 5, z: 40 }]);
+  const clamp = boxFixture([0, 0, -10], [40, 40, 20]);
+  assert.equal(checkFixtures(spheres, [0, 0, 2], [clamp]), null);
+  assert.ok(Math.abs(checkFixtures(spheres, [0, 0, 2], [clamp], 0, 5).gap - 2) < 1e-9);
+  const sunk = checkFixtures(spheres, [0, 0, -1.5], [clamp]);
+  assert.ok(Math.abs(sunk.depth - 1.5) < 1e-9);
+
+  const table = { enabled: true, z: 0, xMin: -500, xMax: 500, yMin: -500, yMax: 500 };
+  assert.equal(checkTable(spheres, [0, 0, 2], table), null);
+  assert.ok(Math.abs(checkTable(spheres, [0, 0, -1], table).depth - 1) < 1e-9);
+  // Laid flat, the side of the cutter is a radius below its axis.
+  const flat = checkTable(spheres, [0, 0, 4], table, 0, [1, 0, 0]);
+  assert.ok(flat && Math.abs(flat.depth - 1) < 1e-6, JSON.stringify(flat));
+  // Leaned 30°, the low rim is r·sin30 below the tip, on the downhill side.
+  const s30 = Math.sin(Math.PI / 6), c30 = Math.cos(Math.PI / 6);
+  const leaned = checkTable(spheres, [0, 0, 2], table, 0, [s30, 0, c30]);
+  assert.ok(leaned && Math.abs(leaned.depth - (5 * s30 - 2)) < 1e-6, JSON.stringify(leaned));
+  assert.ok(leaned.x > 0, 'the top leans to +X, so the end face dips on +X');
+});
+
+test('the side of the tool is found between samples, against a thin plate', () => {
+  // A 0.5 mm plate whose edge the cutter's side just touches, between two
+  // of the samples 3 mm apart up the tool.
+  const spheres = silhouetteSpheres([{ r: 0, z: 0 }, { r: 5, z: 0 }, { r: 5, z: 40 }]);
+  const plate = boxFixture([5 + 20 - 0.1, 0, 4.5], [40, 40, 0.5]);
+  const hit = checkFixtures(spheres, [0, 0, 0], [plate]);
+  assert.ok(hit && Math.abs(hit.depth - 0.1) < 1e-9, JSON.stringify(hit && hit.depth));
+});
+
+test('a tilted box is still asked about, with the sphere chain', () => {
+  const spheres = silhouetteSpheres([{ r: 0, z: 0 }, { r: 5, z: 0 }, { r: 5, z: 40 }]);
+  const c = Math.cos(Math.PI / 4), s = Math.sin(Math.PI / 4);
+  // Turned 45° about X: the tool is no longer square to it.
+  const box = { ...boxFixture([0, 0, 0], [20, 20, 20]), inverse: [1, 0, 0, 0, 0, c, -s, 0, 0, s, c, 0, 0, 0, 0, 1] };
+  assert.ok(checkFixtures(spheres, [0, 0, 5], [box]), 'buried in it, at any angle');
+  assert.equal(checkFixtures(spheres, [0, 0, 40], [box]), null, 'well clear above it');
 });

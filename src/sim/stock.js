@@ -861,7 +861,6 @@ export class Stock {
     return worst;
   }
 
-  /** Height of the material at a world XY point, or the base when outside. */
   /**
    * Snap candidates on the nominal stock block: corners, edge midpoints and
    * face centres. These are what people actually reach for when setting a
@@ -1023,6 +1022,7 @@ export class Stock {
     return null;
   }
 
+  /** Height of the material at a world XY point; -Infinity off the grid. */
   heightAt(x, y) {
     const i = Math.floor((x - this.origin[0]) / this.dx);
     const j = Math.floor((y - this.origin[1]) / this.dy);

@@ -241,6 +241,9 @@ export class Simulator {
         // through the part, so the swing is carved before the move retires.
         const take = Math.min(remaining, Math.max(mv.time - (this._dwelt || 0), 0));
         this._dwelt = (this._dwelt || 0) + take;
+        // How far through the swing, so the machine is drawn part way
+        // round it — a G93 swing takes as long as it says, not no time.
+        this.u = mv.time > 0 ? Math.min(1, this._dwelt / mv.time) : 1;
         this.time += take;
         remaining -= take;
         advanced += take;
@@ -266,7 +269,7 @@ export class Simulator {
 
       // Does this segment interact with anything? Rejecting whole segments
       // is what makes long air moves free.
-      const info = this.segmentInfo(mv, ax, ay, az, bx, by, bz, uPrev);
+      const info = this.segmentInfo(mv, ax, ay, az, bx, by, bz, uPrev, cum[s + 1] / mv._segTotal);
       const step = info.stepSize;
 
       const allowedByTime = remaining * speed;
@@ -519,7 +522,7 @@ export class Simulator {
    * The whole-segment rejection uses the stock tile pyramid plus the
    * bounding boxes of the fixtures.
    */
-  segmentInfo(mv, ax, ay, az, bx, by, bz, u = 1) {
+  segmentInfo(mv, ax, ay, az, bx, by, bz, u = 1, uEnd = 1) {
     const slot = this.activeSlot;
     const stock = this.stock;
 
@@ -534,7 +537,7 @@ export class Simulator {
     let bodyLean = 0;
     if (this.fiveAxis) {
       const pa = this.poseAt(mv, [ax, ay, az], u);
-      const pb = this.poseAt(mv, [bx, by, bz], 1);
+      const pb = this.poseAt(mv, [bx, by, bz], uEnd);
       ax = pa.tip[0]; ay = pa.tip[1]; az = pa.tip[2];
       bx = pb.tip[0]; by = pb.tip[1]; bz = pb.tip[2];
       const sin = Math.max(Math.hypot(pa.dir[0], pa.dir[1]), Math.hypot(pb.dir[0], pb.dir[1]));
@@ -717,65 +720,65 @@ export class Simulator {
       }
     }
 
-    for (const [tip, dir] of poses) {
     // How close is too close. Zero means only report metal in metal, which
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
 
-    if (this.fixtures && this.fixtures.length) {
-      const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
-      if (f && f.gap < 0) {
-        this.report('fixture', {
-          line: mv.line,
-          message: (d) => `Assembly intersects "${f.fixture.name}" by ${d.toFixed(2)} mm.`,
-          position: f.point,
-          depth: f.depth,
-        });
-      } else if (f) {
-        this.report('near', {
-          line: mv.line,
-          message: `Passes within ${f.gap.toFixed(2)} mm of "${f.fixture.name}" — asked for ${f.clearance.toFixed(2)} mm.`,
-          position: f.point,
-          depth: f.clearance - f.gap,
-          gap: f.gap,
-        });
+    for (const [tip, dir] of poses) {
+      if (this.fixtures && this.fixtures.length) {
+        const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
+        if (f && f.gap < 0) {
+          this.report('fixture', {
+            line: mv.line,
+            message: (d) => `Assembly intersects "${f.fixture.name}" by ${d.toFixed(2)} mm.`,
+            position: f.point,
+            depth: f.depth,
+          });
+        } else if (f) {
+          this.report('near', {
+            line: mv.line,
+            message: `Passes within ${f.gap.toFixed(2)} mm of "${f.fixture.name}" — asked for ${f.clearance.toFixed(2)} mm.`,
+            position: f.point,
+            depth: f.clearance - f.gap,
+            gap: f.gap,
+          });
+        }
       }
-    }
 
-    if (this.machine) {
-      const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance, dir);
-      if (tbl && tbl.gap < 0) {
-        this.report('table', {
-          line: mv.line,
-          message: (d) => `Assembly reaches ${d.toFixed(2)} mm below the table surface.`,
-          position: [tbl.x, tbl.y, tbl.z],
-          depth: tbl.depth,
-        });
-      } else if (tbl) {
-        this.report('near', {
-          line: mv.line,
-          message: `Passes within ${tbl.gap.toFixed(2)} mm of the table surface — asked for ${tbl.clearance.toFixed(2)} mm.`,
-          position: [tbl.x, tbl.y, tbl.z],
-          depth: tbl.clearance - tbl.gap,
-          gap: tbl.gap,
-        });
+      if (this.machine) {
+        const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance, dir);
+        if (tbl && tbl.gap < 0) {
+          this.report('table', {
+            line: mv.line,
+            message: (d) => `Assembly reaches ${d.toFixed(2)} mm below the table surface.`,
+            position: [tbl.x, tbl.y, tbl.z],
+            depth: tbl.depth,
+          });
+        } else if (tbl) {
+          this.report('near', {
+            line: mv.line,
+            message: `Passes within ${tbl.gap.toFixed(2)} mm of the table surface — asked for ${tbl.clearance.toFixed(2)} mm.`,
+            position: [tbl.x, tbl.y, tbl.z],
+            depth: tbl.clearance - tbl.gap,
+            gap: tbl.gap,
+          });
+        }
+        // The envelope belongs to the machine and is measured from its home
+        // switches, so what is reported is the machine coordinate — which is
+        // the number on the control when the axis stops. The point compared
+        // is the gauge line, a gauge length up the tool from the tip, which
+        // is the same point G53 reads: an envelope is how far the axis goes,
+        // and it does not move when a longer tool goes in the spindle.
+        const lim = checkLimits(this.gaugePoint(tip, dir), limitsInScene(this.machine), homeOf(this.machine));
+        if (lim) {
+          this.report('limit', {
+            line: mv.line,
+            message: `${lim.axis} travel limit exceeded: machine ${lim.axis}${lim.value.toFixed(2)} vs ${lim.limit.toFixed(2)} mm.`,
+            position: tip.slice(),
+            depth: Math.abs(lim.value - lim.limit),
+          });
+        }
       }
-      // The envelope belongs to the machine and is measured from its home
-      // switches, so what is reported is the machine coordinate — which is
-      // the number on the control when the axis stops. The point compared
-      // is the gauge line, a gauge length up the tool from the tip, which
-      // is the same point G53 reads: an envelope is how far the axis goes,
-      // and it does not move when a longer tool goes in the spindle.
-      const lim = checkLimits(this.gaugePoint(tip, dir), limitsInScene(this.machine), homeOf(this.machine));
-      if (lim) {
-        this.report('limit', {
-          line: mv.line,
-          message: `${lim.axis} travel limit exceeded: machine ${lim.axis}${lim.value.toFixed(2)} vs ${lim.limit.toFixed(2)} mm.`,
-          position: tip.slice(),
-          depth: Math.abs(lim.value - lim.limit),
-        });
-      }
-    }
     }
 
     // The rotaries have travels of their own, and a program that asks for

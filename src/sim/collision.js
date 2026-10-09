@@ -1,11 +1,14 @@
 // Collision primitives.
 //
-// The tool assembly is approximated by a chain of spheres taken from its
-// silhouette. Spheres are cheap to test against oriented boxes (fixtures,
-// clamps, the table) and against travel limits, and the approximation is
-// conservative: a sphere chain always encloses the solid of revolution it
-// was sampled from, so the simulator errs towards reporting a crash rather
-// than missing one.
+// The tool assembly is carried as a chain of samples taken from its
+// silhouette: a height up the tool and the radius there. Read as spheres
+// they are cheap to test against a box at any angle — but a sphere at a
+// flat end reaches a whole radius past it, so a Ø10 end mill 2 mm over a
+// clamp read as 3 mm into it, and a face mill as 23. So the common cases
+// are answered exactly from the same samples read as discs: the table at
+// any lean, and a box whenever the tool stands square to it, which is
+// every upright tool over a clamp that has not been tilted. Spheres are
+// left for the tool leaning at a box, where they err towards a crash.
 
 /** World up, and the tool axis of any machine whose rotaries are at zero. */
 const UP = [0, 0, 1];
@@ -54,6 +57,74 @@ function pointBoxDistance(px, py, pz, hx, hy, hz) {
   return outside + inside;
 }
 
+/**
+ * Signed distance from a box centred on the origin to a disc square to its
+ * Z axis — the box grown by the disc's radius in X and Y. Negative inside.
+ */
+function discBoxDistance(cx, cy, cz, rho, hx, hy, hz) {
+  const dx = Math.abs(cx) - hx;
+  const dy = Math.abs(cy) - hy;
+  const flat = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);
+  const qx = flat - rho;
+  const qz = Math.abs(cz) - hz;
+  return Math.hypot(Math.max(qx, 0), Math.max(qz, 0)) + Math.min(Math.max(qx, qz), 0);
+}
+
+/**
+ * The closest a slice of the tool — a frustum running along the box's Z
+ * from a disc of radius ra at height za to one of rb at zb — comes to the
+ * box, as [signed distance, fraction of the way from a to b].
+ *
+ * The distance along the slice is made of straight pieces and of the
+ * length of a straight line in two variables, so its least value is at an
+ * end, at a corner between pieces, or where that length bottoms out — and
+ * those are all the places looked at.
+ */
+function frustumBoxDistance(cx, cy, za, zb, ra, rb, hx, hy, hz) {
+  const dz = zb - za;
+  const dr = rb - ra;
+  const dx = Math.abs(cx) - hx;
+  const dy = Math.abs(cy) - hy;
+  const flat = Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0);
+  const ts = [0, 1];
+  if (Math.abs(dz) > 1e-12) {
+    ts.push((hz - za) / dz, (-hz - za) / dz, -za / dz);
+    // The other piece: straight lines in both directions at once.
+    for (const sgn of [1, -1]) {
+      const ax = flat - ra, bx = -dr;
+      const az = sgn * za - hz, bz = sgn * dz;
+      const bb = bx * bx + bz * bz;
+      if (bb > 1e-18) ts.push(-(ax * bx + az * bz) / bb);
+    }
+  }
+  if (Math.abs(dr) > 1e-12) ts.push((flat - ra) / dr);
+  let best = Infinity;
+  let at = 0;
+  for (const raw of ts) {
+    const t = Math.min(1, Math.max(0, raw));
+    const d = discBoxDistance(cx, cy, za + dz * t, ra + dr * t, hx, hy, hz);
+    if (d < best) { best = d; at = t; }
+  }
+  return [best, at];
+}
+
+/**
+ * How a box's own frame sees a tool standing along `dir`: the scale from
+ * world millimetres to the box's, when it is the same every way, and
+ * whether the tool runs straight along the box's Z. Null when either is
+ * not so, and the box is asked with spheres instead.
+ */
+function squareTo(inv, dir) {
+  const k0 = Math.hypot(inv[0], inv[4], inv[8]);
+  const k1 = Math.hypot(inv[1], inv[5], inv[9]);
+  const k2 = Math.hypot(inv[2], inv[6], inv[10]);
+  if (!(k0 > 0) || Math.abs(k1 - k0) > 1e-6 * k0 || Math.abs(k2 - k0) > 1e-6 * k0) return null;
+  const lx = inv[0] * dir[0] + inv[4] * dir[1] + inv[8] * dir[2];
+  const ly = inv[1] * dir[0] + inv[5] * dir[1] + inv[9] * dir[2];
+  if (Math.hypot(lx, ly) > 1e-7 * k0) return null;
+  return k0;
+}
+
 /** Apply a row-major-free three.js style column-major 4x4 matrix to a point. */
 function applyMatrix(m, x, y, z, out) {
   const w = m[3] * x + m[7] * y + m[11] * z + m[15] || 1;
@@ -97,6 +168,41 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance =
     // A fixture may ask for more room than the global setting — a fragile
     // probe or a delicate casting — but never less than nothing.
     const want = Math.max(Number.isFinite(f.clearance) ? f.clearance : clearance, 0);
+    const k = squareTo(f.inverse, dir);
+    if (k) {
+      // Square to the box: each pair of samples is a slice of the tool,
+      // and the slice is measured exactly. A pair that steps back down the
+      // tool is where one part's outline hands over to the next, so each
+      // of its ends stands alone instead.
+      const local = [];
+      for (let i = 0; i < spheres.length; i += 2) {
+        const lz = spheres[i];
+        const q = applyMatrix(f.inverse, tip[0] + dir[0] * lz, tip[1] + dir[1] * lz, tip[2] + dir[2] * lz, [0, 0, 0]);
+        local.push(q[0] - f.centre[0], q[1] - f.centre[1], q[2] - f.centre[2]);
+      }
+      for (let i = 0; i < spheres.length; i += 2) {
+        const j = i + 2 < spheres.length && spheres[i + 2] >= spheres[i] ? i + 2 : i;
+        if (spheres[i] < skipBelow) continue;
+        const a = (i / 2) * 3, b = (j / 2) * 3;
+        const [dl, t] = frustumBoxDistance(
+          local[a], local[a + 1], local[a + 2], local[b + 2],
+          spheres[i + 1] * k, spheres[j + 1] * k, f.half[0], f.half[1], f.half[2],
+        );
+        const gap = dl / k;
+        if (gap < want && (!worst || gap < worst.gap)) {
+          const lz = spheres[i] + (spheres[j] - spheres[i]) * t;
+          worst = {
+            fixture: f,
+            gap,
+            clearance: want,
+            depth: Math.max(-gap, 0),
+            point: [tip[0] + dir[0] * lz, tip[1] + dir[1] * lz, tip[2] + dir[2] * lz],
+            localZ: lz,
+          };
+        }
+      }
+      continue;
+    }
     for (let i = 0; i < spheres.length; i += 2) {
       const lz = spheres[i];
       if (lz < skipBelow) continue;
@@ -153,9 +259,26 @@ export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
       worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ, x, y };
     }
   };
+  // Each sample is a disc square to the tool, and the lowest point of a
+  // disc is its rim on the downhill side — exactly level with its centre
+  // when the tool stands upright. A sphere there would hang a whole radius
+  // lower, which is a flat end mill sitting a radius into a table it is
+  // clear of. Between two discs the outline is straight, so its lowest
+  // point is at one of them, and the discs are the whole answer.
+  const horiz = Math.hypot(dir[0], dir[1]);
+  const sin = Math.min(1, horiz);
+  // Downhill in the disc's plane: straight down, less its part along the tool.
+  const wx = horiz > 1e-9 ? dir[0] * dir[2] / horiz : 0;
+  const wy = horiz > 1e-9 ? dir[1] * dir[2] / horiz : 0;
   for (let i = 0; i < spheres.length; i += 2) {
     const lz = spheres[i];
-    consider(tip[0] + dir[0] * lz, tip[1] + dir[1] * lz, tip[2] + dir[2] * lz - spheres[i + 1], lz);
+    const r = spheres[i + 1];
+    consider(
+      tip[0] + dir[0] * lz + wx * r,
+      tip[1] + dir[1] * lz + wy * r,
+      tip[2] + dir[2] * lz - r * sin,
+      lz,
+    );
   }
   consider(tip[0], tip[1], tip[2], 0);      // the tip itself, which has no radius
   return worst;
