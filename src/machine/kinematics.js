@@ -507,9 +507,15 @@ export class Kinematics {
    * Two rotaries give two degrees of freedom, which is exactly what a
    * direction needs, but the relationship is trigonometric rather than
    * affine and every machine winds it differently. Rather than special-case
-   * each configuration, this searches: a coarse sweep to find the basin,
-   * then Gauss-Newton to land on it. It runs once per G53.1 block, so the
-   * cost is irrelevant and the generality is worth having.
+   * each configuration, this searches.
+   *
+   * Nearly every direction can be reached two ways — A+30 C0 or A−30 C180 —
+   * and a control takes the one nearest where the axes already stand, so
+   * that is what is asked first: start from here and walk downhill. Only
+   * when that fails is the whole travel swept for every basin, and the
+   * nearest of what it finds kept. Taking the best of a coarse grid instead
+   * flipped the table half a turn between neighbouring points of a vector
+   * toolpath, and paid for a 5,000-pose sweep on every block to do it.
    *
    * @returns {null | Record<string, number>} values for the rotary letters
    */
@@ -517,84 +523,104 @@ export class Kinematics {
     const rot = this.rotaries();
     if (rot.length < 1) return null;
     const target = m4.normalize(direction);
-    const letters = rot.slice(0, 2).map((n) => n.letter);
+    const span = rot.slice(0, 2).map((n) => ({
+      L: n.letter,
+      lo: Math.max(n.limits.min, -360),
+      hi: Math.min(n.limits.max, 360),
+    }));
+    const now = (L) => Number((values || {})[L]) || 0;
 
     const error = (guess) => {
       const axis = this.toolInWork({ ...values, ...guess }, gaugeLength).axis;
       return 1 - m4.dot(axis, target);       // 0 when aligned
     };
 
-    // Coarse sweep. 10-degree steps over both letters is 1296 evaluations of
-    // a handful of matrix multiplies — cheap, and it removes any dependence
-    // on a good starting guess.
-    let best = null;
-    const span = letters.map((L) => {
-      const node = rot.find((n) => n.letter === L);
-      const lo = Math.max(node.limits.min, -360);
-      const hi = Math.min(node.limits.max, 360);
-      return { L, lo, hi };
-    });
-
-    const step = 10;
-    const sweep = (idx, guess) => {
-      if (idx >= span.length) {
-        const e = error(guess);
-        if (!best || e < best.e) best = { e, guess: { ...guess } };
-        return;
+    // Pattern search on a shrinking step. Moving the axes together as well
+    // as singly matters: the error surface has diagonal valleys where
+    // one-axis-at-a-time descent stalls well short.
+    const offsets = span.length === 2
+      ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
+      : [[1], [-1]];
+    const refine = (seed, start) => {
+      let guess = { ...seed };
+      let e = error(guess);
+      for (let h = start; h > 1e-7 && e > 1e-16; h *= 0.5) {
+        let improved = true;
+        let guard = 0;
+        while (improved && guard++ < 200) {
+          improved = false;
+          for (const off of offsets) {
+            const trial = { ...guess };
+            let inTravel = true;
+            for (let i = 0; i < span.length; i++) {
+              const v = guess[span[i].L] + off[i] * h;
+              // The search has to stay inside the travel. Without this it
+              // happily walks past a limit to a pose the machine cannot
+              // make, and reports success.
+              if (v < span[i].lo || v > span[i].hi) { inTravel = false; break; }
+              trial[span[i].L] = v;
+            }
+            if (!inTravel) continue;
+            const te = error(trial);
+            if (te < e - 1e-18) {
+              guess = trial;
+              e = te;
+              improved = true;
+            }
+          }
+        }
       }
+      return { guess, e };
+    };
+
+    // The same angle a turn either way, whichever is nearest where the axis
+    // stands and still in travel: C−190 rather than C170 when coming from
+    // C−180 on a table that turns that far.
+    const settle = (guess) => {
+      const out = { ...guess };
+      for (const { L, lo, hi } of span) {
+        let v = out[L];
+        const c = now(L);
+        while (v - 360 >= lo && Math.abs(v - 360 - c) < Math.abs(v - c)) v -= 360;
+        while (v + 360 <= hi && Math.abs(v + 360 - c) < Math.abs(v - c)) v += 360;
+        out[L] = v;
+      }
+      return out;
+    };
+    const distance = (guess) => span.reduce((sum, { L }) => sum + Math.abs(guess[L] - now(L)), 0);
+    const ok = (r) => r.e < 1e-10 && !this.violations({ ...values, ...r.guess }).length;
+
+    const here = {};
+    for (const { L, lo, hi } of span) here[L] = Math.min(hi, Math.max(lo, now(L)));
+    const local = refine(here, 5);
+    if (ok(local)) return settle(local.guess);
+
+    // Nowhere downhill from here: sweep the travel on a 10° grid, keep the
+    // best few poses that are not just neighbours of each other, finish
+    // each, and take the nearest that arrives.
+    const step = 10;
+    const grid = [];
+    const sweep = (idx, guess) => {
+      if (idx >= span.length) { grid.push({ guess: { ...guess }, e: error(guess) }); return; }
       const { L, lo, hi } = span[idx];
       for (let v = lo; v <= hi; v += step) sweep(idx + 1, { ...guess, [L]: v });
     };
     sweep(0, {});
-    if (!best) return null;
-
-    // Refine with a pattern search on a shrinking step. Moving the axes
-    // together as well as singly matters: the error surface has diagonal
-    // valleys where one-axis-at-a-time descent stalls well short.
-    let guess = { ...best.guess };
-    let e = best.e;
-    const offsets = span.length === 2
-      ? [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]
-      : [[1], [-1]];
-
-    for (let h = step / 2; h > 1e-7; h *= 0.5) {
-      let improved = true;
-      let guard = 0;
-      while (improved && guard++ < 200) {
-        improved = false;
-        for (const off of offsets) {
-          const trial = { ...guess };
-          let inTravel = true;
-          for (let i = 0; i < span.length; i++) {
-            const v = guess[span[i].L] + off[i] * h;
-            // The search has to stay inside the travel. Without this it
-            // happily walks past a limit to a pose the machine cannot make,
-            // and reports success.
-            if (v < span[i].lo || v > span[i].hi) { inTravel = false; break; }
-            trial[span[i].L] = v;
-          }
-          if (!inTravel) continue;
-          const te = error(trial);
-          if (te < e - 1e-18) {
-            guess = trial;
-            e = te;
-            improved = true;
-          }
-        }
-      }
+    grid.sort((a, b) => a.e - b.e);
+    const seeds = [];
+    for (const g of grid) {
+      if (seeds.length >= 8) break;
+      if (seeds.some((s) => span.every(({ L }) => Math.abs(s.guess[L] - g.guess[L]) <= 2 * step))) continue;
+      seeds.push(g);
     }
-
-    if (e >= 1e-10) return null;
-
-    // Prefer the equivalent angle closest to zero that is still in travel.
-    for (const { L, lo, hi } of span) {
-      let v = guess[L];
-      while (v - 360 >= lo && Math.abs(v - 360) < Math.abs(v)) v -= 360;
-      while (v + 360 <= hi && Math.abs(v + 360) < Math.abs(v)) v += 360;
-      guess[L] = v;
+    let best = null;
+    for (const seed of seeds) {
+      const r = refine(seed.guess, step / 2);
+      if (!ok(r)) continue;
+      const g = settle(r.guess);
+      if (!best || distance(g) < distance(best)) best = g;
     }
-    if (this.violations(guess).length) return null;
-    return guess;
+    return best;
   }
 
   /** Anything outside its travel, for the limit check. */

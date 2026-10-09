@@ -554,3 +554,40 @@ test('the sphere chain agrees with the envelope when the tool stands up', () => 
     if (env) near(chain.depth, env.depth, 1.5, `x${x}: depth`);
   }
 });
+
+test('a tool vector is reached from where the rotaries stand, not from wherever the grid liked', () => {
+  // Round a 20° cone in 10° steps, the way a 5-axis post writes it: every
+  // machine has two ways to each point, and the control takes the nearer.
+  // Taking the best of a coarse grid flipped the head or the table half a
+  // turn between neighbours.
+  const sin20 = Math.sin(20 * Math.PI / 180), cos20 = Math.cos(20 * Math.PI / 180);
+  for (const id of ['headHead', 'headTable', 'tableTable']) {
+    const k = buildPreset(id);
+    let cur = Object.fromEntries(k.rotaries().map((n) => [n.letter, 0]));
+    for (let i = 0; i <= 27; i++) {               // as far as tableTable's C travel allows
+      const a = (i * 10 * Math.PI) / 180;
+      const sol = k.rotariesForToolAxis([sin20 * Math.cos(a), sin20 * Math.sin(a), cos20], cur, 0);
+      assert.ok(sol, `${id}: no solution at step ${i}`);
+      const axis = k.toolInWork({ ...cur, ...sol }, 0).axis;
+      assert.ok(Math.abs(axis[0] - sin20 * Math.cos(a)) < 1e-4 && Math.abs(axis[2] - cos20) < 1e-4, `${id}: wrong direction`);
+      if (i > 0) {
+        for (const L of Object.keys(sol)) {
+          assert.ok(Math.abs(sol[L] - cur[L]) <= 10 + 1e-6, `${id} step ${i}: ${L} jumped ${cur[L].toFixed(1)} → ${sol[L].toFixed(1)}`);
+        }
+      }
+      cur = { ...cur, ...sol };
+    }
+  }
+});
+
+test('the nearer of the two solutions wins, and an angle wraps towards where the axis is', () => {
+  const k = buildPreset('headTable');
+  const dir = [Math.sin(Math.PI / 6), 0, Math.cos(Math.PI / 6)];
+  const fromPlus = k.rotariesForToolAxis(dir, { B: 25, C: 0 }, 0);
+  assert.ok(Math.abs(fromPlus.B - 30) < 1e-3 && Math.abs(fromPlus.C) < 1e-3, JSON.stringify(fromPlus));
+  const fromFlip = k.rotariesForToolAxis(dir, { B: -25, C: 175 }, 0);
+  assert.ok(Math.abs(fromFlip.B + 30) < 1e-3 && Math.abs(fromFlip.C - 180) < 1e-3, JSON.stringify(fromFlip));
+  // Already pointing that way: nothing moves, however the angles are wound.
+  const still = k.rotariesForToolAxis([0, 0, 1], { B: 0, C: 123.4 }, 0);
+  assert.ok(Math.abs(still.B) < 1e-6 && Math.abs(still.C - 123.4) < 1e-6, JSON.stringify(still));
+});
