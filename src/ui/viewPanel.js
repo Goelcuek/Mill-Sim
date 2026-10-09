@@ -5,10 +5,9 @@
 // places, which is the one thing this layout is built to avoid — so Setup
 // talks about the stock and View decides what colour it is.
 
-import { el, select, checkbox, button, row, section, clear } from './dom.js';
+import { el, select, checkbox, button, row, section } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
-import { fmt } from '../core/util.js';
 import * as units from '../core/units.js';
 
 export class ViewPanel extends Panel {

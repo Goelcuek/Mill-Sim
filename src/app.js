@@ -9,7 +9,7 @@ import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE, MACHINE_SETTINGS } from './scene/machineView.js';
 import { homeOf, limitsInScene, normaliseLimits } from './machine/config.js';
-import { defaultMacros, DEFAULT_PARAMETERS, makeMacro, normaliseCode } from './machine/macros.js';
+import { defaultMacros, DEFAULT_PARAMETERS, makeMacro } from './machine/macros.js';
 import { MachineParts } from './machine/parts.js';
 import { PRESETS, buildPreset } from './machine/presets.js';
 import { Kinematics } from './machine/kinematics.js';
@@ -21,7 +21,7 @@ import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
 import { Stock } from './sim/stock.js';
-import { columnFor, describeShape, stockGrid } from './sim/stockShape.js';
+import { columnFor, stockGrid } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres, checkLimits } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';

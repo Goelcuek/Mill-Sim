@@ -9,7 +9,6 @@ import { el, field, select, checkbox, button, row, section } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { openFixtureDialog, openStockDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
-import { fmt } from '../core/util.js';
 import { describeShape } from '../sim/stockShape.js';
 import { homeOf } from '../machine/config.js';
 import { RESOLUTIONS } from '../app.js';

@@ -10,8 +10,8 @@
 // away loses the caret, the scroll position and the undo stack — so
 // switching pages detaches them rather than rebuilding them.
 
-import { el, button, row, section, clear, select, field, checkbox, download, pickFile } from './dom.js';
-import { Panel, addBar, actionRow } from './panel.js';
+import { el, button, row, section, clear, select, field, download, pickFile } from './dom.js';
+import { Panel, actionRow } from './panel.js';
 import { programNumber } from '../gcode/lexer.js';
 import { uid } from '../core/util.js';
 import { GcodeEditor } from './editor.js';

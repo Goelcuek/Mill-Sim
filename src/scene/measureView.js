@@ -12,7 +12,6 @@
 
 import * as THREE from 'three';
 import { el } from '../ui/dom.js';
-import { fmt } from '../core/util.js';
 import * as units from '../core/units.js';
 
 const LINE_COLOR = 0x0a84ff;

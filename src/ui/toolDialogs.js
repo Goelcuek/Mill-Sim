@@ -15,7 +15,7 @@ import { PreviewViewer } from './preview.js';
 import { TOOL_TYPES, TOOL_FIELDS, DEFAULT_TOOL } from '../tools/toolDefs.js';
 import { TAPERS, HOLDER_TYPES, DEFAULT_HOLDER, defaultHolder, DEFAULT_HOLDER_DIAMETER, DEFAULT_HOLDER_LENGTH } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
-import { fmt, clone } from '../core/util.js';
+import { clone } from '../core/util.js';
 import * as units from '../core/units.js';
 
 /** A preview pane that rebuilds whenever the draft changes. */

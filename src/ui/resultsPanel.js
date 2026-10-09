@@ -8,7 +8,7 @@
 import { el, section, field, download } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { COLLISION_TYPES } from '../sim/simulator.js';
-import { fmt, fmtDuration } from '../core/util.js';
+import { fmtDuration } from '../core/util.js';
 import * as units from '../core/units.js';
 
 export class ResultsPanel extends Panel {

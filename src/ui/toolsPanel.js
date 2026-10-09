@@ -14,7 +14,6 @@ import { TAPERS, HOLDER_TYPES } from '../tools/holderDefs.js';
 import { describeAssembly } from '../tools/assembly.js';
 import { openToolDialog, openHolderDialog, openAssemblyDialog, openLibraryImportDialog } from './toolDialogs.js';
 import { confirmDialog } from './dialog.js';
-import { fmt } from '../core/util.js';
 import * as units from '../core/units.js';
 
 export class ToolsPanel extends Panel {

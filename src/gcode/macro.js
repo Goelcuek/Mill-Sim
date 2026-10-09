@@ -20,7 +20,7 @@
 // Heidenhain's conversational language, which is not G-code at all. They
 // are listed here rather than left to be discovered.
 
-import { DIALECTS, resolveDialect } from './dialects.js';
+import { DIALECTS } from './dialects.js';
 
 /** Functions a macro body may call, all taking one bracketed argument. */
 const FUNCTIONS = {
