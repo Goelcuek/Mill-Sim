@@ -13,15 +13,15 @@ import { MM_PER_INCH } from '../core/util.js';
 export const TOOL_TYPES = {
   flat: {
     label: 'Flat end mill',
-    fields: ['diameter', 'fluteLength', 'fluteCount', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
+    fields: ['diameter', 'fluteLength', 'fluteCount', 'helixAngle', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
   },
   ball: {
     label: 'Ball nose',
-    fields: ['diameter', 'fluteLength', 'fluteCount', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
+    fields: ['diameter', 'fluteLength', 'fluteCount', 'helixAngle', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
   },
   bull: {
     label: 'Bull nose / corner radius',
-    fields: ['diameter', 'cornerRadius', 'fluteLength', 'fluteCount', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
+    fields: ['diameter', 'cornerRadius', 'fluteLength', 'fluteCount', 'helixAngle', 'shankDiameter', 'overallLength', 'neckDiameter', 'neckLength'],
   },
   chamfer: {
     label: 'Chamfer / V-bit',
@@ -29,7 +29,7 @@ export const TOOL_TYPES = {
   },
   taper: {
     label: 'Tapered end mill',
-    fields: ['tipDiameter', 'taperAngle', 'cornerRadius', 'fluteLength', 'fluteCount', 'shankDiameter', 'overallLength'],
+    fields: ['tipDiameter', 'taperAngle', 'cornerRadius', 'fluteLength', 'fluteCount', 'helixAngle', 'shankDiameter', 'overallLength'],
   },
   drill: {
     label: 'Twist drill',
@@ -54,6 +54,7 @@ export const TOOL_FIELDS = {
   taperAngle: { label: 'Taper per side', unit: '°', min: 0, max: 60, step: 0.5 },
   fluteLength: { label: 'Flute length (LOC)', unit: 'mm', min: 0.1, step: 1 },
   fluteCount: { label: 'Flutes', unit: '', min: 1, max: 20, step: 1, integer: true },
+  helixAngle: { label: 'Helix angle', unit: '°', min: 0, max: 60, step: 1 },
   shankDiameter: { label: 'Shank diameter', unit: 'mm', min: 0.5, step: 0.5 },
   neckDiameter: { label: 'Neck diameter', unit: 'mm', min: 0, step: 0.1 },
   neckLength: { label: 'Neck length', unit: 'mm', min: 0, step: 1 },
@@ -72,6 +73,8 @@ export const DEFAULT_TOOL = {
   taperAngle: 5,
   fluteLength: 25,
   fluteCount: 4,
+  /** Helix of the flutes, deg: it spreads the cut and sets the axial pull. */
+  helixAngle: 35,
   shankDiameter: 10,
   neckDiameter: 0,
   neckLength: 0,

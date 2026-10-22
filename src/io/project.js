@@ -125,6 +125,7 @@ export async function writeProject(app) {
     machineZero: [...homeOf(state.machine)],
     gougeTolerance: state.gougeTolerance,
     checks: JSON.parse(JSON.stringify(state.checks)),
+    cutting: state.cutting ? { ...state.cutting } : undefined,
     activeAssemblyId: state.activeAssemblyId,
     display: { ...state.display },
     models,
@@ -237,6 +238,10 @@ export async function readProject(app, entries) {
     app.state.checks.parts = { ...app.state.checks.parts, ...(def.checks.parts || {}) };
   }
   if (def.display) Object.assign(app.state.display, def.display);
+  if (def.cutting && app.state.cutting) {
+    Object.assign(app.state.cutting, def.cutting);
+    if (app.analyzer) app.analyzer.setMaterial(app.state.cutting.material);
+  }
   app.state.activeAssemblyId = def.activeAssemblyId || null;
   app.applyDisplay();
   app.refreshOrigins();

@@ -116,6 +116,10 @@ export class Simulator {
     if (opts.target !== undefined) this.target = opts.target;
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
     if (opts.checks !== undefined) this.checks = opts.checks;
+    if (opts.analyzer !== undefined) this.analyzer = opts.analyzer;
+    // A different program, tool table or stock is a different answer.
+    if (this.analyzer && (opts.program !== undefined || opts.slots !== undefined
+      || opts.fallbackSlot !== undefined || opts.stock !== undefined)) this.analyzer.invalidate();
     this.reset();
   }
 
@@ -152,6 +156,8 @@ export class Simulator {
     this.u = 0;
     this.moveStats = this.program ? new Float32Array(this.program.moves.length) : new Float32Array(0);
     if (this.stock) this.stock.reset();
+    // Cutting loads come out of the run, so they start again with it.
+    if (this.analyzer) this.analyzer.reset(this.program ? this.program.moves.length : 0);
     this.notified = new Set();
   }
 
@@ -328,6 +334,7 @@ export class Simulator {
     if (this.moveIndex >= this.program.moves.length) {
       this.finished = true;
       this.moveIndex = this.program.moves.length - 1;
+      if (this.analyzer) this.analyzer.finish();
     }
   }
 
@@ -649,6 +656,8 @@ export class Simulator {
       const opts = { target: this.target, tolerance: this.gougeTolerance };
       let gouged = null;
       if (!tilted) {
+        // Before the carve: the stock still holds what this chunk will cut.
+        if (this.analyzer) this.analyzer.sample(stock, slot, mv, poseA.tip, poseB.tip);
         const result = stock.carveSweep(slot.built.cutEnvelope, poseA.tip, poseB.tip, slot.index, opts);
         removed = result.volume;
         gouged = result.gouge;

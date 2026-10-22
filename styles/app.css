@@ -783,6 +783,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   margin-top: 1px;
 }
 .stat-value.dim { color: var(--text-2); font-size: 11.5px; }
+/* A figure that is also a way to get to where it happened. */
+.stat.clickable { cursor: pointer; transition: background .12s ease; }
+.stat.clickable:hover { background: var(--surface-sunken); }
+.stat.bad .stat-value { color: var(--danger); }
 
 .extents { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 .extents th { color: var(--text-3); font-weight: 500; text-align: right; padding: 3px 7px; }

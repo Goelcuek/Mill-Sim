@@ -1,11 +1,13 @@
 // Results panel: what the run found, and how to get the part out.
 //
-// Three pages. Playback is not one of them: the transport bar under the
+// Four pages. Playback is not one of them: the transport bar under the
 // viewport is always visible and already owns play, step, run-to-end and
 // the scrubber, so putting the same buttons here would be the duplication
 // this layout exists to avoid.
 
-import { el, section, field, download } from './dom.js';
+import { el, section, field, select, download } from './dom.js';
+import { MATERIALS, materialById } from '../cutting/materials.js';
+import { chipTarget } from '../cutting/analyzer.js';
 import { Panel, actionRow } from './panel.js';
 import { COLLISION_TYPES } from '../sim/simulator.js';
 import { fmtDuration } from '../core/util.js';
@@ -15,6 +17,7 @@ export class ResultsPanel extends Panel {
   constructor(app) {
     super(app, [
       { id: 'findings', label: 'Findings', icon: 'report', hint: 'Collisions and gouges the run turned up', badge: () => app.simulator.collisions.length || null, render: ResultsPanel.prototype.findingsPage },
+      { id: 'loads', label: 'Loads', icon: 'gauge', hint: 'Forces, power and deflection along the run, from the metal each move meets', render: ResultsPanel.prototype.loadsPage },
       { id: 'compare', label: 'Compare', icon: 'target', hint: 'The cut against the reference part', render: ResultsPanel.prototype.comparePage },
       { id: 'export', label: 'Export', icon: 'export', hint: 'The machined part, the report, a screenshot', render: ResultsPanel.prototype.exportPage },
     ]);
@@ -38,6 +41,107 @@ export class ResultsPanel extends Panel {
 
   exportPage() {
     return [this.exportSection()];
+  }
+
+  /**
+   * How hard each tool works, and where it works hardest.
+   *
+   * Read, not acted on: nothing here changes a feed. It is the measured
+   * half of feed optimisation — the engagement each move really meets and
+   * what the force model makes of it — shown first so the numbers can be
+   * checked against what the machinist knows before anything is allowed
+   * to rewrite a program on the strength of them.
+   */
+  loadsPage() {
+    const app = this.app;
+    const c = app.state.cutting;
+    const m = materialById(c.material);
+    const groups = { P: 'Steel', M: 'Stainless', K: 'Cast iron', N: 'Non-ferrous', S: 'Superalloys & titanium', H: 'Hardened' };
+    const settings = section('Cutting against', [
+      select('Stock material', MATERIALS.map((x) => ({ value: x.id, label: `${groups[x.group] || x.group} · ${x.name}` })), c.material,
+        (v) => app.setCutting({ material: v })),
+      el('div.hint', {}, `${m.examples} · ${m.hardness} · kc1.1 ${m.kc11} MPa, mc ${m.mc}.`),
+      el('div.row', {}, [
+        field('Spindle power (kW)', c.spindleKw, { min: 0, step: 0.5, onChange: (v) => app.setCutting({ spindleKw: Math.max(0, Number(v) || 0) }) }),
+        field('Spindle torque (N·m)', c.spindleNm, { min: 0, step: 1, onChange: (v) => app.setCutting({ spindleNm: Math.max(0, Number(v) || 0) }) }),
+      ]),
+      field('Deflection limit', c.maxDeflection, { min: 0, step: 0.005, unit: 'mm', onChange: (v) => app.setCutting({ maxDeflection: Math.max(0, Number(v) || 0) }) }),
+      el('div.hint', {}, 'Zero means not known; nothing is judged against a limit that is not set.'),
+    ]);
+
+    const rows = app.analyzer.summary(app.state.program);
+    if (!rows.length) {
+      return [settings, section('Loads', [
+        el('div.empty', {}, [
+          el('div.empty-title', {}, app.state.program ? 'Nothing measured yet' : 'No program loaded'),
+          el('div.hint', {}, 'Loads are measured as the run cuts: press ⏭⏭ in the bar under the viewport to run the program to the end, and every feed move that meets metal is measured.'),
+        ]),
+      ]), this.loadsNotes()];
+    }
+
+    const toolName = (n) => {
+      const slot = app.simulator.slots.get(n) || app.simulator.fallbackSlot;
+      return slot ? slot.built.tool.def.name : 'no tool';
+    };
+    const targetOf = (n) => {
+      const slot = app.simulator.slots.get(n) || app.simulator.fallbackSlot;
+      if (!slot) return null;
+      const def = slot.built.tool.def;
+      return chipTarget(def.type, m, 2 * slot.built.cutRadius, def.material);
+    };
+    const go = (w) => () => this.seekToMove(w.move);
+    const stat = (label, text, w, level = '') => el(`div.stat.clickable${level ? `.${level}` : ''}`, {
+      onclick: w && w.move >= 0 ? go(w) : null,
+      title: w && w.move >= 0 ? `Line ${w.line}: jump there` : '',
+    }, [el('div.stat-label', {}, label), el('div.stat-value', {}, text)]);
+
+    const cards = rows.map((r) => {
+      // The catalogue chip for this cutter in this material, which is what
+      // "light" and "heavy" are measured against.
+      const target = targetOf(r.tool);
+      const chipRatio = target > 0 ? r.chip.value / target : 0;
+      const chipNote = !target ? '' : chipRatio > 1.4 ? 'heavy for the material' : chipRatio < 0.4 ? 'light — rubbing more than cutting' : 'in the usual range';
+      const overPower = c.spindleKw > 0 && r.power.value > c.spindleKw;
+      const overTorque = c.spindleNm > 0 && r.torque.value > c.spindleNm;
+      const overBend = c.maxDeflection > 0 && r.deflection.value > c.maxDeflection;
+      return section(`T${r.tool} · ${toolName(r.tool)}`, [
+        el('div.stat-grid', {}, [
+          stat('Peak force', `${Math.round(r.force.value)} N`, r.force),
+          stat('Spindle power', `${r.power.value.toFixed(2)} kW${c.spindleKw > 0 ? ` · ${Math.round((r.power.value / c.spindleKw) * 100)} %` : ''}`, r.power, overPower ? 'bad' : ''),
+          stat('Peak torque', `${r.torque.value.toFixed(2)} N·m`, r.torque, overTorque ? 'bad' : ''),
+          stat('Deflection', units.lenU(r.deflection.value, 3), r.deflection, overBend ? 'bad' : ''),
+          stat('Max chip', units.lenU(r.chip.value, 4), r.chip),
+          stat('Deepest cut', units.lenU(r.ap.value, 2), r.ap),
+        ]),
+        el('div.hint', {}, [
+          `${r.moves.toLocaleString()} cutting move${r.moves === 1 ? '' : 's'}; widest contact ${Math.round(r.arc.value)}°, feed ${units.len(r.fz.value, 4)} ${units.lengthLabel()} a tooth at most.`,
+          target ? ` The thickest chip is ${chipNote} (catalogue ${units.len(target, 3)} ${units.lengthLabel()} for this cutter).` : '',
+          overPower ? ' Asks for more power than the spindle has.' : '',
+          overTorque ? ' Asks for more torque than the spindle has.' : '',
+          overBend ? ' Bends further than the limit set above.' : '',
+          r.force.plunge ? ' Its peak is a plunge, read as drilling — an approximation.' : '',
+        ].join('')),
+      ]);
+    });
+
+    return [settings, ...cards, this.loadsNotes()];
+  }
+
+  /** Where in the run a move is, so a card can jump to it. */
+  seekToMove(i) {
+    const app = this.app;
+    const moves = app.state.program ? app.state.program.moves : [];
+    let t = 0;
+    for (let k = 0; k < i && k < moves.length; k++) t += moves[k].time;
+    if (moves[i]) t += moves[i].time * 0.5;
+    app.seekTo(t);
+  }
+
+  loadsNotes() {
+    return section('How these are worked out', [
+      el('div.hint', {}, 'For every chunk of a feed move, before it is cut, the stock is read around the leading half of the cutter, slice by slice up the flutes: which angles have metal in them, and how high it stands. That engagement goes into the same force model as Shop-Ref — Kienzle\u2019s law for the material, the chip thickness at each angle, the helix lag, the oblique force ratios — summed over a turn of the cutter for the peak and mean forces, the torque and the power. Deflection is the tool as a stepped cantilever from the holder face.'),
+      el('div.hint', {}, 'Assumed: sharp edges, a rigid machine, no runout. A cutter\u2019s helix and rake are its own where its definition gives them, and otherwise 35° and the usual rake for the material. Plunges are read as drilling, which is an approximation. Tilted 5-axis cuts are not measured yet.'),
+    ]);
   }
 
   statsSection() {

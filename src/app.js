@@ -35,6 +35,8 @@ import { writeProject, readProject, isProject } from './io/project.js';
 
 import { el, clear, button, download, pickFile } from './ui/dom.js';
 import * as units from './core/units.js';
+import { CutAnalyzer } from './cutting/analyzer.js';
+import { DEFAULT_MATERIAL } from './cutting/materials.js';
 import { SetupPanel } from './ui/setupPanel.js';
 import { MachinePanel } from './ui/machinePanel.js';
 import { ToolsPanel } from './ui/toolsPanel.js';
@@ -154,6 +156,12 @@ export class App {
       },
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
+      /**
+       * What the cutting loads are worked out against: the stock's
+       * material, and the limits a cut is judged by. Zero is "not known",
+       * and nothing is judged against it.
+       */
+      cutting: { material: DEFAULT_MATERIAL, spindleKw: 0, spindleNm: 0, maxDeflection: 0.05 },
     };
 
     this.library = new ToolLibrary();
@@ -161,6 +169,11 @@ export class App {
     /** Said out loud once the notifier exists; see `start()`. */
     this.libraryRepaired = this.library.repaired || [];
     this.simulator = new Simulator();
+    // Forces, power and deflection along the run, from the metal each
+    // chunk actually meets. See cutting/analyzer.js.
+    this.analyzer = new CutAnalyzer();
+    this.analyzer.setMaterial(this.state.cutting.material);
+    this.simulator.analyzer = this.analyzer;
     this.stock = null;
 
     this.buildLayout();
@@ -676,6 +689,18 @@ export class App {
     this.simulator.retune({ checks, fixtures: this.models.collisionBoxes(this.partFrame()) });
     if (patch.parts) this.refreshSlots();
     this.rerunIfFinished();
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+  }
+
+  /**
+   * Change what the cutting loads are worked out against. The loads come
+   * out of the run, so a run already made is made again.
+   */
+  setCutting(patch) {
+    Object.assign(this.state.cutting, patch);
+    this.analyzer.setMaterial(this.state.cutting.material);
+    this.rerunIfFinished();
+    if (this.panels && this.panels.results) this.panels.results.refresh();
     if (this.panels && this.panels.setup) this.panels.setup.refresh();
   }
 
@@ -2220,6 +2245,8 @@ export class App {
       extraRow,
       el('div.hud-row.dim', {}, [dim('tool'), dim('toolName'), dim('feed'), dim('rpm')]),
       el('div.hud-row.dim', {}, [cell('span', 'removed'), val('removed')]),
+      // What the cutter is meeting on this move, when it is cutting.
+      this.hudLoad = el('div.hud-row.dim', {}, [dim('load')]),
     ].filter(Boolean));
   }
 
@@ -2253,6 +2280,15 @@ export class App {
     set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${units.feed(mv.feed, 0)}`) : '');
     set(f.rpm, mv && mv.rpm ? `S${mv.rpm}` : '');
     set(f.removed, units.volumeU(sim.removedVolume, 2));
+    const a = this.analyzer && this.analyzer.view;
+    const k = mv ? mv.i : -1;
+    const loaded = a && k >= 0 && k < a.count && a.force[k] > 0;
+    if (this.hudLoad) this.hudLoad.style.display = loaded ? '' : 'none';
+    if (loaded) {
+      set(f.load, a.plunge[k]
+        ? `plunge · thrust ${Math.round(a.force[k])} N · ${a.power[k].toFixed(2)} kW`
+        : `${Math.round(a.force[k])} N · ${a.power[k].toFixed(2)} kW · bends ${units.len(a.deflection[k], 3)} ${units.lengthLabel()} · ap ${units.len(a.ap[k], 2)}`);
+    }
 
     this.toolView.setAlert(errors.length > 0 && this.state.playing && errors[errors.length - 1].moveIndex >= sim.moveIndex - 2);
 

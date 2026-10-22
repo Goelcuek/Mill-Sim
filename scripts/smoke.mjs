@@ -100,6 +100,17 @@ try {
   check(bracket.removed > 20000, `expected material to be removed, got ${bracket.removed} mm3`);
   check(bracket.collisions === 0, `clean program reported ${bracket.collisions} collisions`);
 
+  // ---- and it measured how hard each tool worked ------------------------
+  const loads = await page.evaluate(() => window.millsim.analyzer.summary(window.millsim.state.program)
+    .map((r) => ({ tool: r.tool, moves: r.moves, force: Math.round(r.force.value), kW: +r.power.value.toFixed(2) })));
+  console.log('loads:', JSON.stringify(loads));
+  for (const t of [1, 2, 7]) {
+    const r = loads.find((x) => x.tool === t);
+    check(r && r.force > 0 && r.kW > 0, `T${t} cut metal and no load was measured`);
+  }
+  // T6 chamfers at Z-0.6 over a top already faced to Z-1: it cuts air.
+  check(!loads.some((x) => x.tool === 6), 'the chamfer pass cuts air and was given a load');
+
   // ---- and the editor is showing the program it just ran ----------------
   await page.click('.ribbon-tab[data-tab="program"]');
   await page.click('.ribbon-page[data-page="editor"]');
