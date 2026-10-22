@@ -201,3 +201,70 @@ export function compareToTarget(stock, target, tolerance = 0.02) {
   }
   return out;
 }
+
+// ---- the deviation map ------------------------------------------------------
+//
+// The same comparison, kept per column rather than counted: how far the cut
+// surface stands above the reference (material still to come off) or below
+// it (a gouge), so the whole part can be coloured by it.
+
+/** A column the reference does not cover: nothing to say about it. */
+export const DEV_OUTSIDE = 0;
+/** A column on a wall of the reference, which a vertical measure cannot judge. */
+export const DEV_WALL = 0.5;
+/** A column with a deviation worth showing. */
+export const DEV_JUDGED = 1;
+
+/**
+ * How one column stands against the reference.
+ *
+ * @returns {{state:number, deviation:number}} deviation in mm, positive for
+ *   material left above the reference and negative for a cut below it
+ */
+export function columnDeviation(stock, target, i, j) {
+  if (!stock || !target || i < 0 || j < 0 || i >= stock.nx || j >= stock.ny) {
+    return { state: DEV_OUTSIDE, deviation: 0 };
+  }
+  const k = j * stock.nx + i;
+  const want = target.map[k];
+  if (want === -Infinity) return { state: DEV_OUTSIDE, deviation: 0 };
+  if (target.edge[k]) return { state: DEV_WALL, deviation: 0 };
+  return { state: DEV_JUDGED, deviation: stock.height[k] - want };
+}
+
+/**
+ * How a block of columns stands against the reference, for a display texel
+ * that covers several of them.
+ *
+ * A gouge anywhere in the block is what the block shows, because a gouge is
+ * the thing the map exists to find and averaging would hide it. Otherwise
+ * the most material left is shown, for the same reason the stock view shows
+ * the lowest column in a block: nothing worth knowing is averaged away.
+ *
+ * @param {number} tolerance mm a cut may pass the surface before it counts
+ * @returns {{state:number, deviation:number}}
+ */
+export function blockDeviation(stock, target, i0, i1, j0, j1, tolerance = 0.02) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  let judged = false;
+  let wall = false;
+  const map = target.map;
+  const edge = target.edge;
+  const h = stock.height;
+  for (let j = j0; j < j1; j++) {
+    const row = j * stock.nx;
+    for (let i = i0; i < i1; i++) {
+      const k = row + i;
+      const want = map[k];
+      if (want === -Infinity) continue;
+      if (edge[k]) { wall = true; continue; }
+      const d = h[k] - want;
+      judged = true;
+      if (d < lo) lo = d;
+      if (d > hi) hi = d;
+    }
+  }
+  if (judged) return { state: DEV_JUDGED, deviation: lo < -tolerance ? lo : hi };
+  return { state: wall ? DEV_WALL : DEV_OUTSIDE, deviation: 0 };
+}

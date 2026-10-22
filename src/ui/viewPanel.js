@@ -5,7 +5,7 @@
 // places, which is the one thing this layout is built to avoid — so Setup
 // talks about the stock and View decides what colour it is.
 
-import { el, select, checkbox, button, row, section } from './dom.js';
+import { el, select, checkbox, button, row, section, field } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
 import * as units from '../core/units.js';
@@ -111,7 +111,15 @@ export class ViewPanel extends Panel {
           checkbox('Cuts by tool', d.toolColors, (v) => { app.setDisplay({ toolColors: v }); this.render(); }),
         ]),
         el('div.hint', {}, 'With cuts coloured by tool, each cutter leaves its own colour — floors and walls alike — so a face answers which tool made it. Faces nothing has touched stay raw stock.'),
-        d.toolColors ? this.toolLegend() : null,
+        d.toolColors && !d.deviation ? this.toolLegend() : null,
+      ]),
+      section('Deviation map', [
+        row([checkbox('Colour by deviation from the reference', d.deviation, (v) => { app.setDisplay({ deviation: v }); this.render(); })]),
+        d.deviation ? row([field('Full colour at', d.devRange, {
+          min: 0.005, step: 0.05, unit: 'mm',
+          onChange: (v) => app.setDisplay({ devRange: Math.max(0.005, Number(v) || 0.5) }),
+        })]) : null,
+        el('div.hint', {}, 'Green is on size, within the gouge tolerance set in Results. Blue is stock still to come off, red is a cut past the finished part, deeper as the gap grows. Measured straight down, so walls of the part show grey: from above, a wall cannot be judged. Needs a model with the role Reference part.'),
       ]),
     ];
   }

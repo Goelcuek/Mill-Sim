@@ -19,6 +19,7 @@
 // actually touched is uploaded each frame.
 
 import * as THREE from 'three';
+import { blockDeviation, DEV_JUDGED } from '../sim/target.js';
 
 const MAX_TOOL_COLORS = 8;
 
@@ -53,6 +54,14 @@ export class StockView {
     this.renderStep = 1;
     this.renderer = null;
     this.uploadedOnce = false;
+    /**
+     * The reference part on the stock grid, when there is one, and the
+     * deviation map's settings. The map is carried in the same texture as
+     * the heights — blue and alpha beside red and green — so it costs no
+     * extra upload and is never a frame behind the cut.
+     */
+    this.target = null;
+    this.devTolerance = 0.02;
     this.copyBox = new THREE.Box2(new THREE.Vector2(), new THREE.Vector2());
     this.copyPos = new THREE.Vector2();
   }
@@ -75,10 +84,12 @@ export class StockView {
 
     // Two texture objects over one array: the source describes the CPU-side
     // pixels for partial uploads, the destination is what the material samples.
-    this.data = new Float32Array(gw * gh * 2);
-    this.srcTexture = new THREE.DataTexture(this.data, gw, gh, THREE.RGFormat, THREE.FloatType);
+    // Red is the height, green the tool that cut it, blue how far it stands
+    // from the reference part and alpha whether that can be judged.
+    this.data = new Float32Array(gw * gh * 4);
+    this.srcTexture = new THREE.DataTexture(this.data, gw, gh, THREE.RGBAFormat, THREE.FloatType);
     this.srcTexture.needsUpdate = true;
-    this.texture = new THREE.DataTexture(this.data, gw, gh, THREE.RGFormat, THREE.FloatType);
+    this.texture = new THREE.DataTexture(this.data, gw, gh, THREE.RGBAFormat, THREE.FloatType);
     this.texture.magFilter = THREE.NearestFilter;
     this.texture.minFilter = THREE.NearestFilter;
     this.texture.wrapS = THREE.ClampToEdgeWrapping;
@@ -222,6 +233,9 @@ export class StockView {
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
       uSectionZ: { value: 1e9 },
+      uDevMode: { value: this.devMode ? 1 : 0 },
+      uDevTol: { value: this.devTolerance },
+      uDevRange: { value: this.devRange || 0.5 },
     };
     this.uniforms = uniforms;
 
@@ -290,11 +304,25 @@ export class StockView {
           uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
           uniform float uShowTools;
           uniform float uSectionZ;
+          uniform float uDevMode;
+          uniform float uDevTol;
+          uniform float uDevRange;
           varying float vWorldZ;
           varying vec2 vGridUv;
           varying float vSolid;
           varying float vTop;
           varying float vSteep;
+
+          // Within tolerance is green; material left runs from pale to deep
+          // blue, and a gouge from orange to red, both reaching full colour
+          // at uDevRange.
+          vec3 deviationColor( float d ) {
+            float a = abs( d );
+            if ( a <= uDevTol ) return vec3( 0.25, 0.73, 0.31 );
+            float t = clamp( ( a - uDevTol ) / max( uDevRange - uDevTol, 1e-6 ), 0.0, 1.0 );
+            if ( d > 0.0 ) return mix( vec3( 0.56, 0.83, 1.0 ), vec3( 0.12, 0.31, 0.75 ), t );
+            return mix( vec3( 1.0, 0.70, 0.28 ), vec3( 0.85, 0.18, 0.13 ), t );
+          }
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
@@ -312,6 +340,9 @@ export class StockView {
           if ( hs.r - uBase <= uMinThick && vSolid < 1e-5 ) discard;
 
           float cutId = hs.g;
+          // Where the deviation is read from: this column, or on a wall the
+          // floor it drops to, for the same reason as the tool colour.
+          vec2 devUv = vGridUv;
           // A wall belongs to the tool that took the metal away beside it,
           // not to whatever last touched the rim above. On a steep face the
           // cut is read from the lower of the neighbouring columns, which is
@@ -325,13 +356,13 @@ export class StockView {
             float lowest = hs.r - max( uStep.x, uStep.y );
             vec2 n;
             n = texture2D( uHeight, vGridUv + vec2( uTexel.x, 0.0 ) ).rg;
-            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; devUv = vGridUv + vec2( uTexel.x, 0.0 ); }
             n = texture2D( uHeight, vGridUv - vec2( uTexel.x, 0.0 ) ).rg;
-            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; devUv = vGridUv - vec2( uTexel.x, 0.0 ); }
             n = texture2D( uHeight, vGridUv + vec2( 0.0, uTexel.y ) ).rg;
-            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; devUv = vGridUv + vec2( 0.0, uTexel.y ); }
             n = texture2D( uHeight, vGridUv - vec2( 0.0, uTexel.y ) ).rg;
-            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; }
+            if ( n.r < lowest ) { lowest = n.r; cutId = n.g; devUv = vGridUv - vec2( 0.0, uTexel.y ); }
           }
 
           vec3 surface = uStockColor;
@@ -343,8 +374,18 @@ export class StockView {
             }
             surface = mix( uCutColor, machined, uShowTools );
           }
+          // The deviation map replaces the tool colours on the top surface.
+          // Walls of the reference cannot be judged from above and say so
+          // in plain grey; stock outside the part keeps its own colour.
+          float devTint = 0.0;
+          if ( uDevMode > 0.5 && vTop > 0.5 ) {
+            vec4 dv = texture2D( uHeight, devUv );
+            if ( dv.a > 0.75 ) { surface = deviationColor( dv.b ); devTint = 1.0; }
+            else if ( dv.a > 0.25 ) { surface = vec3( 0.60, 0.63, 0.67 ); devTint = 1.0; }
+          }
           diffuseColor.rgb *= surface;
           float tinted = ( cutId > 0.5 && vTop > 0.5 ) ? uShowTools : 0.0;
+          tinted = max( tinted, devTint );
         `)
         // Steel takes a tint badly: at this metalness most of what the eye
         // gets back is the light source rather than the surface, which is
@@ -398,6 +439,7 @@ export class StockView {
     const d = this.data;
     const nx = stock.nx;
     const ny = stock.ny;
+    const target = this.targetFits() ? this.target : null;
 
     for (let gj = gj0; gj <= gj1; gj++) {
       const jStart = ys[gj];
@@ -419,9 +461,17 @@ export class StockView {
           }
         }
         if (lo === Infinity) lo = h[Math.min(jStart, ny - 1) * nx + Math.min(iStart, nx - 1)];
-        const o = (gj * gw + gi) * 2;
+        const o = (gj * gw + gi) * 4;
         d[o] = lo;
         d[o + 1] = flag;
+        if (target) {
+          const dev = blockDeviation(stock, target, iStart, iEnd, jStart, jEnd, this.devTolerance);
+          d[o + 2] = dev.deviation;
+          d[o + 3] = dev.state;
+        } else {
+          d[o + 2] = 0;
+          d[o + 3] = 0;
+        }
       }
     }
 
@@ -469,6 +519,37 @@ export class StockView {
   /** Colour machined faces per tool, or use a single machined colour. */
   setShowToolColors(on) {
     if (this.uniforms) this.uniforms.uShowTools.value = on ? 1 : 0;
+  }
+
+  /** Is the reference map drawn on this stock's grid? A stale one is not. */
+  targetFits() {
+    const t = this.target;
+    return !!(t && this.stock && t.map && t.map.length === this.stock.nx * this.stock.ny);
+  }
+
+  /**
+   * The reference part to measure against, and how far a cut may pass it.
+   * Both change what every texel says, so the whole map is redone.
+   */
+  setTarget(target, tolerance = this.devTolerance) {
+    this.target = target || null;
+    this.devTolerance = Math.max(0, Number(tolerance) || 0);
+    if (this.uniforms) this.uniforms.uDevTol.value = this.devTolerance;
+    this.sync(true);
+  }
+
+  /**
+   * Colour the stock by how far it stands from the reference part.
+   * @param {boolean} on
+   * @param {number} [range] mm of deviation that takes the full colour
+   */
+  setDeviationMode(on, range) {
+    this.devMode = !!on;
+    if (Number.isFinite(range) && range > 0) this.devRange = range;
+    if (this.uniforms) {
+      this.uniforms.uDevMode.value = this.devMode ? 1 : 0;
+      this.uniforms.uDevRange.value = this.devRange || 0.5;
+    }
   }
 
   /** Clip everything above `z`, for looking inside a pocket. */

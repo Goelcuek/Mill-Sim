@@ -28,7 +28,7 @@ import { interpret } from './gcode/interpreter.js';
 import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
 
 import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
-import { buildTargetMap, compareToTarget } from './sim/target.js';
+import { buildTargetMap, compareToTarget, columnDeviation, DEV_JUDGED, DEV_WALL } from './sim/target.js';
 import { writeSTL, writeOBJ, parseSTL } from './io/stl.js';
 import { writeZip, readZip } from './io/zip.js';
 import { writeProject, readProject, isProject } from './io/project.js';
@@ -115,6 +115,9 @@ export class App {
         // Edges on the castings, fixtures, parts and tool — not on the
         // stock, which changes under the cutter every frame.
         edges: true,
+        // Colour the stock by how far it stands from the reference part,
+        // reaching full colour at devRange millimetres either way.
+        deviation: false, devRange: 0.5,
         background: DEFAULT_BACKGROUND, backgroundCustom: '#8b93a3',
       },
       program: null,
@@ -222,6 +225,11 @@ export class App {
     this.viewOverlay = el('div.view-overlay', {}, [this.hud, this.badge]);
     this.viewportHost.appendChild(this.viewOverlay);
     this.viewportHost.appendChild(this.pickBar);
+    this.devLegend = el('div.dev-legend');
+    this.devLegend.style.display = 'none';
+    this.viewportHost.appendChild(this.devLegend);
+    this.viewportHost.addEventListener('pointermove', (e) => this.hoverDeviation(e));
+    this.viewportHost.addEventListener('pointerleave', () => this.hoverDeviation(null));
 
     this.transport = el('div.transport');
     this.toast = el('div.toast-host');
@@ -1415,6 +1423,7 @@ export class App {
     this.updateHud();
     this.refreshMeasurements();
     this.buildRibbon();
+    this.renderDeviationLegend();
     this.notify(next === 'in'
       ? 'Showing inches. Everything is still held in millimetres — this is how it is read, not what it is.'
       : 'Showing millimetres.', 'ok');
@@ -1441,6 +1450,9 @@ export class App {
     this.toolpathView.setMode(d.backplot);
     this.machineView.setLimitsVisible(d.showLimits);
     this.viewer.setOutlines(d.edges !== false);
+    this.stockView.setDeviationMode(!!d.deviation, d.devRange);
+    this.models.hideRole('reference', !!d.deviation);
+    this.renderDeviationLegend();
     if (this.originView) this.originView.setVisible(d.origins);
 
     if (this.stock) {
@@ -1583,6 +1595,8 @@ export class App {
     this.target = parts.length && this.stock ? buildTargetMap(this.stock, parts) : null;
     this.simulator.target = this.target;
     this.simulator.gougeTolerance = this.state.gougeTolerance;
+    this.stockView.setTarget(this.target, this.state.gougeTolerance);
+    this.renderDeviationLegend();
     if (parts.length && this.target) {
       this.notify(`Reference surface mapped in ${(performance.now() - started).toFixed(0)} ms — cuts past it will be reported as gouges. Walls are left out of the check; Results says how much of the part that is.`, 'ok');
     }
@@ -1592,7 +1606,82 @@ export class App {
   setGougeTolerance(mm) {
     this.state.gougeTolerance = Math.max(0, mm || 0);
     this.simulator.gougeTolerance = this.state.gougeTolerance;
+    this.stockView.setTarget(this.target, this.state.gougeTolerance);
+    this.renderDeviationLegend();
     this.refreshResults();
+  }
+
+  // ---- deviation map -------------------------------------------------------
+
+  /**
+   * The key to the deviation colours, and what is under the pointer.
+   *
+   * Colours without numbers are a mood, not a measurement: the legend says
+   * what green, blue and red mean in the units on screen, and the readout
+   * under it gives the number at the spot being pointed at.
+   */
+  renderDeviationLegend() {
+    const host = this.devLegend;
+    if (!host) return;
+    const d = this.state.display;
+    host.style.display = d.deviation ? '' : 'none';
+    if (!d.deviation) return;
+    clear(host);
+    const tol = this.state.gougeTolerance;
+    const range = Math.max(d.devRange, tol + 1e-3);
+    host.append(el('div.dev-title', {}, 'Deviation from the reference part'));
+    if (!this.target) {
+      host.append(el('div.dev-note', {}, 'No reference part yet. Add the finished part as a model with the role Reference part, and the stock is coloured by how far it stands from it.'));
+      return;
+    }
+    host.append(
+      el('div.dev-bar', {}, [
+        el('span.dev-gouge'), el('span.dev-ok'), el('span.dev-left'),
+      ]),
+      el('div.dev-scale', {}, [
+        el('span', {}, `−${units.len(range, 2)}`),
+        el('span', {}, `±${units.len(tol, 3)}`),
+        el('span', {}, `+${units.len(range, 2)} ${units.lengthLabel()}`),
+      ]),
+      el('div.dev-keys', {}, [
+        el('span', {}, 'gouged'), el('span', {}, 'on size'), el('span', {}, 'stock left'),
+      ]),
+      this.devReadout = el('div.dev-readout', {}, 'Point at the part for a reading.'),
+    );
+  }
+
+  /** The deviation at the pointer, read off the cut stock itself. */
+  hoverDeviation(event) {
+    if (!this.state.display.deviation || !this.target || !this.stock || !this.devReadout) return;
+    if (!event) { this.devReadout.textContent = 'Point at the part for a reading.'; return; }
+    this._devEvent = event;
+    if (this._devFrame) return;
+    this._devFrame = requestAnimationFrame(() => {
+      this._devFrame = null;
+      const e = this._devEvent;
+      if (!e || !this.pick || !this.stock) return;
+      this.pick.rayFor(e);
+      const r = this.pick.workRay;
+      const hit = this.stock.raycast([r.origin.x, r.origin.y, r.origin.z], [r.direction.x, r.direction.y, r.direction.z]);
+      if (!hit) { this.devReadout.textContent = 'Point at the part for a reading.'; return; }
+      const s = this.stock;
+      const i = Math.floor((hit.point[0] - s.origin[0]) / s.dx);
+      const j = Math.floor((hit.point[1] - s.origin[1]) / s.dy);
+      const dev = columnDeviation(s, this.target, i, j);
+      const tol = this.state.gougeTolerance;
+      let text;
+      if (dev.state === DEV_JUDGED) {
+        const v = dev.deviation;
+        const amount = `${v >= 0 ? '+' : '−'}${units.len(Math.abs(v), 3)} ${units.lengthLabel()}`;
+        text = Math.abs(v) <= tol ? `${amount} — on size`
+          : v > 0 ? `${amount} — stock still to come off` : `${amount} — cut past the part`;
+      } else if (dev.state === DEV_WALL) {
+        text = 'A wall of the part: measured straight down, it cannot be judged here.';
+      } else {
+        text = 'Outside the reference part.';
+      }
+      this.devReadout.textContent = text;
+    });
   }
 
   /** Where the finished stock stands against the reference part. */

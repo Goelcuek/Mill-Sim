@@ -347,7 +347,8 @@ export class PickController {
     }
 
     const models = this.ctx.models();
-    const visible = models ? models.models.filter((m) => m.visible) : [];
+    // Shown, and not stood aside for the deviation map.
+    const visible = models ? models.models.filter((m) => m.visible && m.mesh.visible) : [];
     if (visible.length) {
       const hits = this.raycaster.intersectObjects(visible.map((m) => m.mesh), false);
       if (hits.length && (!best || hits[0].distance < best.distance)) {
@@ -441,7 +442,7 @@ export class PickController {
     const meshes = [];
     const models = assembling ? null : this.ctx.models();
     if (models && models.models.length) {
-      for (const m of models.models) if (m.visible) meshes.push(m.mesh);
+      for (const m of models.models) if (m.visible && m.mesh.visible) meshes.push(m.mesh);
     }
     // The machine itself is a surface like any other. In full-machine view
     // the table, the trunnion and the castings are exactly what somebody

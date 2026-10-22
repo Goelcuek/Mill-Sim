@@ -24,6 +24,8 @@ export class ModelsView {
     this.viewer = viewer;
     this.group = new THREE.Group();
     this.group.name = 'models';
+    /** Roles drawn out of the picture for now; see hideRole. */
+    this.hiddenRoles = new Set();
     this.models = [];
     this.selected = null;
     this.onChange = () => {};
@@ -75,6 +77,7 @@ export class ModelsView {
     });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.name = spec.name || 'model';
+    mesh.visible = !this.hiddenRoles.has(role);
 
     const holder = new THREE.Group();
     holder.name = `model:${mesh.name}`;
@@ -152,9 +155,22 @@ export class ModelsView {
     this.onChange('transform', model);
   }
 
+  /**
+   * Stand every model of a role aside from the picture, without changing
+   * whether it is on. The deviation map does this to the reference part:
+   * the map is the comparison with it, and the part drawn over the top
+   * hides exactly the faces the map is colouring.
+   */
+  hideRole(role, hidden) {
+    if (hidden) this.hiddenRoles.add(role); else this.hiddenRoles.delete(role);
+    for (const m of this.models) m.mesh.visible = !this.hiddenRoles.has(m.role);
+    this.viewer.invalidate();
+  }
+
   setRole(model, role) {
     if (!MODEL_ROLES[role]) return;
     model.role = role;
+    model.mesh.visible = !this.hiddenRoles.has(role);
     model.material.color.setHex(MODEL_ROLES[role].color);
     model.dirty = true;
     this.viewer.invalidate();
