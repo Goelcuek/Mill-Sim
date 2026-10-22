@@ -112,6 +112,9 @@ export class App {
         grid: false, axes: true, stock: true, tool: true, holder: true,
         toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: false,
         sectionPct: 100, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
+        // Edges on the castings, fixtures, parts and tool — not on the
+        // stock, which changes under the cutter every frame.
+        edges: true,
         background: DEFAULT_BACKGROUND, backgroundCustom: '#8b93a3',
       },
       program: null,
@@ -274,6 +277,14 @@ export class App {
 
     this.toolView = new ToolView();
     this.viewer.add(this.toolView.group);
+
+    // Outlines go on every solid model the machine carries and on the tool.
+    // The stock is left out — it is redrawn under the cutter every frame —
+    // and so is the coordinate frame, which holds lines and markers, not
+    // solids.
+    this.stockView.group.userData.noOutline = true;
+    this.machineView.workGroup.userData.noOutline = true;
+    this.viewer.outlineRoots = [this.machineView.group, this.toolView.group];
 
     this.measure = new MeasureView(this.viewer, this.viewOverlay);
     /** Scratch for carrying a point between the part and coordinate frames. */
@@ -1404,6 +1415,7 @@ export class App {
     this.toolpathView.setShowRapids(d.rapids);
     this.toolpathView.setMode(d.backplot);
     this.machineView.setLimitsVisible(d.showLimits);
+    this.viewer.setOutlines(d.edges !== false);
     if (this.originView) this.originView.setVisible(d.origins);
 
     if (this.stock) {

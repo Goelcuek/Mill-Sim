@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { assemblyPreviewMesh } from '../scene/toolView.js';
 import { makeStudioEnvironment } from '../scene/viewer.js';
+import { Outliner } from '../scene/outlines.js';
 
 export class PreviewViewer {
   /** @param {HTMLElement} container */
@@ -34,6 +35,8 @@ export class PreviewViewer {
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.5, 4000);
     this.pivot = new THREE.Group();
     this.scene.add(this.pivot);
+    /** The same edges the main viewport draws, so a tool looks the same in both. */
+    this.outliner = new Outliner();
 
     this.angle = Math.PI * 0.15;
     this.elevation = 0.28;
@@ -143,6 +146,7 @@ export class PreviewViewer {
       this.centre.z + Math.sin(this.elevation) * this.distance,
     );
     this.camera.lookAt(this.centre);
+    this.outliner.sync([this.pivot]);
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -151,6 +155,7 @@ export class PreviewViewer {
     if (this.environment) this.environment.dispose();
     this.resizeObserver.disconnect();
     this.clear();
+    this.outliner.dispose();
     this.renderer.dispose();
     if (this.renderer.domElement.parentNode) this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
   }

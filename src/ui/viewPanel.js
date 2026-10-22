@@ -74,7 +74,7 @@ export class ViewPanel extends Panel {
         row([t('Holder', 'holder'), t('Toolpath', 'toolpath')]),
         row([t('Rapid moves', 'rapids'), t('Work origins', 'origins')]),
         row([t('Grid', 'grid'), t('Axes', 'axes')]),
-        row([t('Travel envelope', 'showLimits')]),
+        row([t('Travel envelope', 'showLimits'), t('Edge outlines', 'edges')]),
         d.showLimits ? el('div.hint', {}, 'Where the tool tip can reach: the machine\u2019s own envelope, which is measured at the spindle gauge line, with the tool in the spindle hanging below it. Change to a longer tool and it comes down, because on the machine it does.') : null,
       ]),
       section('Background', [

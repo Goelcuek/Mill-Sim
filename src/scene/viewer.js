@@ -6,6 +6,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Outliner } from './outlines.js';
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -134,6 +135,14 @@ export class Viewer {
       this.updateClipping();
       this.invalidateView();
     });
+
+    /**
+     * Edge outlines, and what they are drawn on: the machine, the fixtures
+     * and parts on it, the tool. Whoever builds the scene says which roots;
+     * see Outliner.
+     */
+    this.outliner = new Outliner();
+    this.outlineRoots = [];
 
     this.buildEnvironment();
     this.buildLights();
@@ -348,6 +357,7 @@ export class Viewer {
       if (!this.needsRender) return;
       this.needsRender = false;
       if (this.boundsDirty) this.measureScene();
+      this.outliner.sync(this.outlineRoots);
       this.renderer.render(this.scene, this.camera);
       this.frames = (this.frames || 0) + 1;
     };
@@ -478,6 +488,9 @@ export class Viewer {
     this.invalidate();
   }
 
+  /** Draw the edges of the solid models, or not. */
+  setOutlines(on) { this.outliner.setEnabled(on); this.invalidate(); }
+
   setGridVisible(v) { this.gridVisible = v; if (this.grid) this.grid.visible = v; this.invalidate(); }
   setAxesVisible(v) { if (this.axes) this.axes.visible = v; this.invalidate(); }
 
@@ -486,6 +499,7 @@ export class Viewer {
     // that backdrop in before exporting or the PNG comes out with a hole.
     const prev = this.scene.background;
     this.scene.background = new THREE.Color((this.background && this.background.haze) || 0xdfe3ea);
+    this.outliner.sync(this.outlineRoots);
     this.renderer.render(this.scene, this.camera);
     const url = this.renderer.domElement.toDataURL(type);
     this.scene.background = prev;
@@ -496,6 +510,7 @@ export class Viewer {
   dispose() {
     this.stop();
     if (this.environment) this.environment.dispose();
+    this.outliner.dispose();
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.renderer.dispose();
