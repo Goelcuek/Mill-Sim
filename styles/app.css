@@ -71,7 +71,9 @@ html, body {
 
 button, input, select, textarea { font: inherit; color: inherit; }
 
-.app { display: flex; flex-direction: column; height: 100vh; }
+/* dvh where the browser has it: on a phone 100vh is the height with the
+   address bar hidden, which put the transport bar under the toolbar. */
+.app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 
 /* ── title bar ───────────────────────────────────────────────────────── */
 
@@ -1145,3 +1147,69 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   gap: 10px;
 }
 .toast-action .btn { flex: none; }
+
+/* ── phones ──────────────────────────────────────────────────────────── */
+
+/* The panel toggle only exists where the panel can be put away. */
+.panel-toggle { display: none; }
+
+@media (max-width: 760px) {
+  .title-status { display: none; }
+  .panel-toggle {
+    display: inline-flex;
+    align-items: center;
+    appearance: none;
+    border: 1px solid var(--line);
+    background: var(--surface-2);
+    color: var(--text);
+    border-radius: 7px;
+    padding: 4px 11px;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+  }
+  .app.panel-open .panel-toggle { background: var(--accent); border-color: transparent; color: #fff; }
+
+  /* Tabs and pages scroll sideways rather than wrapping or overflowing. */
+  .ribbon-tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .ribbon-tabs::-webkit-scrollbar { display: none; }
+  .ribbon-tab { flex: none; padding: 5px 11px; }
+
+  /* The view first, the transport under it, and the panel as a sheet
+     below both — shut until it is asked for. */
+  .workspace { flex-direction: column; }
+  .main { order: 1; flex: 1 1 auto; min-height: 0; }
+  .sidebar {
+    order: 2;
+    display: none;
+    width: 100%;
+    flex: 0 0 auto;
+    height: 46dvh;
+    border-right: none;
+    border-top: 1px solid var(--line);
+  }
+  .app.panel-open .sidebar { display: flex; }
+
+  /* The buttons on one row; the scrubber, the clock and the speed below. */
+  .transport { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
+  .transport .btn.icon { width: 38px; height: 34px; }
+  .transport .scrub { order: 10; flex: 1 1 120px; min-width: 0; }
+  .transport .time { order: 11; font-size: 11px; }
+  .transport select.speed { order: 12; }
+
+  /* The page row is the panel's; with the panel put away it is only in
+     the way of the view. Tapping a tab brings both back. */
+  .app:not(.panel-open) .ribbon-band { display: none; }
+  .ribbon-band { min-height: 0; }
+
+  /* Notes come down from the top, clear of the play controls. */
+  .toast-host { top: 76px; bottom: auto; left: 8px; right: 8px; align-items: stretch; }
+  .transport .pill { display: none; }
+  .transport .pill.seeking { display: inline; }
+  select.speed { width: 64px; }
+
+  .view-overlay { padding: 8px; }
+  .hud { font-size: 11px; max-width: calc(100vw - 16px); overflow: hidden; }
+
+  .dialog { max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+}

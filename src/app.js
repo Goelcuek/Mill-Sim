@@ -206,7 +206,12 @@ export class App {
     clear(this.root);
 
     this.ribbon = new Ribbon();
-    this.ribbon.onNavigate((tabId, pageId) => this.setPage(tabId, pageId));
+    this.ribbon.onNavigate((tabId, pageId) => {
+      this.setPage(tabId, pageId);
+      // On a phone the panel is a sheet over the bottom of the view, shut
+      // until it is asked for — and picking a page is asking for it.
+      if (this.narrow()) this.setPanelOpen(true);
+    });
     this.panelHost = el('div.panel-host');
     this.sidebar = el('aside.sidebar', {}, [this.panelHost]);
 
@@ -225,6 +230,11 @@ export class App {
       el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
       el('div.spacer'),
       this.statusStrip = el('div.title-status'),
+      // Only shown on a narrow screen, where the panel is a sheet.
+      this.panelToggle = el('button.panel-toggle', {
+        type: 'button',
+        onclick: () => this.setPanelOpen(!this.root.classList.contains('panel-open')),
+      }, 'Panel'),
     ]));
     this.root.appendChild(this.ribbon.root);
     this.root.appendChild(el('div.workspace', {}, [
@@ -573,6 +583,21 @@ export class App {
     if (tabId === 'machine' && panel.page === 'jog') this.startJog();
     else this.stopJog();
     this.buildRibbon();
+  }
+
+  /** A phone-sized screen, where the panel is a sheet rather than a column. */
+  narrow() {
+    return typeof window !== 'undefined' && window.matchMedia
+      && window.matchMedia('(max-width: 760px)').matches;
+  }
+
+  /** Open or shut the panel sheet. Wider screens always show the panel. */
+  setPanelOpen(open) {
+    this.root.classList.toggle('panel-open', !!open);
+    if (this.panelToggle) {
+      this.panelToggle.textContent = open ? 'Hide panel' : 'Panel';
+      this.panelToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
   }
 
   // ---- transport ---------------------------------------------------------
