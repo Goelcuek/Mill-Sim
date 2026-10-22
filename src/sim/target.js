@@ -11,6 +11,13 @@
 // plain z-buffer rasterisation of every reference triangle, keeping the
 // highest surface over each column — the same top-down view the 3-axis
 // cutting model works in.
+//
+// That top-down map answers "is this point inside the part?" and gives an
+// upper bound on how far it is from it. The distance itself is measured
+// along the surface normal against the triangles — see surfaceIndex.js —
+// which is what lets walls, slopes and bores be judged at all.
+
+import { buildSurfaceIndex, nearestWithin } from './surfaceIndex.js';
 
 /**
  * Rasterise reference triangles into a target heightmap.
@@ -91,7 +98,10 @@ export function buildTargetMap(stock, parts) {
 
   if (!covered) return null;
   const { edge, edgeCells } = markEdges(stock, map);
-  return { map, edge, edgeCells, lateral: Math.max(stock.dx, stock.dy) };
+  return {
+    map, edge, edgeCells, lateral: Math.max(stock.dx, stock.dy),
+    surface: buildSurfaceIndex(parts, Math.max(2, stock.dx * 8, stock.dy * 8)),
+  };
 }
 
 /**
@@ -157,49 +167,99 @@ function markEdges(stock, map) {
 }
 
 /**
- * Compare the cut stock against the reference surface.
+ * Compare the cut stock against the reference part.
+ *
+ * Every column with metal in it, walls included, is measured along the
+ * surface normal; see columnDeviation. A column is a gouge when it is
+ * inside the part by more than the tolerance and stock left when it is
+ * outside by more, and the deepest of each is measured exactly. The pass is
+ * cheap because nearly every column settles with a search no wider than
+ * the tolerance.
  *
  * @param {import('./stock.js').Stock} stock
- * @param {{map:Float32Array, edge:Uint8Array}} target
+ * @param {object} target
  * @param {number} tolerance mm the cut may pass the surface before it counts
  * @returns {{gougeCells:number, maxGouge:number, excessCells:number,
  *            maxExcess:number, comparedCells:number, skippedCells:number,
- *            lateral:number, gougeAt:number[]|null}}
+ *            lateral:number, gougeAt:number[]|null, excessCapped:boolean}}
  */
 export function compareToTarget(stock, target, tolerance = 0.02) {
   const out = {
     gougeCells: 0, maxGouge: 0, excessCells: 0, maxExcess: 0,
-    comparedCells: 0, skippedCells: 0, gougeAt: null,
+    comparedCells: 0, skippedCells: 0, gougeAt: null, excessCapped: false,
     lateral: target ? target.lateral : 0,
   };
   if (!target) return out;
   const map = target.map;
-  const edge = target.edge;
-
   const h = stock.height;
+  const tol = Math.max(tolerance, 1e-6);
   for (let j = 0; j < stock.ny; j++) {
     const row = j * stock.nx;
     for (let i = 0; i < stock.nx; i++) {
       const k = row + i;
       const want = map[k];
       if (want === -Infinity) continue;
-      // A wall cannot be judged from above; see markEdges.
-      if (edge[k]) { out.skippedCells++; continue; }
       out.comparedCells++;
-      const d = want - h[k];
-      if (d > tolerance) {
+      const vertical = h[k] - want;
+      if (Math.abs(vertical) <= tol) continue;
+      const x = stock.cx(i), y = stock.cy(j), z = h[k];
+      if (vertical < 0) {
+        const d = gougeDepth(target, x, y, z, want, COMPARE_REACH);
+        if (d <= tol) continue;
         out.gougeCells++;
-        if (d > out.maxGouge) {
-          out.maxGouge = d;
-          out.gougeAt = [stock.cx(i), stock.cy(j), h[k]];
-        }
-      } else if (-d > tolerance) {
+        if (d > out.maxGouge) { out.maxGouge = d; out.gougeAt = [x, y, z]; }
+      } else {
+        // Anything of the part within the tolerance settles it.
+        if (target.surface && nearestWithin(target.surface, x, y, z, tol) < Infinity) continue;
         out.excessCells++;
-        if (-d > out.maxExcess) out.maxExcess = -d;
+        if (vertical > out.maxExcess && out.maxExcess < COMPARE_REACH) {
+          const d = measure(target, x, y, z, vertical, COMPARE_REACH);
+          if (d > out.maxExcess) out.maxExcess = d;
+        }
       }
     }
   }
+  out.excessCapped = out.maxExcess >= COMPARE_REACH;
   return out;
+}
+
+/** Below this much metal a column is air: milled through, or outside a bar. */
+const MIN_METAL = 1e-4;
+/** How far the comparison looks for the part before saying "more than this". */
+const COMPARE_REACH = 25;
+
+/**
+ * How deep a cut reaches into the part over one column.
+ *
+ * The metal taken out of the column runs from where the cut stopped up to
+ * the part's surface, and the gouge is the deepest any of it lay inside
+ * the part — not the depth of the column's floor alone. A drill 1 mm
+ * oversize through a bore takes out a thin sleeve of the part the whole
+ * depth of the hole; its floor is the part's own underside, a hair from
+ * the surface, while halfway up it is half a millimetre into the wall.
+ * So the removed segment is sampled, each sample searched no further than
+ * its own vertical distance to the surface, and the deepest kept.
+ */
+export function gougeDepth(target, x, y, z, want, cap = COMPARE_REACH) {
+  let deepest = 0;
+  for (const f of [0, 0.25, 0.5, 0.75]) {
+    const zs = z + (want - z) * f;
+    const d = measure(target, x, y, zs, want - zs, cap);
+    if (d > deepest) deepest = d;
+  }
+  return deepest;
+}
+
+/**
+ * Normal distance from a point to the part, given an upper bound on it.
+ * Beyond `cap` the answer is `cap`, which the caller reads as "at least".
+ */
+function measure(target, x, y, z, bound, cap) {
+  if (!target.surface) return bound;
+  const r = Math.min(bound, cap);
+  const d = nearestWithin(target.surface, x, y, z, r);
+  if (d < Infinity) return d;
+  return bound <= cap ? bound : cap;
 }
 
 // ---- the deviation map ------------------------------------------------------
@@ -216,20 +276,52 @@ export const DEV_WALL = 0.5;
 export const DEV_JUDGED = 1;
 
 /**
- * How one column stands against the reference.
+ * How one column stands against the reference part, measured along the
+ * surface normal.
  *
- * @returns {{state:number, deviation:number}} deviation in mm, positive for
- *   material left above the reference and negative for a cut below it
+ * The point measured is the top of the column — where the cut left it. It
+ * is inside the part when it is below the part's top surface over that
+ * column, which makes the distance a gouge (negative); otherwise it is
+ * stock still to come off (positive). The vertical gap to that surface is
+ * an upper bound on the true distance, so the search never looks further
+ * than it, and never further than `cap`: past that the colour scale is
+ * already full, and the answer is reported as `cap` with `beyond` set.
+ *
+ * @param {number} [tolerance] a gap this small needs no search at all
+ * @param {number} [cap] mm beyond which the exact distance is not wanted
+ * @returns {{state:number, deviation:number, beyond?:boolean}}
  */
-export function columnDeviation(stock, target, i, j) {
+export function columnDeviation(stock, target, i, j, tolerance = 0.02, cap = 25) {
   if (!stock || !target || i < 0 || j < 0 || i >= stock.nx || j >= stock.ny) {
     return { state: DEV_OUTSIDE, deviation: 0 };
   }
   const k = j * stock.nx + i;
+  const h = stock.height[k];
   const want = target.map[k];
-  if (want === -Infinity) return { state: DEV_OUTSIDE, deviation: 0 };
-  if (target.edge[k]) return { state: DEV_WALL, deviation: 0 };
-  return { state: DEV_JUDGED, deviation: stock.height[k] - want };
+  const over = want > -Infinity;
+  // A column with no metal in it, off the part, is just air.
+  if (!over && h <= stock.base + MIN_METAL) return { state: DEV_OUTSIDE, deviation: 0 };
+  const vertical = over ? h - want : Infinity;
+  if (over && Math.abs(vertical) <= tolerance) return { state: DEV_JUDGED, deviation: vertical };
+  // Without the triangles there is only the vertical measure, which cannot
+  // speak at a wall.
+  if (!target.surface) {
+    if (!over) return { state: DEV_OUTSIDE, deviation: 0 };
+    return target.edge[k] ? { state: DEV_WALL, deviation: 0 } : { state: DEV_JUDGED, deviation: vertical };
+  }
+  if (over && vertical < 0) {
+    const g = gougeDepth(target, stock.cx(i), stock.cy(j), h, want, cap);
+    return { state: DEV_JUDGED, deviation: -g, beyond: g >= cap };
+  }
+  const bound = Math.abs(vertical);
+  const r = Math.min(bound, cap);
+  const d = nearestWithin(target.surface, stock.cx(i), stock.cy(j), h, r);
+  const sign = 1;
+  if (d < Infinity) return { state: DEV_JUDGED, deviation: sign * d };
+  // Off the part, with nothing of it within reach: not the part's business.
+  if (!over) return { state: DEV_OUTSIDE, deviation: 0 };
+  if (bound <= cap) return { state: DEV_JUDGED, deviation: sign * bound };
+  return { state: DEV_JUDGED, deviation: sign * cap, beyond: true };
 }
 
 /**
@@ -240,31 +332,48 @@ export function columnDeviation(stock, target, i, j) {
  * the thing the map exists to find and averaging would hide it. Otherwise
  * the most material left is shown, for the same reason the stock view shows
  * the lowest column in a block: nothing worth knowing is averaged away.
+ * A small block is measured column by column; a big one measures its
+ * likeliest candidates — the columns standing lowest and highest against
+ * the part, and the lowest one off it, where a profile wall would be —
+ * which is what keeps a full redraw quick.
  *
  * @param {number} tolerance mm a cut may pass the surface before it counts
+ * @param {number} [cap] mm past which the exact distance is not wanted
  * @returns {{state:number, deviation:number}}
  */
-export function blockDeviation(stock, target, i0, i1, j0, j1, tolerance = 0.02) {
-  let lo = Infinity;
-  let hi = -Infinity;
-  let judged = false;
+export function blockDeviation(stock, target, i0, i1, j0, j1, tolerance = 0.02, cap = 1) {
+  let lo = null;
+  let hi = null;
   let wall = false;
-  const map = target.map;
-  const edge = target.edge;
-  const h = stock.height;
-  for (let j = j0; j < j1; j++) {
-    const row = j * stock.nx;
-    for (let i = i0; i < i1; i++) {
-      const k = row + i;
-      const want = map[k];
-      if (want === -Infinity) continue;
-      if (edge[k]) { wall = true; continue; }
-      const d = h[k] - want;
-      judged = true;
-      if (d < lo) lo = d;
-      if (d > hi) hi = d;
+  const take = (dev) => {
+    if (dev.state === DEV_OUTSIDE) return;
+    if (dev.state === DEV_WALL) { wall = true; return; }
+    if (!lo || dev.deviation < lo.deviation) lo = dev;
+    if (!hi || dev.deviation > hi.deviation) hi = dev;
+  };
+  if ((i1 - i0) * (j1 - j0) <= 4) {
+    for (let j = j0; j < j1; j++) for (let i = i0; i < i1; i++) take(columnDeviation(stock, target, i, j, tolerance, cap));
+  } else {
+    let kLo = -1, kHi = -1, kOut = -1, vLo = Infinity, vHi = -Infinity, hOut = Infinity;
+    const map = target.map;
+    const h = stock.height;
+    for (let j = j0; j < j1; j++) {
+      const row = j * stock.nx;
+      for (let i = i0; i < i1; i++) {
+        const k = row + i;
+        if (map[k] === -Infinity) {
+          if (h[k] > stock.base + MIN_METAL && h[k] < hOut) { hOut = h[k]; kOut = k; }
+          continue;
+        }
+        const v = h[k] - map[k];
+        if (v < vLo) { vLo = v; kLo = k; }
+        if (v > vHi) { vHi = v; kHi = k; }
+      }
+    }
+    for (const k of new Set([kLo, kHi, kOut])) {
+      if (k >= 0) take(columnDeviation(stock, target, k % stock.nx, Math.floor(k / stock.nx), tolerance, cap));
     }
   }
-  if (judged) return { state: DEV_JUDGED, deviation: lo < -tolerance ? lo : hi };
+  if (lo) return { state: DEV_JUDGED, deviation: lo.deviation < -tolerance ? lo.deviation : hi.deviation };
   return { state: wall ? DEV_WALL : DEV_OUTSIDE, deviation: 0 };
 }

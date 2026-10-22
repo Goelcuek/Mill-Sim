@@ -109,12 +109,12 @@ try {
 
   // ---- a hole drilled to size is not a gouge ----------------------------
   //
-  // The comparison against a reference part looks straight down, and the
-  // hole in a reference model is a polygon inscribed in the circle it
+  // The hole in a reference model is a polygon inscribed in the circle it
   // stands for. Drill it with the drill it was drawn for and the two
   // disagree sideways by a fraction of a grid column — which, measured
-  // vertically, used to read as a gouge the whole depth of the hole. What
-  // must still be reported is a cut that is actually too deep.
+  // vertically, used to read as a gouge the whole depth of the hole. The
+  // comparison measures along the surface normal now, walls included, and
+  // what must still be reported is a cut that is actually too deep.
   {
     const ref = await page.evaluate(async () => {
       const app = window.millsim;
@@ -158,9 +158,9 @@ try {
     }));
     check(cmp.max > 0.9 && cmp.max < 1.2, `the deepest gouge should be the 1 mm plunge, and reads ${cmp.max.toFixed(3)} mm`);
     check(cmp.cells > 0, 'a 1 mm plunge into the reference part went unreported');
-    check(cmp.skipped > 0 && cmp.compared > cmp.skipped, `walls: ${cmp.skipped} skipped of ${cmp.compared + cmp.skipped}`);
+    check(cmp.skipped === 0 && cmp.compared > 0, `walls should be measured, not skipped: ${cmp.skipped} skipped of ${cmp.compared + cmp.skipped}`);
     check(Math.abs(cmp.lateral - 0.25) < 1e-6, `the lateral resolving power should be one column, and reads ${cmp.lateral}`);
-    check(/Walls skipped/.test(said), `the results panel does not say what it left out: ${said.slice(0, 200)}`);
+    check(/surface normal/.test(said), `the results panel does not say how it measures: ${said.slice(0, 200)}`);
 
     // Put the bench back: later checks expect nothing but the block.
     await page.evaluate((id) => {

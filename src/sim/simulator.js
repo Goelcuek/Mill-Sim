@@ -9,6 +9,7 @@
 import { checkFixtures, checkLimits, checkTable } from './collision.js';
 import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
+import { gougeDepth } from './target.js';
 
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
@@ -657,6 +658,13 @@ export class Simulator {
           removed += result.volume;
           if (result.gouge && (!gouged || result.gouge.depth > gouged.depth)) gouged = result.gouge;
         }
+      }
+      // The carver finds a gouge looking straight down, which overstates it
+      // on any slope — by 41 % at 45°. Measured again along the normal, a
+      // cut that is really within tolerance is no gouge at all.
+      if (gouged && this.target && this.target.surface) {
+        const depth = gougeDepth(this.target, gouged.x, gouged.y, gouged.z, gouged.z + gouged.depth);
+        gouged = depth > this.gougeTolerance ? { ...gouged, depth } : null;
       }
       if (gouged) {
         const g = gouged;

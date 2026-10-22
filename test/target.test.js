@@ -95,8 +95,9 @@ test('a curved reference surface is followed, not just flats', () => {
 // A plate with a 5 mm hole through it: the annulus top face at z = -4, the
 // hole a polygon inscribed in the true bore, so its flats stand a couple of
 // hundredths *inside* the 5 mm circle.
+// A closed solid, as an STL of a holed plate is: the bore has a wall.
 const holedPlate = (segments = 64) => latheToTriangles(
-  [{ r: 2.5, z: -4 }, { r: 20, z: -4 }], { segments },
+  [{ r: 2.5, z: -10 }, { r: 2.5, z: -4 }, { r: 20, z: -4 }, { r: 20, z: -10 }, { r: 2.5, z: -10 }], { segments },
 );
 
 test('a hole drilled to size is not a gouge', () => {
@@ -136,15 +137,14 @@ test('a hole cut oversize is still a gouge', () => {
   assert.ok(compareToTarget(stock, target, 0.02).gougeCells > 100);
 });
 
-test('the walls left out of the comparison are counted, not hidden', () => {
+test('walls are measured, not left out', () => {
   const stock = new Stock(stockOpts);
   const target = buildTargetMap(stock, [holedPlate()]);
   const cmp = compareToTarget(stock, target, 0.02);
-
-  assert.equal(cmp.comparedCells + cmp.skippedCells, target.map.reduce((n, v) => n + (v > -Infinity ? 1 : 0), 0));
-  assert.ok(cmp.skippedCells > 0, 'the hole and the rim are walls and should be skipped');
-  // Walls are a rim one column wide, so the flat annulus is most of it.
-  assert.ok(cmp.skippedCells / (cmp.comparedCells + cmp.skippedCells) < 0.1);
+  // Every column the reference covers is compared now, the hole's rim and
+  // the plate's outline included: the measure is along the normal.
+  assert.equal(cmp.skippedCells, 0);
+  assert.equal(cmp.comparedCells, target.map.reduce((n, v) => n + (v > -Infinity ? 1 : 0), 0));
 });
 
 test('a hole drilled where the part has none is a gouge', () => {

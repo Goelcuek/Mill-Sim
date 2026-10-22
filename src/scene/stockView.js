@@ -439,7 +439,11 @@ export class StockView {
     const d = this.data;
     const nx = stock.nx;
     const ny = stock.ny;
-    const target = this.targetFits() ? this.target : null;
+    // Only worked out while it is being looked at: the map measures along
+    // the normal, which is a search per texel, and switching it on redoes
+    // the whole of it anyway.
+    const target = this.devMode && this.targetFits() ? this.target : null;
+    const cap = Math.max(1, 2 * (this.devRange || 0.5));
 
     for (let gj = gj0; gj <= gj1; gj++) {
       const jStart = ys[gj];
@@ -465,7 +469,7 @@ export class StockView {
         d[o] = lo;
         d[o + 1] = flag;
         if (target) {
-          const dev = blockDeviation(stock, target, iStart, iEnd, jStart, jEnd, this.devTolerance);
+          const dev = blockDeviation(stock, target, iStart, iEnd, jStart, jEnd, this.devTolerance, cap);
           d[o + 2] = dev.deviation;
           d[o + 3] = dev.state;
         } else {
@@ -544,8 +548,12 @@ export class StockView {
    * @param {number} [range] mm of deviation that takes the full colour
    */
   setDeviationMode(on, range) {
+    const before = [this.devMode, this.devRange];
     this.devMode = !!on;
     if (Number.isFinite(range) && range > 0) this.devRange = range;
+    // The map is measured out to twice the colour range, so turning it on
+    // or widening the range means measuring again.
+    if (this.devMode && (before[0] !== this.devMode || before[1] !== this.devRange)) this.sync(true);
     if (this.uniforms) {
       this.uniforms.uDevMode.value = this.devMode ? 1 : 0;
       this.uniforms.uDevRange.value = this.devRange || 0.5;

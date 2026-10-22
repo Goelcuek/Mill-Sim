@@ -1598,7 +1598,7 @@ export class App {
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
     this.renderDeviationLegend();
     if (parts.length && this.target) {
-      this.notify(`Reference surface mapped in ${(performance.now() - started).toFixed(0)} ms — cuts past it will be reported as gouges. Walls are left out of the check; Results says how much of the part that is.`, 'ok');
+      this.notify(`Reference part mapped in ${(performance.now() - started).toFixed(0)} ms — cuts into it are reported as gouges, measured along the surface normal, walls and bores included.`, 'ok');
     }
     this.refreshResults();
   }
@@ -1667,12 +1667,12 @@ export class App {
       const s = this.stock;
       const i = Math.floor((hit.point[0] - s.origin[0]) / s.dx);
       const j = Math.floor((hit.point[1] - s.origin[1]) / s.dy);
-      const dev = columnDeviation(s, this.target, i, j);
       const tol = this.state.gougeTolerance;
+      const dev = columnDeviation(s, this.target, i, j, tol, 50);
       let text;
       if (dev.state === DEV_JUDGED) {
         const v = dev.deviation;
-        const amount = `${v >= 0 ? '+' : '−'}${units.len(Math.abs(v), 3)} ${units.lengthLabel()}`;
+        const amount = `${dev.beyond ? 'more than ' : ''}${v >= 0 ? '+' : '−'}${units.len(Math.abs(v), 3)} ${units.lengthLabel()}`;
         text = Math.abs(v) <= tol ? `${amount} — on size`
           : v > 0 ? `${amount} — stock still to come off` : `${amount} — cut past the part`;
       } else if (dev.state === DEV_WALL) {

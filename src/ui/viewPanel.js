@@ -119,7 +119,7 @@ export class ViewPanel extends Panel {
           min: 0.005, step: 0.05, unit: 'mm',
           onChange: (v) => app.setDisplay({ devRange: Math.max(0.005, Number(v) || 0.5) }),
         })]) : null,
-        el('div.hint', {}, 'Green is on size, within the gouge tolerance set in Results. Blue is stock still to come off, red is a cut past the finished part, deeper as the gap grows. Measured straight down, so walls of the part show grey: from above, a wall cannot be judged. Needs a model with the role Reference part.'),
+        el('div.hint', {}, 'Green is on size, within the gouge tolerance set in Results. Blue is stock still to come off, red is a cut past the finished part, deeper as the gap grows. Measured along the surface normal — the shortest distance to the part — so a wall left thick reads its thickness, not the depth of the pocket. Needs a model with the role Reference part.'),
       ]),
     ];
   }
