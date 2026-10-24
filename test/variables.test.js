@@ -182,8 +182,7 @@ test('every lasting change is written down with its line and the move it came be
     'M30',
   ].join('\n'));
   const changes = p.variableTrace.map((t) => [t.key, t.value, t.line, t.move]);
-  // #1 belongs to the call that is running and is not followed; #100 is.
-  assert.deepEqual(changes, [['#100', 1, 3, 0], ['#100', 5, 5, 1]]);
+  assert.deepEqual(changes, [['#1', 4, 2, 0], ['#100', 1, 3, 0], ['#100', 5, 5, 1]]);
 });
 
 test('the trace can be turned off, and stops at its limit rather than running away', () => {
@@ -246,4 +245,106 @@ test('values read the way the control shows them', () => {
   assert.equal(formatVariable('ROUGH', 'STRING'), '"ROUGH"');
   assert.equal(formatVariable(0.1 + 0.2, 'REAL'), '0.3');
   assert.equal(formatVariable(-3, 'INT'), '-3');
+});
+
+// ---- each control's own banks ---------------------------------------------
+
+const FIDIA = { controller: { flavour: 'fidia' } };
+const fidia = (lines, extra = {}) => interpret(lines.join('\n'), { ...FIDIA, ...extra });
+
+test('a Fidia has RG and PT, a hundred each, and PT 5 is not RG 5', () => {
+  const p = fidia([
+    'RG 5 2.0',
+    'PT 5 7.5',
+    'RG 0 1',
+    '>G90 G21',
+    '>G0 X0 Y0 Z0',
+    'F500',
+    '$IF (PT 5 == 7.5) $GOTO GOOD',
+    'X99',
+    'GOOD:',
+    'X=RG 5 + PT 5 + RG 0',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.equal(at(p).at(-1)[0], 10.5);
+  assert.equal(last(p, 'RG5'), 2);
+  assert.equal(last(p, 'PT5'), 7.5);
+  assert.equal(last(p, 'RG0'), 1, 'RG 0 is a register like any other');
+  assert.deepEqual(p.registers.ranges.map((r) => `${r.bank}${r.from}-${r.to}`), ['RG0-99', 'PT0-99']);
+});
+
+test('a Fidia register outside 0 to 99 is not one', () => {
+  const p = fidia(['RG 100 1', 'PT 120 1', 'M30']);
+  const e = errs(p);
+  assert.equal(e.length, 2);
+  assert.match(e[0], /RG100 is not a variable on this control, which has RG0 to RG99/);
+  assert.match(e[1], /PT120 is not a variable on this control, which has PT0 to PT99/);
+});
+
+test('starting values on the machine go in the bank they name', () => {
+  const p = fidia(['>G90 G21', '>G0 X=RG 50 + PT 3 Y0 Z0', 'M30'], { parameters: { 50: 4, PT3: 0.5, toolChangeX: 0 } });
+  assert.deepEqual(errs(p), []);
+  assert.equal(at(p)[0][0], 4.5);
+  const t = variableTimeline(p);
+  assert.deepEqual(t.rows.map((r) => `${r.key}:${r.preset}`), ['RG50:true', 'PT3:true']);
+});
+
+test('Fanuc and Mazak: #1 to #33 per call, #100 and #500 shared, #50 an alarm', () => {
+  for (const flavour of ['fanuc', 'mazak']) {
+    const p = interpret([
+      'G90 G21',
+      '#1 = 5',
+      '#100 = #1 * 2',
+      '#500 = #500 + 1',
+      '#50 = 1',
+      'G65 P9000 A3.',
+      'G0 X#1 Y#101',
+      'M30',
+    ].join('\n'), {
+      controller: { flavour },
+      parameters: { '#500': 41 },
+      subprograms: [{ name: 'O9000', text: 'O9000\n#1 = #1 + 1\n#101 = #1\nM99' }],
+    });
+    assert.equal(errs(p).length, 1, flavour);
+    assert.match(errs(p)[0], /#50 is not a variable on this control, which has #1 to #33, #100 to #199, #200 to #499, #500 to #999, #1000 up/);
+    assert.equal(last(p, '#500'), 42, 'a retained count goes on from where the machine had it');
+    assert.equal(at(p)[0][0], 5, "the macro's #1 is not the main program's");
+    assert.equal(at(p)[0][1], 4);
+    // The call's own #1, by the call it belongs to.
+    assert.deepEqual(p.variableTrace.filter((t) => t.key === '#1 · O9000').map((t) => t.value), [3, 4]);
+    const t = variableTimeline(p);
+    const group = (key) => t.rows.find((r) => r.key === key).group.label;
+    assert.equal(group('#1'), 'Local');
+    assert.equal(group('#1 · O9000'), 'Local');
+    assert.equal(group('#100'), 'Common');
+    assert.equal(group('#500'), 'Retained');
+  }
+});
+
+test('#0 is always empty; setting it is an error, reading it is zero', () => {
+  const p = interpret(['#100 = #0 + 1', '#0 = 5', 'M30'].join('\n'));
+  assert.equal(last(p, '#100'), 1);
+  assert.match(errs(p)[0], /#0 is always empty and cannot be set/);
+});
+
+test('a Siemens R0 is a parameter like the rest', () => {
+  const p = run(['R0=3', 'G90 G21', 'G1 X=R0 F100', 'M30']);
+  assert.deepEqual(errs(p), []);
+  assert.equal(at(p)[0][0], 3);
+});
+
+test('the control\'s own variables are said once, and #3000 stops the run', () => {
+  const p = interpret([
+    'G90 G21',
+    'G0 X[#5021 + 1]',
+    'G0 X[#5021 + 2]',
+    'IF [#1 EQ 0] THEN #3000 = 1',
+    'G0 X50',
+    'M30',
+  ].join('\n'));
+  const notes = p.warnings.map((w) => w.message);
+  assert.equal(notes.filter((m) => /#5021 is one of the control's own variables/.test(m)).length, 1);
+  assert.ok(notes.some((m) => /raises alarm 3001 here, and the machine stops/.test(m)));
+  assert.deepEqual(at(p).map((m) => m[0]), [1, 2], 'nothing after the alarm runs');
 });

@@ -12,7 +12,7 @@ import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineD
 import { openMacroDialog, openParameterDialog, openSyntaxDialog } from './macroDialogs.js';
 import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 import { PARAMETER_HINTS, macroReferences } from '../machine/macros.js';
-import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor, controlName } from '../gcode/dialects.js';
+import { DIALECTS, FLAVOUR_DIALECT, resolveDialect, describeDialect, sampleFor, controlName, registersOf, parseRegisterKey } from '../gcode/dialects.js';
 import { programNumber } from '../gcode/lexer.js';
 import { AXIS_LETTERS, makeAxis } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
@@ -1047,6 +1047,7 @@ export class MachinePanel extends Panel {
     const app = this.app;
     const machine = app.state.machine;
     const namedVariables = !!(DIALECTS[machine.controller.dialect] || {}).namedVariables;
+    const registers = registersOf(resolveDialect(machine.controller.dialect || FLAVOUR_DIALECT[machine.controller.flavour] || 'fanuc', machine.controller.syntax));
     return section('Machine parameters', [
       addBar('Add parameter…', () => openParameterDialog(app, this), { hint: 'A number of your own that macros can read' }),
       ...Object.keys(machine.parameters || {}).map((key) => row([
@@ -1054,7 +1055,9 @@ export class MachinePanel extends Panel {
           type: 'number',
           step: 1,
           unit: PARAMETER_HINTS[key] ? 'mm' : '',
-          title: PARAMETER_HINTS[key] || `Read by a macro as #${key}`,
+          title: PARAMETER_HINTS[key] || (parseRegisterKey(key, registers)
+            ? `Register ${parseRegisterKey(key, registers).bank}${parseRegisterKey(key, registers).n}, as the control holds it before the program starts`
+            : `Read by a macro as #${key}`),
           onChange: (v) => {
             machine.parameters[key] = Number(v) || 0;
             app.reinterpret();
@@ -1070,7 +1073,7 @@ export class MachinePanel extends Panel {
       // On a Siemens they are what the control calls global user data: a
       // program reads SAFEZ without a DEF, the way it would on the machine.
       namedVariables ? el('div.hint', {}, 'On this control a program can also read them straight by name, without declaring them — G0 Z=SAFEZ — as the control\u2019s global user data. Program \u203a Variables lists the ones a program reads.') : null,
-      el('div.hint', {}, 'A name that is a number is one of the control\u2019s registers instead: 50 is what a Fidia program means by RG 50, so a program that branches on an item number can be read at the number the operator dialled in.'),
+      el('div.hint', {}, 'A name that is a register is that register instead — #500, RG50, PT3 — so a program that branches on an item number can be read at the number the operator dialled in. A bare number is the control\u2019s first bank: 50 is RG 50 on a Fidia. Program \u203a Variables sets these too, under Starting values.'),
     ]);
   }
 

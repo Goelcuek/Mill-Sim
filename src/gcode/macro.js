@@ -380,8 +380,9 @@ class Parser {
 
   primary() {
     if (this.is('#')) {
-      this.next();
-      return { op: 'var', left: this.primary() };
+      // Which bank it is in, on a control with more than one: PT 5 is not RG 5.
+      const mark = this.next();
+      return { op: 'var', bank: mark.letter || null, left: this.primary() };
     }
     // TLENGTH 07: what the tool table says about a pot, 0 being whatever
     // is in the spindle.
@@ -461,7 +462,7 @@ export function evaluate(node, vars) {
       if (vars && typeof vars.getNamed === 'function') return vars.getNamed(node.name, index);
       throw new Error(`${node.name} is not defined`);
     }
-    case 'var': return vars.get(evaluate(node.left, vars));
+    case 'var': return vars.get(evaluate(node.left, vars), node.bank);
     case 'neg': return -evaluate(node.left, vars);
     case 'fn': return FUNCTIONS[node.name](evaluate(node.left, vars));
     case 'atan2': {
@@ -517,13 +518,13 @@ export function parseMacroBlock(code, dialect) {
     ? d.call.program.toUpperCase() : null;
 
   const assignment = () => {
-    p.expect('#');
+    const mark = p.expect('#');
     const target = p.primary();
     // Some controls name the register and then the value, with nothing in
     // between: a Fidia writes RG 50 1.00 where a Fanuc writes #50 = 1.
     if (d.assignEquals === false) p.eat('=');
     else p.expect('=');
-    return { target, value: p.expression() };
+    return { target, bank: mark.letter || null, value: p.expression() };
   };
 
   try {
@@ -656,10 +657,10 @@ function assignmentFor(p) {
     p.expect('=');
     return { named: ref.name, index: ref.index, value: p.expression() };
   }
-  p.expect('#');
+  const mark = p.expect('#');
   const target = p.primary();
   p.expect('=');
-  return { target, value: p.expression() };
+  return { target, bank: mark.letter || null, value: p.expression() };
 }
 
 /** The types a Siemens DEF can declare. */
@@ -782,8 +783,19 @@ export class Vars {
     this.locals = Math.max(0, locals);
     this.common = new Map();
     this.frames = [new Map()];
+    /** Which call each set of locals belongs to; null is the main program. */
+    this.frameLabels = [null];
     /** How a numbered variable is written: #, R, Q. */
     this.prefix = '#';
+    /** Banks beside the main one, each its own numbers: PT beside RG, VC beside V. */
+    this.banks = new Map();
+    /** The numbers each bank has; checked when the control is strict about them. */
+    this.ranges = null;
+    this.strict = false;
+    /** #0 on a Fanuc: always empty, reads as nothing, cannot be set. */
+    this.vacantZero = true;
+    /** Told about the control's own variables, which this does not keep. */
+    this.onSystem = null;
     /** Named variables, one scope per call; the first is the main program. */
     this.scopes = [{ label: null, vars: new Map() }];
     /** Global user data: named, belonging to the machine. */
@@ -798,35 +810,99 @@ export class Vars {
     this.where = { line: 0, move: 0, src: null };
   }
 
+  /** Take the banks and their limits from what a dialect says it has. */
+  configure({ main, ranges, strict }, { vacantZero = false } = {}) {
+    this.prefix = main;
+    this.ranges = ranges;
+    this.strict = !!strict;
+    this.vacantZero = vacantZero;
+  }
+
   get local() { return this.frames[this.frames.length - 1]; }
 
-  push(args) {
+  /** A macro call: its own #1 to #33, filled from the call's letters. */
+  push(args, label = 'macro') {
     const frame = new Map();
-    for (const [n, v] of args || []) frame.set(n, v);
     this.frames.push(frame);
+    this.frameLabels.push(label);
+    for (const [n, v] of args || []) {
+      frame.set(n, v);
+      if (this.trace) this.record(this.localKey(n), v);
+    }
   }
 
   pop() {
-    if (this.frames.length > 1) this.frames.pop();
+    if (this.frames.length > 1) {
+      this.frames.pop();
+      this.frameLabels.pop();
+    }
+  }
+
+  /** How a local is shown: #1 in the main program, #1 · O9010 inside a call. */
+  localKey(k) {
+    const label = this.frameLabels[this.frameLabels.length - 1];
+    return label ? `${this.prefix}${k} · ${label}` : `${this.prefix}${k}`;
+  }
+
+  /** The range a number falls in, in its bank. */
+  rangeOf(bank, k) {
+    return this.ranges ? this.ranges.find((r) => r.bank === bank && k >= r.from && k <= r.to) || null : null;
+  }
+
+  /**
+   * The register a number names, checked against what this control has.
+   * Null for the always-empty #0 when read.
+   */
+  number(n, bank, writing) {
+    const k = Math.round(n);
+    if (!Number.isFinite(k)) throw new Error(`${bank}${n} is not a variable`);
+    if (k === 0 && this.vacantZero && bank === this.prefix) {
+      if (writing) throw new Error(`${bank}0 is always empty and cannot be set`);
+      return null;
+    }
+    if (k < 0) throw new Error(`${bank}${k} is not a variable`);
+    if (this.strict && this.ranges && !this.rangeOf(bank, k)) {
+      const has = this.ranges.filter((r) => r.bank === bank)
+        .map((r) => (r.to >= 99999 ? `${bank}${r.from} up` : `${bank}${r.from} to ${bank}${r.to}`));
+      throw new Error(`${bank}${k} is not a variable on this control, which has ${has.join(', ')}`);
+    }
+    return k;
+  }
+
+  /** The control's own state: said once, rather than read as a silent zero. */
+  system(bank, k, writing, value) {
+    const r = this.rangeOf(bank, k);
+    if (r && r.system && this.onSystem) this.onSystem(`${bank}${k}`, k, writing, value);
   }
 
   /** #0 is always null, which reads as zero here. */
-  get(n) {
-    const k = Math.round(n);
-    if (k <= 0) return 0;
-    const store = k <= this.locals ? this.local : this.common;
+  get(n, bank = null) {
+    const mark = bank || this.prefix;
+    const k = this.number(n, mark, false);
+    if (k === null) return 0;
+    if (mark !== this.prefix) {
+      const v = this.banks.has(mark) ? this.banks.get(mark).get(k) : undefined;
+      return v === undefined ? 0 : v;
+    }
+    const store = k >= 1 && k <= this.locals ? this.local : this.common;
     const v = store.get(k);
+    if (v === undefined) this.system(mark, k, false);
     return v === undefined ? 0 : v;
   }
 
-  set(n, value) {
-    const k = Math.round(n);
-    if (k <= 0) return;
-    const local = k <= this.locals;
+  set(n, value, bank = null) {
+    const mark = bank || this.prefix;
+    const k = this.number(n, mark, true);
+    if (mark !== this.prefix) {
+      if (!this.banks.has(mark)) this.banks.set(mark, new Map());
+      this.banks.get(mark).set(k, value);
+      if (this.trace) this.record(`${mark}${k}`, value);
+      return;
+    }
+    const local = k >= 1 && k <= this.locals;
+    if (!local) this.system(mark, k, true, value);
     (local ? this.local : this.common).set(k, value);
-    // A macro's own #1..#33 come and go with each call; the ones that last
-    // are the ones worth following.
-    if (!local && this.trace) this.record(`${this.prefix}${k}`, value);
+    if (this.trace) this.record(local ? this.localKey(k) : `${mark}${k}`, value);
   }
 
   /** Write a change down, if anyone is reading. */
@@ -973,7 +1049,11 @@ export class Vars {
 
   /** What is set, for the summary — the shared ones are the interesting ones. */
   snapshot() {
-    return [...this.common.entries()].sort((a, b) => a[0] - b[0]).map(([n, v]) => ({ n, value: v }));
+    const out = [...this.common.entries()].sort((a, b) => a[0] - b[0]).map(([n, v]) => ({ n, value: v }));
+    for (const [bank, store] of this.banks) {
+      for (const [n, v] of [...store.entries()].sort((a, b) => a[0] - b[0])) out.push({ n, bank, value: v });
+    }
+    return out;
   }
 
   /** Every named variable the run declared or used, for the readout. */

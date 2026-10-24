@@ -8,7 +8,7 @@
 import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
 import { Vars, evaluate, ARGUMENTS } from './macro.js';
-import { resolveDialect, detectDialect, DIALECTS } from './dialects.js';
+import { resolveDialect, detectDialect, DIALECTS, registersOf, parseRegisterKey } from './dialects.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -772,35 +772,69 @@ export function interpret(text, config = {}) {
     return st.metric ? mm : mm / MM_PER_INCH;
   };
 
-  // Registers the machine holds between programs, and what the operator
-  // dialled into them. A Fidia branches on one — $IF (RG 50 != 5) — so a
-  // program is unreadable without a way to say what RG 50 is: a machine
-  // parameter whose name is a number is that register.
-  vars.prefix = dialect.sigil || dialect.letters[0] || '#';
+  // Which banks of numbered variables this control has — # on a Fanuc,
+  // RG and PT on a Fidia — and which numbers exist in each.
+  const registers = registersOf(dialect);
+  vars.configure(registers, { vacantZero: !!dialect.vacantZero });
+
   // Every change is written down, so the program can be read as it runs:
   // what R1 was before the fifth move, not only what it ended as.
   if (cfg.traceVariables !== false) vars.trace = [];
+
+  // Registers the machine holds between programs, and what the operator
+  // dialled into them. A Fidia branches on one — $IF (RG 50 != 5) — so a
+  // program is unreadable without a way to say what RG 50 is. A machine
+  // parameter named for a register is that register: "#500", "RG50",
+  // "PT3"; a bare number is the main bank, so "50" is RG 50 on a Fidia.
   for (const [key, value] of Object.entries(cfg.parameters || {})) {
-    const n = Number(key);
-    if (Number.isInteger(n) && n > 0 && Number.isFinite(Number(value))) vars.set(n, Number(value));
+    const reg = parseRegisterKey(key, registers);
+    if (reg) {
+      if (!Number.isFinite(Number(value))) continue;
+      try {
+        vars.set(reg.n, Number(value), reg.bank);
+      } catch (err) {
+        warn(1, `Machine parameter ${key}: ${err.message}.`, 'error');
+      }
     // A parameter with a name is the machine's own data — on a Siemens, a
     // global user variable (GUD) a program reads without declaring it.
-    else if (dialect.namedVariables && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+    } else if (dialect.namedVariables && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       vars.defineGlobal(key, typeof value === 'string' && !Number.isFinite(Number(value)) ? value : Number(value),
         typeof value === 'string' && !Number.isFinite(Number(value)) ? 'STRING' : 'REAL');
     }
   }
 
+  // The control's own variables: positions, offsets, modal codes. This
+  // reader does not hold them, and a zero where the program expected the
+  // machine's position is worth one sentence, once. (A machine parameter
+  // can still give one a value — #5221, say — and that is read as given.)
+  const systemSaid = new Set();
+  vars.onSystem = (key, k, writing, value) => {
+    const line = vars.where.line || 1;
+    // #3000 = n is a Fanuc macro's way of stopping the machine with an
+    // alarm of its own — "A not given", "tool too short". The run stops
+    // there, as it does on the machine.
+    if (writing && k === 3000 && registers.main === '#') {
+      warn(line, `#3000 = ${value}: the program raises alarm ${3000 + Math.round(Number(value) || 0)} here, and the machine stops.`, 'error');
+      ended = true;
+      return;
+    }
+    if (systemSaid.has(key)) return;
+    systemSaid.add(key);
+    warn(line, writing
+      ? `${key} is one of the control's own variables; setting it changes nothing this simulator follows.`
+      : `${key} is one of the control's own variables, which this simulator does not keep: it reads 0 here, where the machine would give its own value.`);
+  };
+
   /** Put a value in a variable, numbered or named. */
   const assign = (a) => {
     const value = evaluate(a.value, vars);
     if (a.named) vars.setNamed(a.named, a.index ? a.index.map((e) => evaluate(e, vars)) : null, value);
-    else vars.set(evaluate(a.target, vars), value);
+    else vars.set(evaluate(a.target, vars), value, a.bank);
   };
   /** What a variable holds, numbered or named. */
   const valueOf = (a) => (a.named
     ? vars.getNamed(a.named, a.index ? a.index.map((e) => evaluate(e, vars)) : null)
-    : vars.get(evaluate(a.target, vars)));
+    : vars.get(evaluate(a.target, vars), a.bank));
 
   /**
    * Where a jump goes, within the source that asked for it.
@@ -1389,7 +1423,7 @@ export function interpret(text, config = {}) {
             const n = ARGUMENTS[w.letter];
             if (n) args.push([n, w.value]);
           }
-          vars.push(args);
+          vars.push(args, p !== undefined ? `O${p}` : name);
           callStack.push({ ret: pc, remaining: Math.max(1, Math.floor(l ?? 1)) - 1, target, macroVars: true });
           pc = target;
           axesConsumed = true;
@@ -1852,7 +1886,9 @@ export function interpret(text, config = {}) {
     /** What the macro variables came to, for anyone who wants to look. */
     variables: vars.snapshot(),
     /** How this control writes one, so a readout can say R1 rather than #1. */
-    variablePrefix: dialect.sigil || dialect.letters[0] || '#',
+    variablePrefix: registers.main,
+    /** The banks this control has and what each range of numbers is for. */
+    registers,
     /** What the program declared, and the machine data it used. */
     namedVariables: vars.catalogueList(),
     /** Every change to a variable that lasts, in the order it happened. */

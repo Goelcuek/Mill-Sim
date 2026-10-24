@@ -32,6 +32,26 @@ export const LOGIC = ['and', 'or', 'xor'];
  * @property {Record<string,string|null>} keywords
  * @property {'line'|'name'} labels    GOTO finds an N number, or a name
  * @property {{code:string|null, program:string, ret:string}} call
+ * @property {Array<Bank>} [registers]  which numbers exist, in which bank
+ */
+
+/**
+ * A run of numbered variables a control has, and what it is for.
+ *
+ * A Fanuc has #1 to #33 for each macro call, #100 to #199 shared and lost
+ * at power off, #500 to #999 shared and kept; #50 is not a variable at all
+ * and asking for it is an alarm. A Fidia has a hundred RG registers and a
+ * hundred PT. Which is which is what the variables page groups by, and a
+ * number in no range of a strict control is reported where it is used.
+ *
+ * @typedef {object} Bank
+ * @property {string} bank      the mark or letters it is written with: #, RG, PT
+ * @property {number} from
+ * @property {number} to
+ * @property {string} label
+ * @property {string} [note]
+ * @property {boolean} [local]   one set for each macro call
+ * @property {boolean} [system]  the control's own state, not the program's
  */
 
 const FANUC = {
@@ -53,6 +73,17 @@ const FANUC = {
     rep: null, repEnd: null,
   },
   locals: 33,
+  /** #0 is always empty: it reads as nothing and cannot be set. */
+  vacantZero: true,
+  registers: [
+    { bank: '#', from: 1, to: 33, label: 'Local', local: true, note: 'One set for each macro call, and one for the main program. A G65 call fills them from its letters: A is #1, B #2, C #3, X #24.' },
+    { bank: '#', from: 100, to: 199, label: 'Common', note: 'Shared by every program and macro; cleared when the control is switched off.' },
+    { bank: '#', from: 200, to: 499, label: 'Common, extended', note: 'Only on a control with the additional common variables option.' },
+    { bank: '#', from: 500, to: 999, label: 'Retained', note: 'Shared and kept through power off — where a shop keeps part counts, probing results and its own offsets.' },
+    { bank: '#', from: 1000, to: 99999, label: 'System', system: true, note: 'The control\u2019s own state: positions, offsets, modal codes, alarms. This reader does not keep them.' },
+  ],
+  /** Numbers outside every bank above are not variables on this control. */
+  strictRegisters: true,
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
   /** What a program written for this control looks like from the outside. */
@@ -78,6 +109,9 @@ const SIEMENS = {
     rep: null, repEnd: null,
   },
   locals: 0,
+  registers: [
+    { bank: 'R', from: 0, to: 99999, label: 'R parameters', note: 'Shared by every program on the channel. How many there are is set in the machine data; R0 to R99 is the usual.' },
+  ],
   labels: 'name',
   /**
    * A program declares variables of its own — DEF REAL DEPTH=5 — and reads
@@ -108,6 +142,7 @@ const HEIDENHAIN = {
     rep: null, repEnd: null,
   },
   locals: 0,
+  registers: [{ bank: 'Q', from: 0, to: 1999, label: 'Q parameters' }],
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
   marks: ['\\bQ\\d+\\s*=', '\\bFN\\s*\\d'],
@@ -132,6 +167,10 @@ const OKUMA = {
     rep: null, repEnd: null,
   },
   locals: 0,
+  registers: [
+    { bank: 'VC', from: 1, to: 999, label: 'Common (VC)' },
+    { bank: 'V', from: 1, to: 999, label: 'V variables' },
+  ],
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
   marks: ['\\bVC\\d+\\s*=', '\\bCALL\\s+O\\d'],
@@ -156,9 +195,10 @@ const OKUMA = {
 const FIDIA = {
   id: 'fidia',
   name: 'Fidia',
-  notes: 'Direct commands with > in front, ; for a remark, $IF and $GOTO round named labels, registers as RG 50. No tilted plane: RTCP ON holds the tip still while the rotaries move, and G92 turns a DX/DY/DZ tool vector into the rotary positions that produce it.',
+  notes: 'Direct commands with > in front, ; for a remark, $IF and $GOTO round named labels, registers as RG 50 and PT 5. No tilted plane: RTCP ON holds the tip still while the rotaries move, and G92 turns a DX/DY/DZ tool vector into the rotary positions that produce it.',
   sigil: null,
-  letters: ['RG'],
+  /** Two banks of registers, a hundred each, written RG 50 and PT 5. */
+  letters: ['RG', 'PT'],
   group: ['(', ')'],
   /** ( ) is a remark, except where a keyword needs the brackets it took. */
   parenComments: 'code',
@@ -183,6 +223,11 @@ const FIDIA = {
   /** A label may carry dots: ITEM4.00. */
   identDots: true,
   locals: 0,
+  registers: [
+    { bank: 'RG', from: 0, to: 99, label: 'RG registers', note: 'RG 0 to RG 99. Set from the program — RG 50 1 — or by the operator on the control before the run.' },
+    { bank: 'PT', from: 0, to: 99, label: 'PT registers', note: 'PT 0 to PT 99, a bank of their own: PT 5 is not RG 5.' },
+  ],
+  strictRegisters: true,
   labels: 'name',
   call: {
     code: null,
@@ -298,6 +343,7 @@ export const DIALECTS = {
 export const CONTROLS = [
   { value: 'fanuc', label: 'Fanuc' },
   { value: 'haas', label: 'Haas' },
+  { value: 'mazak', label: 'Mazak (EIA/ISO)' },
   { value: 'fidia', label: 'Fidia' },
   { value: 'siemens', label: 'Siemens 840D' },
   { value: 'heidenhain', label: 'Heidenhain' },
@@ -315,6 +361,8 @@ export function controlName(flavour) {
 export const FLAVOUR_DIALECT = {
   fanuc: 'fanuc',
   haas: 'fanuc',
+  /** Mazak's EIA/ISO programs: # variables, macro B, G65 — Fanuc's spelling. */
+  mazak: 'fanuc',
   fidia: 'fidia',
   siemens: 'siemens',
   heidenhain: 'heidenhain',
@@ -353,7 +401,45 @@ export function resolveDialect(id, overrides) {
     vectorMode: overrides.vectorMode || base.vectorMode,
     indexer: overrides.indexer || base.indexer,
     alongTool: overrides.alongTool || base.alongTool,
+    registers: overrides.registers || base.registers,
   };
+}
+
+/**
+ * The banks of numbered variables a dialect has.
+ *
+ * The table says what it knows. A letter added on Edit syntax… that the
+ * table knows nothing about is a bank of its own with no limits, rather
+ * than a letter that silently shares its numbers with another.
+ *
+ * @returns {{banks:string[], ranges:Bank[], main:string, strict:boolean}}
+ */
+export function registersOf(d) {
+  const banks = d.sigil ? [d.sigil] : [...(d.letters || [])];
+  if (!banks.length) banks.push('#');
+  const known = (d.registers || []).filter((r) => banks.includes(r.bank));
+  const ranges = [...known];
+  for (const b of banks) {
+    if (!known.some((r) => r.bank === b)) ranges.push({ bank: b, from: 0, to: 1e9, label: `${b} variables` });
+  }
+  return { banks, ranges, main: banks[0], strict: !!d.strictRegisters };
+}
+
+/**
+ * Which register a machine parameter's name means, if it means one.
+ *
+ * "#500", "RG50", "PT 3", "R10" name a register in that bank; a bare number
+ * is the control's main bank, which is what "50" always meant on a Fidia.
+ * Anything else is a name, and is not a register.
+ *
+ * @returns {{bank:string, n:number}|null}
+ */
+export function parseRegisterKey(key, regs) {
+  const m = /^\s*(#|[A-Za-z]+)?\s*(\d+)\s*$/.exec(String(key));
+  if (!m) return null;
+  const bank = m[1] ? m[1].toUpperCase() : regs.main;
+  if (!regs.banks.includes(bank)) return null;
+  return { bank, n: Number(m[2]) };
 }
 
 /** One line of what this dialect looks like, for the interface. */

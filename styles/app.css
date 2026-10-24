@@ -832,6 +832,27 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 }
 .vars-group-head:first-child { margin-top: 0; }
 .vars-count { font-weight: 500; color: var(--text-3); }
+/* Which numbers a group covers: #100–#199. */
+.vars-span { margin-left: 7px; font-family: var(--mono); font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-3); }
+.vars-note { font-size: 11px; color: var(--text-3); line-height: 1.4; margin: 0 0 4px; }
+.vars-presets { margin-top: 18px; }
+.vars-input {
+  font: inherit; font-size: 12.5px; font-family: var(--mono);
+  padding: 5px 8px; min-width: 0;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--surface); color: var(--text);
+}
+.var-preset {
+  display: grid; grid-template-columns: minmax(0, 1fr) 110px 28px;
+  gap: 6px; align-items: center; padding: 3px 4px;
+}
+.var-preset .var-key { padding-left: 2px; }
+.var-preset-value { text-align: right; width: 100%; }
+.var-preset-remove { font: inherit; background: none; border: 0; color: var(--text-3); cursor: pointer; padding: 4px; }
+.var-preset-remove:hover { color: var(--danger); }
+.var-preset-add { grid-template-columns: minmax(0, 1fr) 110px auto; margin-top: 4px; }
+.vars-error { font-size: 11.5px; color: var(--danger); margin-top: 4px; min-height: 0; }
+.vars-error:empty { display: none; }
 .vars-hint { margin-top: 6px; }
 .var-row {
   display: grid;

@@ -215,6 +215,16 @@ data: the reader takes it from the machine's named parameters on
 **Machine › Macros**, so `G0 Z=SAFEZ` reads the machine's `SAFEZ`. A
 name that is neither says so, on its line.
 
+The numbered ones are kept the way each control keeps them. A Fanuc — and
+a Mazak or Haas reading ISO — has `#1`–`#33` for each macro call and one
+set for the main program, `#100`–`#199` shared and lost at power off,
+`#500`–`#999` shared and kept, and `#1000` up for the control's own state;
+`#0` is always empty, `#50` is not a variable at all and is reported as
+the alarm it is, and `#3000 = 1` stops the run with alarm 3001 the way the
+machine does. A Fidia has two banks of a hundred, `RG 0`–`RG 99` and
+`PT 0`–`PT 99`, and `PT 5` is not `RG 5`. Siemens `R`, Heidenhain `Q` and
+Okuma `V`/`VC` are banks of their own too.
+
 **Program › Variables** follows all of them through the run — the
 program's own, the `R`/`#` parameters and the machine data it read — with
 the value in force on the move the machine is on, the line that last set
@@ -222,7 +232,11 @@ it, and the whole history of each one a click away; a line in that
 history takes the run there. Rows the blocks just before this move
 changed are lit. Pin one with the star and it rides on the readout over
 the viewport, so `PASSES` and `ZZ` can be watched while the cut plays.
-What the variables came to at the end is also on **Program › Summary**,
+Under **Starting values** the page also holds what the control has before
+the program starts — `#500` with last shift's part count, `RG50` with the
+item number the operator dialled in — kept with the machine, so the
+program branches the way it will on the floor. What the variables came to
+at the end is also on **Program › Summary**,
 which is the first place to look when a macro program lands somewhere
 odd.
 

@@ -26,7 +26,20 @@ function splitKey(key) {
 export function variableTimeline(program) {
   const trace = (program && program.variableTrace) || [];
   const declared = new Map(((program && program.namedVariables) || []).map((v) => [v.key, v]));
-  const prefix = (program && program.variablePrefix) || '#';
+  const regs = (program && program.registers) || { banks: [(program && program.variablePrefix) || '#'], ranges: [] };
+  // Longest first, so VC12 is a VC and not a V followed by C12.
+  const banks = [...regs.banks].sort((a, b) => b.length - a.length);
+
+  /** R5, #100, PT 3: which bank and which number, or null for a name. */
+  const registerOf = (local) => {
+    for (const b of banks) {
+      if (local.startsWith(b) && /^\d+$/.test(local.slice(b.length))) return { bank: b, number: Number(local.slice(b.length)) };
+    }
+    return null;
+  };
+  /** The range a register falls in; one of its own when the table has none. */
+  const groupOf = (bank, n) => regs.ranges.find((r) => r.bank === bank && n >= r.from && n <= r.to)
+    || { bank, from: 0, to: 1e9, label: `${bank} variables` };
 
   const byKey = new Map();
   for (const t of trace) {
@@ -34,18 +47,18 @@ export function variableTimeline(program) {
     if (!r) {
       const { base, local, scope, element } = splitKey(t.key);
       const decl = declared.get(scope ? `${base} · ${scope}` : base) || null;
-      // A number written with this control's mark — R5, #100 — is one of
-      // its registers; anything else is a name somebody gave it.
-      const register = !decl && t.key.startsWith(prefix) && /^\d+$/.test(t.key.slice(prefix.length));
+      const reg = decl ? null : registerOf(local);
       r = {
         key: t.key,
         name: local,
         base,
         scope,
         element,
-        number: register ? Number(t.key.slice(prefix.length)) : null,
+        bank: reg ? reg.bank : null,
+        number: reg ? reg.number : null,
+        group: reg ? groupOf(reg.bank, reg.number) : null,
         type: decl ? decl.type : 'REAL',
-        kind: decl ? (decl.global ? 'machine' : 'declared') : register ? 'register' : 'declared',
+        kind: decl ? (decl.global ? 'machine' : 'declared') : reg ? 'register' : 'declared',
         // Set before the first block: the machine's, not the program's.
         preset: t.line === 0,
         line: decl ? decl.line : t.line,
@@ -58,12 +71,34 @@ export function variableTimeline(program) {
   }
 
   // The program's own first, in the order they were declared; then the
-  // registers by number; then what the machine holds.
+  // registers, range by range in the order the control lists them and by
+  // number within one; then what the machine holds.
   const order = { declared: 0, register: 1, machine: 2 };
   const firstSeen = new Map([...byKey.keys()].map((k, i) => [k, i]));
+  const rangeIndex = (r) => {
+    const i = regs.ranges.indexOf(r.group);
+    return i < 0 ? regs.ranges.length : i;
+  };
   const rows = [...byKey.values()].sort((a, b) => (order[a.kind] - order[b.kind])
-    || (a.kind === 'register' ? a.number - b.number : 0)
+    || (a.kind === 'register' ? (rangeIndex(a) - rangeIndex(b))
+      || (banks.indexOf(a.bank) - banks.indexOf(b.bank))
+      || (a.number - b.number)
+      || ((a.scope ? 1 : 0) - (b.scope ? 1 : 0)) : 0)
     || (firstSeen.get(a.key) - firstSeen.get(b.key)));
+
+  // The same rows, in the groups the page shows them under.
+  const groups = [];
+  for (const r of rows) {
+    const id = r.kind === 'register' ? `reg:${r.group.bank}:${r.group.from}` : r.kind;
+    let g = groups.find((x) => x.id === id);
+    if (!g) {
+      g = r.kind === 'register'
+        ? { id, kind: 'register', range: r.group, label: r.group.label, span: spanOf(r.group), note: r.group.note || null, rows: [] }
+        : { id, kind: r.kind, label: r.kind === 'machine' ? 'Machine data' : 'In the program', span: '', note: null, rows: [] };
+      groups.push(g);
+    }
+    g.rows.push(r);
+  }
 
   /** The index of the last change in force at move m, or -1. */
   const indexAt = (row, m) => {
@@ -88,6 +123,7 @@ export function variableTimeline(program) {
 
   return {
     rows,
+    groups,
     count: rows.length,
     truncated: !!(program && program.variableTraceTruncated),
     /** The change in force at move m: {value, line, move, src}, or null before the first. */
@@ -103,6 +139,12 @@ export function variableTimeline(program) {
     changedAt(m) { return byMove.get(m) || new Set(); },
     indexAt,
   };
+}
+
+/** The numbers a range covers, the way the control writes them: #100–#199, RG0–RG99. */
+export function spanOf(r) {
+  if (!r) return '';
+  return r.to >= 99999 ? `${r.bank}${r.from} and up` : `${r.bank}${r.from}–${r.bank}${r.to}`;
 }
 
 /** A value the way the control would show it. */
