@@ -9,6 +9,7 @@ import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
 import { Vars, evaluate, ARGUMENTS } from './macro.js';
 import { resolveDialect, detectDialect, DIALECTS, registersOf, parseRegisterKey } from './dialects.js';
+import { BlockLog } from './blockLog.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
 import * as m4 from '../core/mat4.js';
 
@@ -753,6 +754,8 @@ export function interpret(text, config = {}) {
   // which is what makes a family of parts one program instead of twenty.
 
   const vars = new Vars(dialect.locals);
+  /** Every block the run reads, in order: what single block steps through. */
+  const blockLog = new BlockLog(cfg.maxBlockLog || 1000000);
 
   /**
    * What the tool table says, in the units the program is asking in.
@@ -1036,6 +1039,17 @@ export function interpret(text, config = {}) {
     const b = blocks[pc];
     pc++;
     curSrc = b.src || null;
+    // Single block stops after every block that does something — a move,
+    // a spindle start, an assignment — so each one goes in the record. So
+    // does a block the reader could not make sense of: the control would
+    // stop on it too, with an alarm. Blank lines, remarks, labels and the
+    // % marks do nothing to stop on.
+    if (!b.endOfSource && !b.marker && !b.setting && !b.blockDelete && (b.words.length || b.command
+      || (b.names && b.names.length) || b.error
+      || (b.macro && (b.macro.error || b.macro.assigns.length || b.macro.control || b.macro.call || (b.macro.defs && b.macro.defs.length))))) {
+      const at = blockLog.push(b.line, moves.length, curSrc);
+      if (at >= 0) vars.where.block = at;
+    }
     // Where a change to a variable is written down as having happened.
     vars.where.line = b.line;
     vars.where.move = moves.length;
@@ -1896,6 +1910,8 @@ export function interpret(text, config = {}) {
     variablePrefix: registers.main,
     /** The banks this control has and what each range of numbers is for. */
     registers,
+    /** Every block the run read, in order, and the move each started at. */
+    blockLog: blockLog.finish(),
     /** What the program declared, and the machine data it used. */
     namedVariables: vars.catalogueList(),
     /** Every change to a variable that lasts, in the order it happened. */

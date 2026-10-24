@@ -416,8 +416,17 @@ always safe. Everything else is editing something that already exists, and
 that happens in the panel directly.
 
 Playback is the one thing that is neither: the bar under the viewport is
-always visible and owns ⏮ ▶ ⏭ ⇥ ⏭⏭, the scrubber and the speed, so it is
+always visible and owns ⏮ ▶ ⏭ ⏭⏭, the scrubber and the speed, so it is
 never repeated in a panel.
+
+**⏭ is single block**: each press runs the next block of the program and
+stops. A move goes to its end point; a canned cycle runs all of its moves,
+because it is one block; `S6000 M3` or `#100 = 5` moves nothing and still
+takes its press, as on the control, with the line lit in the editor and
+**Program › Variables** showing what it changed. Inside a loop it is the
+next pass; at a call, the first line of the called file. Paused part way
+along a move, the next press finishes that line. `Shift+→` steps one move
+instead.
 
 **M00** and **M01** on the bar are the stop switches. With M00 on — the
 default, because the machine always stops there — playing halts at an
@@ -427,7 +436,8 @@ waiting at and the note says what the line says beside it, which is
 usually why the stop is there: `M00 (TURN THE PART OVER)`. ⏭⏭ and the
 scrubber run straight through. The switches stay where you leave them.
 
-Keyboard: `Space` play/pause, `R` reset, `→` step one move, `F` fit view.
+Keyboard: `Space` play/pause, `R` reset, `→` next line (single block),
+`Shift+→` one move, `F` fit view.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
 
 ## Placing things by clicking

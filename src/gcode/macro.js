@@ -807,7 +807,7 @@ export class Vars {
     this.traceLimit = 200000;
     this.traceTruncated = false;
     /** Where the program is: set by the interpreter before each block. */
-    this.where = { line: 0, move: 0, src: null };
+    this.where = { line: 0, move: 0, src: null, block: -1 };
   }
 
   /** Take the banks and their limits from what a dialect says it has. */
@@ -909,7 +909,7 @@ export class Vars {
   record(key, value) {
     if (!this.trace) return;
     if (this.trace.length >= this.traceLimit) { this.traceTruncated = true; return; }
-    this.trace.push({ key, value, line: this.where.line, move: this.where.move, src: this.where.src });
+    this.trace.push({ key, value, line: this.where.line, move: this.where.move, src: this.where.src, block: this.where.block });
   }
 
   // ---- named variables ----------------------------------------------------
@@ -945,7 +945,7 @@ export class Vars {
     entry.used = true;
     this.catalogue.set(entry.name, { name: entry.name, type: entry.type, dims: null, scope: 'machine', global: true, line: 0 });
     if (this.trace && this.trace.length < this.traceLimit) {
-      this.trace.push({ key: entry.name, value: entry.value, line: 0, move: 0, src: null });
+      this.trace.push({ key: entry.name, value: entry.value, line: 0, move: 0, src: null, block: -1 });
     }
   }
 

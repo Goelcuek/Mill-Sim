@@ -275,6 +275,25 @@ try {
     check(stopped.at[1] === 30 && stopped.finished, 'with M01 off the run should go on to the end');
   }
 
+  // ---- single block: one press, one line ---------------------------------
+  {
+    const stepped = await page.evaluate(() => {
+      const app = window.millsim;
+      app.setControl('fanuc');
+      app.loadProgram(['G90 G21', 'G0 X0 Y0 Z5', 'S6000 M3', '#100 = 7', 'G1 X10 F3000', 'G1 X20', 'M30'].join('\n'), 'step.nc');
+      app.reset();
+      const out = [];
+      for (let i = 0; i < 6; i++) {
+        app.stepLine();
+        out.push(`${app.currentBlock().line}:${app.simulator.pos[0].toFixed(1)}`);
+      }
+      return out;
+    });
+    console.log('single block:', stepped.join(' '));
+    check(stepped.join(' ') === '1:0.0 2:0.0 3:0.0 4:0.0 5:10.0 6:20.0',
+      `each press should run exactly the next line, got ${stepped.join(' ')}`);
+  }
+
   // ---- the stock can be dragged where it belongs ------------------------
   //
   // The handles are only useful if a plain click puts them on the block and
@@ -617,19 +636,24 @@ try {
 
   // ---- single block ------------------------------------------------------
   {
+    // The button on the bar, on a job with a called file: each press is
+    // the next line, wherever it is.
     const step = await page.evaluate(() => {
       const app = window.millsim;
       app.reset();
       const lineNow = () => {
-        const mv = app.state.program.moves[app.simulator.moveIndex];
-        return mv ? `${mv.source || 'main'}:${mv.line}` : 'none';
+        const b = app.currentBlock();
+        return b ? `${b.source || 'main'}:${b.line}` : 'none';
       };
-      const before = lineNow();
-      document.querySelector('.transport button[title^="Single block"]').click();
-      return { before, after: lineNow() };
+      const seen = [];
+      for (let i = 0; i < 4; i++) {
+        document.querySelector('.transport button[title^="Next line"]').click();
+        seen.push(lineNow());
+      }
+      return seen;
     });
-    console.log('single block:', JSON.stringify(step));
-    check(step.before !== step.after, `single block stayed on ${step.before}`);
+    console.log('next line button:', JSON.stringify(step));
+    check(new Set(step).size === step.length, `the step button should land on a new line each press: ${step.join(' ')}`);
   }
 
   // ---- a small part inside a big machine is not clipped ------------------

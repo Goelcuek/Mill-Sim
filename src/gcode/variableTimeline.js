@@ -100,25 +100,41 @@ export function variableTimeline(program) {
     g.rows.push(r);
   }
 
-  /** The index of the last change in force at move m, or -1. */
-  const indexAt = (row, m) => {
+  /**
+   * The index of the last change in force at a point in the run, or -1.
+   *
+   * A point is a move — in force while move m runs — or, when the run is
+   * being stepped a block at a time, a block: everything up to and
+   * including block b. Both only ever go up through the record, so either
+   * is a binary search.
+   */
+  const indexAt = (row, at) => {
+    const byBlock = at !== null && typeof at === 'object' && at.block !== null && at.block !== undefined;
+    const limit = byBlock ? at.block : (typeof at === 'object' && at !== null ? at.move : at);
+    const field = byBlock ? 'block' : 'move';
     const c = row.changes;
     let lo = 0;
     let hi = c.length - 1;
     let found = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (c[mid].move <= m) { found = mid; lo = mid + 1; } else hi = mid - 1;
+      if ((c[mid][field] ?? -1) <= limit) { found = mid; lo = mid + 1; } else hi = mid - 1;
     }
     return found;
   };
 
-  /** Moves whose blocks changed something, for "what changed here". */
+  /** Moves whose blocks changed something, and the blocks themselves. */
   const byMove = new Map();
+  const byBlock = new Map();
   for (const t of trace) {
     let s = byMove.get(t.move);
     if (!s) byMove.set(t.move, (s = new Set()));
     s.add(t.key);
+    if (t.block !== undefined && t.block >= 0) {
+      let b = byBlock.get(t.block);
+      if (!b) byBlock.set(t.block, (b = new Set()));
+      b.add(t.key);
+    }
   }
 
   return {
@@ -126,17 +142,21 @@ export function variableTimeline(program) {
     groups,
     count: rows.length,
     truncated: !!(program && program.variableTraceTruncated),
-    /** The change in force at move m: {value, line, move, src}, or null before the first. */
-    changeAt(row, m) {
-      const i = indexAt(row, m);
+    /** The change in force at a point: {value, line, move, src, block}, or null before the first. */
+    changeAt(row, at) {
+      const i = indexAt(row, at);
       return i < 0 ? null : row.changes[i];
     },
-    valueAt(row, m) {
-      const i = indexAt(row, m);
+    valueAt(row, at) {
+      const i = indexAt(row, at);
       return i < 0 ? undefined : row.changes[i].value;
     },
-    /** Which keys the blocks just before move m changed. */
-    changedAt(m) { return byMove.get(m) || new Set(); },
+    /** Which keys the blocks just before move m changed — or block b itself, stepping. */
+    changedAt(at) {
+      if (at !== null && typeof at === 'object' && at.block !== null && at.block !== undefined) return byBlock.get(at.block) || new Set();
+      const m = typeof at === 'object' && at !== null ? at.move : at;
+      return byMove.get(m) || new Set();
+    },
     indexAt,
   };
 }

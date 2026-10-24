@@ -35,9 +35,10 @@ import { VariablesView } from './variablesPage.js';
  * @returns {{kind:'main'|'sub'|'macro', name:string, sub:object|null}}
  */
 export function runningFile(app) {
-  const program = app.state.program;
-  const mv = program && program.moves[app.simulator.moveIndex];
-  const src = mv && mv.source;
+  // The block just run when stepping, which may move nothing; the move
+  // being made otherwise.
+  const at = app.currentBlock ? app.currentBlock() : null;
+  const src = at && at.source;
   if (!src) return { kind: 'main', name: app.state.programName || 'program.nc', sub: null };
   const sub = app.state.subprograms.find((x) => x.name === src) || null;
   return { kind: sub ? 'sub' : 'macro', name: src, sub };

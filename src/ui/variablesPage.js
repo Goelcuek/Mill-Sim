@@ -112,11 +112,13 @@ export class VariablesView {
     return [this.host];
   }
 
-  /** The move whose values are shown. */
-  moveShown() {
-    const sim = this.app.simulator;
-    if (!this.follow || sim.finished) return Infinity;
-    return sim.moveIndex;
+  /**
+   * Where in the run the values are shown: the move being made, the block
+   * single block has stopped after, or — not following — the end.
+   */
+  position() {
+    if (!this.follow) return { move: Infinity, block: null };
+    return this.app.runPosition();
   }
 
   matches(row) {
@@ -180,7 +182,7 @@ export class VariablesView {
     const where = el('button.var-where', {
       type: 'button',
       title: 'Go to the move this was set before',
-      onclick: () => this.goTo(this.timeline.changeAt(row, this.moveShown())),
+      onclick: () => this.goTo(this.timeline.changeAt(row, this.position())),
     });
     const pin = el('button.var-pin', { type: 'button', onclick: () => app.toggleWatch(row.key) });
     showPin(pin, pinned);
@@ -227,7 +229,7 @@ export class VariablesView {
     });
     cell.history.append(...cell.items);
     cell.lastIndex = undefined;
-    this.updateCell(cell, this.moveShown(), true);
+    this.updateCell(cell, this.position(), true);
   }
 
   /** Run the machine to just before a change, and stay on this page. */
@@ -237,28 +239,38 @@ export class VariablesView {
       this.follow = true;
       this.followBox.checked = true;
     }
-    this.app.seekToMove(change.move);
+    // To the line that set it, when the record says which block that was:
+    // the run stops just after it, as single block would.
+    if (change.block !== undefined && change.block >= 0) this.app.seekToBlock(change.block);
+    else this.app.seekToMove(change.move);
   }
 
-  /** Bring the values on screen up to the move the machine is on. */
+  /** Bring the values on screen up to where the run is. */
   update(force = false) {
     const t = this.timeline;
     if (!t || !t.count) return;
-    const m = this.moveShown();
-    if (!force && m === this.at) return;
-    this.at = m;
+    const at = this.position();
+    const key = `${at.move}:${at.block}`;
+    if (!force && key === this.at) return;
+    this.at = key;
     const program = this.app.state.program;
-    const mv = program && Number.isFinite(m) ? program.moves[m] : null;
-    this.status.textContent = Number.isFinite(m)
-      ? (mv ? `On move ${m + 1} of ${program.moves.length} · line ${mv.line}${mv.source ? ` in ${mv.source}` : ''}` : 'Before the first move')
-      : 'As the program left them';
-    const changed = Number.isFinite(m) ? t.changedAt(m) : null;
-    for (const cell of this.cells.values()) this.updateCell(cell, m, false, changed);
+    const live = at.block !== null || Number.isFinite(at.move);
+    if (at.block !== null) {
+      const b = this.app.currentBlock();
+      this.status.textContent = b ? `Single block · after line ${b.line}${b.source ? ` in ${b.source}` : ''}` : 'Single block';
+    } else {
+      const mv = program && live ? program.moves[at.move] : null;
+      this.status.textContent = live
+        ? (mv ? `On move ${at.move + 1} of ${program.moves.length} · line ${mv.line}${mv.source ? ` in ${mv.source}` : ''}` : 'Before the first move')
+        : 'As the program left them';
+    }
+    const changed = live ? t.changedAt(at) : null;
+    for (const cell of this.cells.values()) this.updateCell(cell, at, false, changed);
   }
 
-  updateCell(cell, m, force, changed = Number.isFinite(m) ? this.timeline.changedAt(m) : null) {
+  updateCell(cell, at, force, changed = (at.block !== null || Number.isFinite(at.move)) ? this.timeline.changedAt(at) : null) {
     const t = this.timeline;
-    const i = t.indexAt(cell.row, m);
+    const i = t.indexAt(cell.row, at);
     if (!force && i === cell.lastIndex) {
       cell.node.classList.toggle('changed', !!(changed && changed.has(cell.row.key)));
       return;

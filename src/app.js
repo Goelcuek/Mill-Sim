@@ -48,6 +48,7 @@ import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
 import { fmt, fmtDuration, clamp, uid, clone, wrapAngle, deg2rad, rad2deg } from './core/util.js';
 import { variableTimeline, formatVariable } from './gcode/variableTimeline.js';
 import { loadWatch, saveWatch } from './ui/watch.js';
+import { blockAt, moveAfter, blockBeforeMove, blockOfMove } from './gcode/blockLog.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
 export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
@@ -199,6 +200,9 @@ export class App {
     this.watch = loadWatch();
     /** The stop the run last waited at, so play goes on past it. */
     this.stopCursor = -1;
+    /** The block single block has stopped after; null while playing through. */
+    this.stepCursor = null;
+    this.pendingCursor = null;
 
     this.buildLayout();
     this.buildScene();
@@ -677,8 +681,7 @@ export class App {
     this.transport.append(
       button('⏮', () => this.reset(), { title: 'Back to the start (R)' }),
       this.playBtn,
-      button('⏭', () => this.stepMove(), { title: 'Advance one move (→)' }),
-      button('⇥', () => this.stepBlock(), { title: 'Single block — run to the end of this block (N)' }),
+      button('⏭', () => this.stepLine(), { title: 'Next line: run the next block of the program and stop (→)' }),
       this.stopButtons.m0,
       this.stopButtons.m1,
       button('⏭⏭', () => this.runToEnd(), { title: 'Simulate the whole program now' }),
@@ -725,8 +728,7 @@ export class App {
     if (!program) return [];
     if (this._stops && this._stops.program === program) return this._stops.list;
     const moves = program.moves;
-    const starts = new Float64Array(moves.length + 1);
-    for (let i = 0; i < moves.length; i++) starts[i + 1] = starts[i] + moves[i].time;
+    const starts = this.moveStarts();
     const list = (program.events || [])
       .filter((e) => e.type === 'stop' && e.moveIndex < moves.length)
       .map((e) => ({ ...e, key: e.code === 1 ? 'm1' : 'm0', time: starts[e.moveIndex] }));
@@ -753,6 +755,15 @@ export class App {
     this.stopCursor = found.index;
     this.pause();
     const s = found.stop;
+    // Waiting at the M00 block itself, as single block would: the next
+    // press of ⏭ runs the line after it.
+    const log = this.state.program.blockLog;
+    if (log) {
+      for (let i = blockBeforeMove(log, s.moveIndex) + 1; i < log.count && log.move[i] === s.moveIndex; i++) {
+        const b = blockAt(log, i);
+        if (b.line === s.line && (b.source || null) === (s.source || null)) { this.setStepCursor(i); break; }
+      }
+    }
     const code = s.key === 'm0' ? 'M00' : 'M01';
     this.stopNote.textContent = `${code} · line ${s.line}`;
     this.stopNote.style.display = '';
@@ -783,8 +794,8 @@ export class App {
       if (e.key === 'Escape') { this.clearSelection(); return; }
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
-      else if (e.key === 'ArrowRight') this.stepMove();
-      else if (e.key === 'n' || e.key === 'N') this.stepBlock();
+      else if (e.key === 'ArrowRight' && e.shiftKey) this.stepMove();
+      else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') this.stepLine();
       else if (e.key === 'f' || e.key === 'F') this.fitToScene();
     });
   }
@@ -1927,6 +1938,7 @@ export class App {
 
   play() {
     this.stopJog();
+    this.setStepCursor(null);
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
       return;
@@ -1945,6 +1957,8 @@ export class App {
   reset() {
     this.pause();
     this.forgetStop();
+    this.setStepCursor(null);
+    this.pendingCursor = null;
     this.simulator.reset();
     this.stockView.sync(true);
     this.state.seekTarget = null;
@@ -1953,42 +1967,154 @@ export class App {
     this.viewer.invalidate();
   }
 
-  stepMove() {
-    if (!this.state.program) return;
-    this.pause();
-    const sim = this.simulator;
-    const target = sim.moveIndex;
-    let guard = 0;
-    while (sim.moveIndex === target && !sim.finished && guard++ < 4000) sim.run(Infinity, 8);
-    this.stockView.sync();
-    this.updateTransport();
-    this.refreshResults();
+  /** Where each move starts in the run's time, and where the last one ends. */
+  moveStarts() {
+    const program = this.state.program;
+    if (!program) return new Float64Array(1);
+    if (!this._starts || this._starts.program !== program) {
+      const moves = program.moves;
+      const starts = new Float64Array(moves.length + 1);
+      for (let i = 0; i < moves.length; i++) starts[i + 1] = starts[i] + moves[i].time;
+      this._starts = { program, starts };
+    }
+    return this._starts.starts;
   }
 
   /**
-   * Single block: run to the end of the block that is running.
+   * Run the simulation to a time and no further.
    *
-   * Not the same as one move. A canned cycle is one block and a dozen
-   * moves — rapid over, peck, peck, peck, retract — and a machinist
-   * stepping through a program in single block expects the whole cycle to
-   * go by on one press, because that is what the machine does. So the
-   * yardstick is the line, not the move: run until the program is on a
-   * different one.
+   * The simulator's own run() goes on for as long as its time budget lets
+   * it, move after move; asked for "everything", it does a frame's worth of
+   * them. That is right for playing and wrong for stepping, where the
+   * point is to stop exactly at the end of something.
    */
-  stepBlock() {
-    if (!this.state.program) return;
+  runTo(target) {
+    const sim = this.simulator;
+    let guard = 0;
+    while (!sim.finished && sim.time < target - 1e-9 && guard++ < 100000) {
+      const before = sim.time;
+      sim.run(target - sim.time, 50);
+      if (sim.time === before) break;
+    }
+  }
+
+  /** The block the run has stepped to, or null when it is playing through. */
+  setStepCursor(i) {
+    this.stepCursor = i === null ? null : { program: this.state.program, block: i };
+  }
+
+  /** The block single block is stopped after, if the run is being stepped. */
+  steppedBlock() {
+    const c = this.stepCursor;
+    return c && c.program === this.state.program ? c.block : null;
+  }
+
+  /**
+   * Where the run is, for anything that shows values along it: a move
+   * while playing, or the block just run while stepping.
+   */
+  runPosition() {
+    const sim = this.simulator;
+    const b = this.steppedBlock();
+    if (b !== null) return { move: sim.moveIndex, block: b };
+    if (sim.finished) return { move: Infinity, block: null };
+    return { move: sim.moveIndex, block: null };
+  }
+
+  /**
+   * The line the machine is on, and the file it is in.
+   *
+   * Playing, that is the move being made. Stepped, it is the block just run
+   * — which may be one that moves nothing, S6000 M3 or #100 = 5, and is the
+   * line the operator expects to see lit after pressing single block.
+   */
+  currentBlock() {
+    const program = this.state.program;
+    if (!program) return null;
+    const b = this.steppedBlock();
+    if (b !== null) {
+      const at = blockAt(program.blockLog, b);
+      if (at) return at;
+    }
+    const mv = program.moves[this.simulator.moveIndex];
+    return mv ? { line: mv.line, source: mv.source || null } : null;
+  }
+
+  /**
+   * Single block: run the next line of the program and stop.
+   *
+   * One press, one block — the next one the control would read, whatever
+   * it is. A move goes to its end point; a canned cycle runs all of its
+   * moves, because it is one block; S6000 M3 or #100 = 5 moves nothing and
+   * still takes its press, as on the machine, and Program › Variables
+   * shows what it changed. Inside a loop it is the next pass; at a call,
+   * the first line of what was called.
+   */
+  stepLine() {
+    const program = this.state.program;
+    if (!program) return;
     this.pause();
     const sim = this.simulator;
-    const lineNow = () => {
-      const mv = this.state.program.moves[sim.moveIndex];
-      return mv ? mv.line : -1;
-    };
-    const from = lineNow();
-    let guard = 0;
-    while (!sim.finished && lineNow() === from && guard++ < 20000) sim.run(Infinity, 8);
+    const log = program.blockLog;
+    const ended = () => this.notify('The program has ended. Press ⏮ to go back to the start.', 'info');
+    // Played to the end: nothing left. Stepped to the last move, there may
+    // still be blocks after it — M05, M30 — and each gets its press.
+    if (sim.finished && this.steppedBlock() === null) { ended(); return; }
+    // A program whose record stopped short (a very long loop) steps by
+    // move once it is past where the record ends.
+    if (!log || !log.count || (log.truncated && sim.moveIndex >= log.move[log.count - 1])) {
+      this.stepMove();
+      return;
+    }
+    let done = this.steppedBlock();
+    if (done === null) {
+      // Played or scrubbed to here. Part way along a move, the next press
+      // finishes the line it belongs to; at the start of one, the next
+      // line is whatever comes after the block that made the last move.
+      const starts = this.moveStarts();
+      const k = sim.moveIndex;
+      done = sim.time > starts[k] + 1e-6 ? blockOfMove(log, k) - 1 : blockBeforeMove(log, k);
+    }
+    const next = done + 1;
+    if (next >= log.count) {
+      ended();
+      return;
+    } else {
+      this.runTo(this.moveStarts()[moveAfter(log, next, program.moves.length)]);
+      this.setStepCursor(next);
+    }
+    this.forgetStop();
+    this.afterStep();
+  }
+
+  /** One move, whatever line it is on. Shift+→. */
+  stepMove() {
+    const program = this.state.program;
+    if (!program) return;
+    this.pause();
+    this.setStepCursor(null);
+    const sim = this.simulator;
+    if (sim.finished) return;
+    const starts = this.moveStarts();
+    const k = sim.moveIndex;
+    // At the very start of move k, run all of it; part way, run the rest.
+    this.runTo(starts[Math.min(k + 1, program.moves.length)]);
+    // The last move of its line: the line is done, and is the one shown.
+    const log = program.blockLog;
+    if (log && log.count) {
+      const p = blockOfMove(log, k);
+      if (p >= 0 && moveAfter(log, p, program.moves.length) === k + 1) this.setStepCursor(p);
+    }
+    this.afterStep();
+  }
+
+  afterStep() {
     this.stockView.sync();
+    this.showAssembly(this.simulator.activeSlot);
     this.updateTransport();
+    this.updateHud();
     this.refreshResults();
+    this.viewer.invalidate();
   }
 
   runToEnd() {
@@ -2004,7 +2130,18 @@ export class App {
   seekTo(time) {
     this.pause();
     this.forgetStop();
+    this.setStepCursor(null);
+    this.pendingCursor = null;
     this.state.seekTarget = time;
+  }
+
+  /** Run to just after block b of the run, and wait there as single block does. */
+  seekToBlock(b) {
+    const program = this.state.program;
+    const log = program && program.blockLog;
+    if (!log || b < 0 || b >= log.count) return;
+    this.seekTo(this.moveStarts()[moveAfter(log, b, program.moves.length)]);
+    this.pendingCursor = { program, block: b };
   }
 
   /** Go to the start of a move: where a variable was set, say. */
@@ -2081,6 +2218,9 @@ export class App {
       if (sim.finished || sim.time >= target - 1e-6) {
         this.state.seekTarget = null;
         this.seekNote.style.display = 'none';
+        // A seek to a line ends on that line, not on the move after it.
+        if (this.pendingCursor && this.pendingCursor.program === this.state.program) this.setStepCursor(this.pendingCursor.block);
+        this.pendingCursor = null;
         this.refreshResults();
       } else {
         this.seekNote.style.display = '';
@@ -2366,13 +2506,13 @@ export class App {
     const total = sim.totalTime;
     this.scrub.value = String(Math.round(sim.progress * 1000));
     this.timeLabel.textContent = `${fmtDuration(sim.time)} / ${fmtDuration(total)}`;
-    const mv = this.state.program && this.state.program.moves[sim.moveIndex];
-    this.lineLabel.textContent = mv ? `line ${mv.line}` : 'line –';
+    const at = this.currentBlock();
+    this.lineLabel.textContent = at ? `line ${at.line}` : 'line –';
     // The line and the file it is counted in: a subprogram's line 12 is
     // not the main program's line 12, and highlighting one for the other
     // is how the editor used to point at a block nobody was running.
-    if (this.panels && this.activeTab === 'program' && mv) {
-      this.panels.program.setActiveLine(mv.line, mv.source || null);
+    if (this.panels && this.activeTab === 'program' && at) {
+      this.panels.program.setActiveLine(at.line, at.source || null);
       this.panels.program.updateVariables();
     }
   }
@@ -2482,8 +2622,8 @@ export class App {
     }
     if (this.hudWatch && this.hudWatch.length) {
       const t = this.variables();
-      const m = sim.finished ? Infinity : sim.moveIndex;
-      for (const w of this.hudWatch) set(w.node, formatVariable(t.valueAt(w.row, m), w.row.type));
+      const at = this.runPosition();
+      for (const w of this.hudWatch) set(w.node, formatVariable(t.valueAt(w.row, at), w.row.type));
     }
 
     this.toolView.setAlert(errors.length > 0 && this.state.playing && errors[errors.length - 1].moveIndex >= sim.moveIndex - 2);
