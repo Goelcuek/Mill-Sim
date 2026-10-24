@@ -56,13 +56,19 @@ test('every axis lands on the branch its layout implies', () => {
 });
 
 test('the tree nests slaves under their master for the panel', () => {
+  // The trunnion stands on the bed; X, Y and Z are all in the head.
   const k = buildPreset('tableTable');
   assert.equal(k.depth('base'), 0);
   assert.equal(k.depth('y'), 1);
-  assert.equal(k.depth('c'), 4);                       // base>y>x>a>c
+  assert.equal(k.depth('c'), 2);                       // base>a>c
+  assert.equal(k.depth('z'), 3);                       // base>y>x>z
   assert.deepEqual(k.children('a').map((n) => n.id), ['c']);
   assert.deepEqual(k.roots().map((n) => n.id), ['base']);
-  assert.deepEqual(k.pathTo('c').map((n) => n.id), ['base', 'y', 'x', 'a', 'c']);
+  assert.deepEqual(k.pathTo('c').map((n) => n.id), ['base', 'a', 'c']);
+  assert.deepEqual(k.pathTo('spindle').map((n) => n.id), ['base', 'y', 'x', 'z', 'spindle']);
+  for (const L of ['X', 'Y', 'Z']) {
+    assert.equal(k.branchOf(k.axes().find((n) => n.letter === L).id), 'tool', `${L} is in the head`);
+  }
 });
 
 test('a slaved axis follows its master by the ratio', () => {

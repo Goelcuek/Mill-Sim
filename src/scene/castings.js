@@ -248,6 +248,77 @@ export function buildCasting(spec, mat) {
       break;
     }
 
+    // ---- the explicit kit -------------------------------------------------
+    //
+    // The parts above each guess at a shape from one size and a placement,
+    // and the presets that used them ended up with spindles poking out of
+    // their heads and covers standing through the table. These say exactly
+    // where they are, so a machine can be laid out in real dimensions and
+    // read: a block between two corners, a cylinder on an axis, a T-slotted
+    // plate, a rotary table by its face.
+
+    // Nothing: an axis that carries no casting of its own, said on purpose
+    // so it does not get the generic stand-in an undescribed axis gets.
+    case 'none':
+      break;
+
+    // A block between two corners, in the node's own frame.
+    case 'block': {
+      const mn = spec.min || [0, 0, 0];
+      const mx = spec.max || [100, 100, 100];
+      const b = push(box(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2], mat(tone || 'body'),
+        (mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, mn[2]));
+      if (spec.name) b.name = spec.name;
+      break;
+    }
+
+    // A cylinder by its centre, its length along an axis and its radius —
+    // or two radii, for a cone, the second at the far end along the axis.
+    case 'drum': {
+      const axis = spec.axis || [0, 0, 1];
+      const r0 = spec.radius ?? 50;
+      const r1 = spec.radiusEnd ?? r0;
+      const d = push(cyl(r1, r0, spec.length || 50, axis, mat(tone || 'body')));
+      d.position.set(x, y, z);
+      if (spec.name) d.name = spec.name;
+      break;
+    }
+
+    // A T-slotted plate between two corners, the slots running along X.
+    case 'slotted': {
+      const mn = spec.min || [0, 0, 0];
+      const mx = spec.max || [100, 100, 100];
+      const w = mx[0] - mn[0], d = mx[1] - mn[1], h = mx[2] - mn[2];
+      push(box(w, d, h, mat(tone || 'table'), (mn[0] + mx[0]) / 2, (mn[1] + mx[1]) / 2, mn[2]));
+      const n = spec.slots || 5;
+      for (let i = 0; i < n; i++) {
+        const sy = mn[1] + (d * (i + 0.5)) / n;
+        // Sunk into the face and standing a millimetre proud of it, so the
+        // groove never shares a plane with the top.
+        push(box(w * 0.995, Math.max(d * 0.03, 12), 13, mat('way'), (mn[0] + mx[0]) / 2, sy, mx[2] - 12));
+      }
+      break;
+    }
+
+    // A rotary table by the centre of its face, face up: the platter, its
+    // T-slots and a centre bore, and nothing below the face but the
+    // platter itself — the drive housing belongs to whatever carries it.
+    case 'rotaryTable': {
+      const r = spec.radius || 150;
+      const t = spec.thickness || 40;
+      const platter = push(cyl(r, r, t, [0, 0, 1], mat(tone || 'rotary')));
+      platter.position.set(x, y, z - t / 2);
+      const n = spec.slots ?? 4;
+      for (let i = 0; i < n; i++) {
+        const slot = push(box(r * 1.7, Math.max(r * 0.07, 10), 13, mat('way'), 0, 0, 0));
+        slot.position.set(x, y, z - 12 + 6.5);
+        slot.rotation.z = (i / n) * Math.PI;
+      }
+      const bore = push(cyl(r * 0.12, r * 0.12, 14, [0, 0, 1], mat('steel')));
+      bore.position.set(x, y, z - 6);
+      break;
+    }
+
     case 'box':
     default: {
       const [w, d, h] = s;

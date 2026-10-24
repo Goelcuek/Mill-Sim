@@ -134,7 +134,13 @@ export class MachinePanel extends Panel {
   jogPage() {
     const app = this.app;
     const k = this.kin;
-    const axes = k.axes();
+    // In the order a pendant lists them — X, Y, Z, then whatever else
+    // slides, then the rotaries — not in the order the chain happens to
+    // reach them: a trunnion's chain starts with A, and a jog page that
+    // opens on A reads as a machine with no X.
+    const ORDER = 'XYZUVWABC';
+    const rank = (n) => { const i = ORDER.indexOf(n.letter); return i < 0 ? ORDER.length : i; };
+    const axes = k.axes().slice().sort((a, b) => rank(a) - rank(b));
     const jog = app.jog || {};
 
     if (!axes.length) {
