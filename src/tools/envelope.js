@@ -141,7 +141,11 @@ export function buildEnvelope(points, samples = 768) {
   let zMin = NO_CONTACT;
   for (let i = 0; i <= n; i++) if (lut[i] < zMin) zMin = lut[i];
 
-  return new Envelope(lut, rMax, zMin);
+  const env = new Envelope(lut, rMax, zMin);
+  // The silhouette itself, for a model that has to ask about lines at any
+  // angle to the tool rather than only along it. See tools/profile.js.
+  env.points = pts;
+  return env;
 }
 
 /**
