@@ -46,6 +46,8 @@ import { ViewPanel } from './ui/viewPanel.js';
 import { Ribbon } from './ui/ribbon.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
 import { fmt, fmtDuration, clamp, uid, clone, wrapAngle, deg2rad, rad2deg } from './core/util.js';
+import { variableTimeline, formatVariable } from './gcode/variableTimeline.js';
+import { loadWatch, saveWatch } from './ui/watch.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
 export const RESOLUTIONS = [1, 0.8, 0.6, 0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.1, 0.075, 0.05, 0.035, 0.025];
@@ -175,6 +177,8 @@ export class App {
     this.analyzer.setMaterial(this.state.cutting.material);
     this.simulator.analyzer = this.analyzer;
     this.stock = null;
+    /** Variables pinned to the readout, by name. */
+    this.watch = loadWatch();
 
     this.buildLayout();
     this.buildScene();
@@ -1885,6 +1889,40 @@ export class App {
     this.state.seekTarget = time;
   }
 
+  /** Go to the start of a move: where a variable was set, say. */
+  seekToMove(index) {
+    const moves = this.state.program && this.state.program.moves;
+    if (!moves || !moves.length) return;
+    if (index >= moves.length) { this.seekTo(this.simulator.totalTime); return; }
+    let acc = 0;
+    for (let i = 0; i < Math.max(0, index); i++) acc += moves[i].time;
+    // Just inside it, so the move shown is this one and not the end of the
+    // last — by more than the microsecond a seek is allowed to stop short.
+    this.seekTo(acc + Math.max(2e-6, Math.min(1e-4, moves[index].time / 2)));
+  }
+
+  /**
+   * What every variable held, through the run, for the loaded program.
+   * Worked out once per program, when something first asks.
+   */
+  variables() {
+    const program = this.state.program;
+    if (!program) return null;
+    if (!this._timeline || this._timeline.program !== program) {
+      this._timeline = { program, timeline: variableTimeline(program) };
+    }
+    return this._timeline.timeline;
+  }
+
+  /** Pin a variable to the readout, or take it off. */
+  toggleWatch(key) {
+    if (this.watch.has(key)) this.watch.delete(key); else this.watch.add(key);
+    saveWatch(this.watch);
+    this.buildHud();
+    this.updateHud();
+    if (this.panels && this.panels.program) this.panels.program.vars.syncPins();
+  }
+
   seekToLine(line, time) {
     if (!this.state.program) return;
     if (time !== undefined && time !== null) {
@@ -2210,6 +2248,7 @@ export class App {
     // is how the editor used to point at a block nobody was running.
     if (this.panels && this.activeTab === 'program' && mv) {
       this.panels.program.setActiveLine(mv.line, mv.source || null);
+      this.panels.program.updateVariables();
     }
   }
 
@@ -2247,11 +2286,38 @@ export class App {
       el('div.hud-row.dim', {}, [cell('span', 'removed'), val('removed')]),
       // What the cutter is meeting on this move, when it is cutting.
       this.hudLoad = el('div.hud-row.dim', {}, [dim('load')]),
+      this.watchRow(),
     ].filter(Boolean));
+  }
+
+  /**
+   * The variables pinned on Program › Variables, on the readout.
+   *
+   * Only the ones this program has: a pin is kept by name, and a name the
+   * program never uses would be a dash that says nothing.
+   */
+  watchRow() {
+    this.hudWatch = [];
+    const t = this.variables();
+    if (!t || !this.watch.size) return null;
+    const rows = t.rows.filter((r) => this.watch.has(r.key)).slice(0, 8);
+    if (!rows.length) return null;
+    const cells = [];
+    for (const r of rows) {
+      const value = el('b');
+      this.hudWatch.push({ row: r, node: value });
+      cells.push(el('span.hud-watch', {}, [el('span.hud-axis', {}, r.name), value]));
+    }
+    return el('div.hud-row.hud-watch-row', { title: 'Pinned on Program › Variables' }, cells);
   }
 
   updateHud() {
     const sim = this.simulator;
+    // A new program has its own variables; the row is drawn for those.
+    if (this.hudFields && this.hudWatchFor !== this.state.program) {
+      this.hudWatchFor = this.state.program;
+      this.buildHud();
+    }
     const mv = this.state.program && this.state.program.moves[sim.moveIndex];
     const slot = sim.activeSlot;
     const errors = sim.collisions.filter((c) => c.severity === 'error');
@@ -2288,6 +2354,11 @@ export class App {
       set(f.load, a.plunge[k]
         ? `plunge · thrust ${Math.round(a.force[k])} N · ${a.power[k].toFixed(2)} kW`
         : `${Math.round(a.force[k])} N · ${a.power[k].toFixed(2)} kW · bends ${units.len(a.deflection[k], 3)} ${units.lengthLabel()} · ap ${units.len(a.ap[k], 2)}`);
+    }
+    if (this.hudWatch && this.hudWatch.length) {
+      const t = this.variables();
+      const m = sim.finished ? Infinity : sim.moveIndex;
+      for (const w of this.hudWatch) set(w.node, formatVariable(t.valueAt(w.row, m), w.row.type));
     }
 
     this.toolView.setAlert(errors.length > 0 && this.state.playing && errors[errors.length - 1].moveIndex >= sim.moveIndex - 2);

@@ -43,6 +43,8 @@ const PATHS = {
   view: 'M12 3l9 5v8l-9 5-9-5V8z',
   gouge: 'M4 8h16M4 8v8M20 8v8M9 8v5l3 3 3-3V8',
   code: 'M9 7l-5 5 5 5M15 7l5 5-5 5M13 4l-2 16',
+  // An x between braces: a value with a name.
+  variable: 'M8 4c-2 0-3 1-3 3v2.5C5 11 4 12 3 12c1 0 2 1 2 2.5V17c0 2 1 3 3 3M16 4c2 0 3 1 3 3v2.5c0 1.5 1 2.5 2 2.5-1 0-2 1-2 2.5V17c0 2-1 3-3 3M9.5 9.5l5 5M14.5 9.5l-5 5',
 };
 
 /**

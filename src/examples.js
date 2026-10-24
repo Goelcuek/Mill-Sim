@@ -136,7 +136,7 @@ export const EXAMPLES = [
   },
   {
     "name": "Siemens 840D bolt circle",
-    "description": "The same job in the other spelling: R parameters, round brackets for arithmetic, symbol comparisons, ENDWHILE, FOR/ENDFOR and a named label. Loading it sets the machine to read Siemens.",
+    "description": "The same job in the other spelling: variables declared with DEF and used by name, R parameters, round brackets for arithmetic, symbol comparisons, ENDWHILE, FOR/ENDFOR and a named label. Program › Variables follows them through the run. Loading it sets the machine to read Siemens.",
     "setup": {
       "stock": {
         "size": [

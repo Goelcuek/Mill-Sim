@@ -15,11 +15,13 @@ import { Panel, actionRow } from './panel.js';
 import { programNumber } from '../gcode/lexer.js';
 import { uid } from '../core/util.js';
 import { GcodeEditor } from './editor.js';
-import { fmt, fmtDuration } from '../core/util.js';
+import { fmtDuration } from '../core/util.js';
 import { EXAMPLES, loadExample } from '../examples.js';
 import { DIALECTS } from '../gcode/dialects.js';
+import { formatVariable } from '../gcode/variableTimeline.js';
 import { openNewSubprogramDialog, machineDialect, callLine } from './programDialogs.js';
 import * as units from '../core/units.js';
+import { VariablesView } from './variablesPage.js';
 
 /**
  * Which file the machine is in right now.
@@ -63,11 +65,20 @@ export class ProgramPanel extends Panel {
         render: ProgramPanel.prototype.editorPage,
       },
       { id: 'subs', label: 'Programs', icon: 'library', hint: 'Every file in this job — the main program and what it calls', badge: () => app.state.subprograms.length + 1, render: ProgramPanel.prototype.subsPage },
+      {
+        id: 'variables',
+        label: 'Variables',
+        icon: 'variable',
+        hint: 'What each variable held on the move the machine is on, and the line that set it',
+        badge: () => { const t = app.variables(); return (t && t.count) || null; },
+        render: ProgramPanel.prototype.variablesPage,
+      },
       { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
     ]);
     this.editorHost = el('div.editor-host');
     this.subHost = el('div.editor-host');
     this.summaryHost = el('div.summary-host');
+    this.vars = new VariablesView(app);
     this.editor = null;
     this.subEditor = null;
     /** Which subprogram the page is acting on. */
@@ -398,6 +409,15 @@ export class ProgramPanel extends Panel {
     return [this.summaryHost];
   }
 
+  variablesPage() {
+    return this.vars.render();
+  }
+
+  /** The run has moved: the values on the Variables page follow it. */
+  updateVariables() {
+    if (this.page === 'variables') this.vars.update();
+  }
+
   /**
    * Show whatever program the app is holding.
    *
@@ -475,6 +495,12 @@ export class ProgramPanel extends Panel {
       this.render();
       return;
     }
+    // Drawn again only when the program is a new one, so the search box
+    // keeps the caret while the program is re-read underneath it.
+    if (this.page === 'variables') {
+      this.vars.render();
+      return;
+    }
     // A different file is running: the page names it and shows it, so it
     // is drawn again rather than patched.
     const showing = runningFile(this.app);
@@ -542,20 +568,25 @@ export class ProgramPanel extends Panel {
       { label: 'Fit the stock to the path', onClick: () => this.app.fitStockToProgram() },
     ])]));
 
-    // What the macro variables came to, when the program used any. A macro
+    // What the variables came to, when the program used any. A macro
     // program that lands in the wrong place is usually a variable that is
-    // not what its author thought, so this is the first place to look.
-    if (program.variables && program.variables.length) {
-      const mark = program.variablePrefix || '#';
-      const grid = el('div.stat-grid', {}, program.variables.slice(0, 24).map((v) => el('div.stat', {}, [
-        el('div.stat-label', {}, `${mark}${v.n}`),
-        el('div.stat-value', {}, fmt(v.value, 4)),
+    // not what its author thought, so this is the first place to look —
+    // and the Variables page is where to look at it move by move.
+    const timeline = this.app.variables();
+    if (timeline && timeline.count) {
+      const rows = timeline.rows.filter((r) => !r.preset).slice(0, 12);
+      const grid = el('div.stat-grid', {}, rows.map((r) => el('div.stat', {}, [
+        el('div.stat-label', {}, r.name),
+        el('div.stat-value', {}, formatVariable(timeline.valueAt(r, Infinity), r.type)),
       ])));
-      this.summaryHost.appendChild(section(`Macro variables (${program.variables.length})`, [
+      this.summaryHost.appendChild(section(`Variables (${timeline.count})`, [
         grid,
-        el('div.hint', {}, program.variables.length > 24
-          ? `The first 24, as they stood when the program ended. Anything local to a macro call is not listed.`
-          : 'As they stood when the program ended. Anything local to a macro call is not listed.'),
+        el('div.hint', {}, rows.length < timeline.count
+          ? `${rows.length} of them, as they stood when the program ended.`
+          : 'As they stood when the program ended.'),
+        actionRow([
+          { label: 'Follow them through the run', onClick: () => this.app.setPage('program', 'variables'), hint: 'Program › Variables: each value on the move the machine is on, and the line that set it' },
+        ]),
       ]));
     }
 

@@ -410,6 +410,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .hud-axis { color: var(--text-3); font-size: 11px; font-weight: 600; }
 .hud-val { font-family: var(--mono); font-size: 12.5px; min-width: 62px; }
 .hud-row.dim { color: var(--text-3); font-size: 11.5px; }
+/* The variables pinned on Program › Variables. */
+.hud-watch-row { flex-wrap: wrap; column-gap: 12px; row-gap: 2px; font-size: 11.5px; }
+.hud-watch { display: inline-flex; gap: 5px; align-items: baseline; }
+.hud-watch b { font-family: var(--mono); font-weight: 600; }
 /* Which unit the three numbers above are in, said once at the end of the
    row rather than three times. */
 .hud-unit { color: var(--text-3); font-size: 11px; margin-left: -4px; }
@@ -805,6 +809,66 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .issues li.issue-error { border-left-color: var(--danger); background: var(--danger-soft); }
 .issues li.issue-warning { border-left-color: var(--warn); background: var(--warn-soft); }
 .issue-line { font-family: var(--mono); color: var(--text-3); margin-right: 6px; }
+
+/* Program › Variables. One row a variable: pin, name, value, where set. */
+.vars-host { padding: 12px 14px 16px; }
+.vars-toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.vars-search {
+  flex: 1 1 auto; min-width: 0;
+  font: inherit; font-size: 12.5px;
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.vars-toolbar .checkbox { flex: 0 0 auto; white-space: nowrap; }
+.vars-status { font-size: 11px; color: var(--text-3); margin: 0 0 8px; font-variant-numeric: tabular-nums; }
+.vars-group-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px; font-weight: 600; color: var(--text-2);
+  text-transform: uppercase; letter-spacing: .04em;
+  margin: 12px 0 4px; padding-bottom: 3px;
+  border-bottom: 1px solid var(--line);
+}
+.vars-group-head:first-child { margin-top: 0; }
+.vars-count { font-weight: 500; color: var(--text-3); }
+.vars-hint { margin-top: 6px; }
+.var-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  gap: 6px; align-items: center;
+  padding: 3px 4px;
+  border-radius: var(--r-sm);
+  transition: background .25s ease;
+}
+.var-row:hover { background: var(--surface-2); }
+/* Set by the blocks just before the move the machine is on. */
+.var-row.changed { background: var(--accent-soft); }
+.var-row button { font: inherit; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; text-align: left; }
+.var-pin { font-size: 14px; color: var(--text-4); line-height: 1; text-align: center !important; }
+.var-pin.on { color: var(--snap-corner); }
+.var-name { display: flex; gap: 6px; align-items: baseline; min-width: 0; overflow: hidden; }
+.var-key { font-family: var(--mono); font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.var-type { font-size: 10px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.var-value { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.var-value.unset { color: var(--text-4); }
+.var-where { font-family: var(--mono); font-size: 11px; color: var(--accent) !important; min-width: 34px; text-align: right !important; }
+.var-where:disabled { color: var(--text-4) !important; cursor: default; }
+.var-history { display: flex; flex-direction: column; gap: 1px; margin: 2px 0 6px 28px; }
+.var-change {
+  display: flex; justify-content: space-between; gap: 10px;
+  font: inherit; font-size: 11px; text-align: left;
+  background: var(--surface-2); border: 0; border-radius: 4px;
+  padding: 3px 8px; cursor: pointer; color: var(--text-2);
+}
+.var-change:hover { background: var(--surface-sunken); }
+.var-change.current { background: var(--accent-soft); color: var(--accent-press); }
+.var-change-value { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.vars-example {
+  font-family: var(--mono); font-size: 11.5px;
+  background: var(--surface-2); border-radius: var(--r-sm);
+  padding: 8px 10px; margin: 6px 0; white-space: pre-wrap;
+}
 
 .verdict { padding: 10px 12px; border-radius: var(--r-md); font-weight: 550; }
 .verdict.ok { background: var(--ok-soft); color: #14713a; }

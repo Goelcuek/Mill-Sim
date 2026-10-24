@@ -190,10 +190,41 @@ the usual precedence and the usual functions (in degrees, like the
 control), an expression anywhere a number goes, conditional jumps and
 assignments, `WHILE` loops, `FOR` and `REPEAT` on the controls that have
 them, and macro calls whose letters arrive as arguments. A program that
-uses none of it is read exactly as it was before. What a run left in the
-variables is on **Program › Summary** — written the way that control
-writes them — which is the first place to look when a macro program lands
-somewhere odd.
+uses none of it is read exactly as it was before.
+
+On a Siemens a program also names its own variables, and the reader runs
+them the way the control does:
+
+```gcode
+DEF REAL DEPTH=6, STEP=1.5, ZZ
+DEF INT PASSES=0
+DEF REAL CORNER[2]=SET(-20, 15)
+DEF STRING[16] OP="ROUGH"
+ZZ = ZZ - STEP
+PASSES = PASSES + 1
+G1 X=CORNER[0] Z=ZZ F300
+IF OP=="ROUGH" GOTOF NEXT
+```
+
+`REAL`, `INT` (rounded half away from zero, as the control does), `BOOL`
+with `TRUE`/`FALSE`, `STRING` and `CHAR`, arrays of one or two dimensions
+counted from zero and checked against their size, and a scope per
+subprogram call, so a subprogram's `DEF` is its own and goes when it
+returns. A name the program does not declare is the control's global user
+data: the reader takes it from the machine's named parameters on
+**Machine › Macros**, so `G0 Z=SAFEZ` reads the machine's `SAFEZ`. A
+name that is neither says so, on its line.
+
+**Program › Variables** follows all of them through the run — the
+program's own, the `R`/`#` parameters and the machine data it read — with
+the value in force on the move the machine is on, the line that last set
+it, and the whole history of each one a click away; a line in that
+history takes the run there. Rows the blocks just before this move
+changed are lit. Pin one with the star and it rides on the readout over
+the viewport, so `PASSES` and `ZZ` can be watched while the cut plays.
+What the variables came to at the end is also on **Program › Summary**,
+which is the first place to look when a macro program lands somewhere
+odd.
 
 **Measuring.** A verifier that cannot answer "how deep is that pocket" is
 asking to be trusted and checked somewhere else. **View › Measure** takes
@@ -344,7 +375,7 @@ collapse the page row and give the viewport the space back.
 | **Setup** | Project · Stock · Work offsets · Fixtures · Checks |
 | **Machine** | Layout · Axes · Assembly · Controller · Macros · Travels |
 | **Tools** | Tool table · Cutters · Holders · Library |
-| **Program** | Main · Subprograms · Summary |
+| **Program** | Main · Programs · Variables · Summary |
 | **Results** | Findings · Compare · Export |
 | **View** | Camera · Show · Inspect · Measure |
 

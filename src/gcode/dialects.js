@@ -62,7 +62,7 @@ const FANUC = {
 const SIEMENS = {
   id: 'siemens',
   name: 'Siemens 840D',
-  notes: 'R parameters, round brackets, symbol comparisons, and jumps to a named label rather than a line number. Comments are semicolons: a bracket is arithmetic here, not a remark.',
+  notes: 'R parameters, variables of the program\u2019s own declared with DEF, round brackets, symbol comparisons, and jumps to a named label rather than a line number. Comments are semicolons: a bracket is arithmetic here, not a remark.',
   sigil: null,
   letters: ['R'],
   group: ['(', ')'],

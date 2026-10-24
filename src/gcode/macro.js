@@ -826,7 +826,7 @@ export class Vars {
     (local ? this.local : this.common).set(k, value);
     // A macro's own #1..#33 come and go with each call; the ones that last
     // are the ones worth following.
-    if (!local) this.record(`${this.prefix}${k}`, value);
+    if (!local && this.trace) this.record(`${this.prefix}${k}`, value);
   }
 
   /** Write a change down, if anyone is reading. */
@@ -854,10 +854,23 @@ export class Vars {
   /** Global user data, before the program runs. */
   defineGlobal(name, value, type = 'REAL') {
     const key = String(name).toUpperCase();
-    const entry = { name: key, type, dims: null, value: coerce(type, value, key), scope: null, global: true };
+    const entry = { name: key, type, dims: null, value: coerce(type, value, key), scope: null, global: true, used: false };
     this.globals.set(key, entry);
-    this.catalogue.set(key, { name: key, type, dims: null, scope: 'machine', global: true, line: 0 });
-    this.record(key, entry.value);
+  }
+
+  /**
+   * The machine's data is listed once the program reads it, and not
+   * before: a machine holds dozens of these, and a readout of the ones a
+   * program never looks at is noise around the three that matter. What it
+   * held from the start goes down as set before the first block.
+   */
+  use(entry) {
+    if (!entry.global || entry.used) return;
+    entry.used = true;
+    this.catalogue.set(entry.name, { name: entry.name, type: entry.type, dims: null, scope: 'machine', global: true, line: 0 });
+    if (this.trace && this.trace.length < this.traceLimit) {
+      this.trace.push({ key: entry.name, value: entry.value, line: 0, move: 0, src: null });
+    }
   }
 
   /**
@@ -938,6 +951,7 @@ export class Vars {
       if (name in CONSTANTS) return CONSTANTS[name];
       throw new Error(`${name} is not defined: declare it with DEF, or give the machine a parameter of that name (global user data)`);
     }
+    this.use(entry);
     const at = this.offset(entry, index);
     return at < 0 ? entry.value : entry.value[at];
   }
@@ -945,6 +959,7 @@ export class Vars {
   setNamed(name, index, value) {
     const entry = this.resolve(name);
     if (!entry) throw new Error(`${name} is not defined: declare it with DEF, or give the machine a parameter of that name (global user data)`);
+    this.use(entry);
     const at = this.offset(entry, index);
     const v = coerce(entry.type, value, name);
     if (at < 0) {

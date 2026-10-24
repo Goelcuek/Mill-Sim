@@ -1002,7 +1002,10 @@ export function interpret(text, config = {}) {
     const b = blocks[pc];
     pc++;
     curSrc = b.src || null;
-    vars.where = { line: b.line, move: moves.length, src: curSrc };
+    // Where a change to a variable is written down as having happened.
+    vars.where.line = b.line;
+    vars.where.move = moves.length;
+    vars.where.src = curSrc;
 
     // The end of a subprogram or a macro returns to whatever called it; the
     // end of the main program is the end of the run.
@@ -1019,16 +1022,20 @@ export function interpret(text, config = {}) {
         // on the block reads them.
         for (const def of b.macro.defs || []) vars.declare(def, (e) => evaluate(e, vars));
         // STEP=2.5 reads like an address with a long name; it is one only
-        // if nothing of that name has been declared.
-        if (dialect.namedVariables && b.words.length) {
+        // if something of that name has been declared. That is asked each
+        // time the block runs, from the words as they were read: a loop
+        // comes back to this block, and the assignment has to be here for
+        // it on every pass, not only the first.
+        if (dialect.namedVariables && (b.allWords || b.words).length) {
+          if (!b.allWords) b.allWords = b.words;
           const kept = [];
-          for (const w of b.words) {
+          for (const w of b.allWords) {
             if (w.letter.length > 1 && vars.hasNamed(w.letter)) {
               const value = w.expr ? evaluate(w.expr, vars) : w.value;
               vars.setNamed(w.letter.toUpperCase(), null, value);
             } else kept.push(w);
           }
-          if (kept.length !== b.words.length) b.words = kept;
+          b.words = kept.length === b.allWords.length ? b.allWords : kept;
         }
         for (const w of b.words) if (w.expr) w.value = evaluate(w.expr, vars);
         for (const a of b.macro.assigns) assign(a);

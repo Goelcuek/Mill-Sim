@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 
 import { interpret } from '../src/gcode/interpreter.js';
 import { coerce } from '../src/gcode/macro.js';
+import { variableTimeline, formatVariable } from '../src/gcode/variableTimeline.js';
 
 const SIEMENS = { controller: { flavour: 'siemens' } };
 const run = (lines, extra = {}) => interpret(lines.join('\n'), { ...SIEMENS, ...extra });
@@ -143,6 +144,28 @@ test('a name nothing declared is the machine\'s own data, or an error that says 
   assert.match(errs(p)[0], /MISSING is not defined: declare it with DEF, or give the machine a parameter/);
 });
 
+test('machine data is listed once the program reads it, and not before', () => {
+  const p = run(['G90 G21', 'G1 X=CLEARANCE F500', 'M30'], { parameters: { CLEARANCE: 50, PARKX: -300 } });
+  assert.deepEqual(p.namedVariables.map((v) => v.name), ['CLEARANCE']);
+  assert.deepEqual(p.variableTrace.map((t) => [t.key, t.value, t.line, t.move]), [['CLEARANCE', 50, 0, 0]]);
+});
+
+test('an assignment by name runs on every pass of a loop', () => {
+  const p = run([
+    'DEF REAL DEPTH=6, STEP=1.5, ZZ',
+    'G90 G21',
+    'ZZ=0',
+    'LOOP:',
+    'ZZ=ZZ-STEP',
+    'G1 Z=ZZ F300',
+    'IF ZZ>-DEPTH GOTOB LOOP',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.deepEqual(at(p).map((m) => m[2]), [-1.5, -3, -4.5, -6]);
+  assert.deepEqual(p.variableTrace.filter((t) => t.key === 'ZZ' && t.line === 5).map((t) => t.move), [0, 1, 2, 3]);
+});
+
 test('a single letter is an address, not a name', () => {
   const p = run(['DEF REAL H=2', 'M30']);
   assert.match(errs(p)[0], /H is an address; a variable's name starts with two letters/);
@@ -176,4 +199,51 @@ test('the trace can be turned off, and stops at its limit rather than running aw
   ].join('\n'), { maxBlocks: 2000000 });
   assert.equal(loop.variableTraceTruncated, true);
   assert.equal(loop.variableTrace.length, 200000);
+});
+
+test('the timeline answers what a variable held on any move', () => {
+  const p = run([
+    'DEF REAL DEPTH=6, STEP=1.5, ZZ',
+    'DEF INT PASS=0',
+    'G90 G21',
+    'ZZ=0',
+    'LOOP:',
+    'ZZ=ZZ-STEP',
+    'PASS=PASS+1',
+    'G1 Z=ZZ F300',
+    'R1=PASS*10',
+    'IF ZZ>-DEPTH GOTOB LOOP',
+    'G0 Z=SAFEZ',
+    'M30',
+  ], { parameters: { SAFEZ: 50, 7: 2 } });
+  assert.deepEqual(errs(p), []);
+  const t = variableTimeline(p);
+  const row = (key) => t.rows.find((r) => r.key === key);
+
+  // The program's own first, then the registers, then the machine's.
+  assert.deepEqual(t.rows.map((r) => `${r.kind}:${r.key}`),
+    ['declared:DEPTH', 'declared:STEP', 'declared:ZZ', 'declared:PASS', 'register:R1', 'register:R7', 'machine:SAFEZ']);
+  assert.equal(row('R7').preset, true);
+  assert.equal(row('R1').preset, false);
+
+  // Before move k means in force while move k runs.
+  assert.equal(t.valueAt(row('ZZ'), 0), -1.5);
+  assert.equal(t.valueAt(row('ZZ'), 2), -4.5);
+  assert.equal(t.valueAt(row('PASS'), 3), 4);
+  assert.equal(t.valueAt(row('R1'), 0), undefined, 'R1 is set after the first move');
+  assert.equal(t.valueAt(row('R1'), 1), 10);
+  assert.equal(t.valueAt(row('R1'), Infinity), 40);
+  assert.equal(t.changeAt(row('R1'), 2).line, 9);
+
+  // What the blocks before move 2 touched.
+  assert.deepEqual([...t.changedAt(2)].sort(), ['PASS', 'R1', 'ZZ']);
+});
+
+test('values read the way the control shows them', () => {
+  assert.equal(formatVariable(undefined, 'REAL'), '–');
+  assert.equal(formatVariable(1, 'BOOL'), 'TRUE');
+  assert.equal(formatVariable(0, 'BOOL'), 'FALSE');
+  assert.equal(formatVariable('ROUGH', 'STRING'), '"ROUGH"');
+  assert.equal(formatVariable(0.1 + 0.2, 'REAL'), '0.3');
+  assert.equal(formatVariable(-3, 'INT'), '-3');
 });

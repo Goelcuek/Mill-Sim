@@ -1046,6 +1046,7 @@ export class MachinePanel extends Panel {
   parameterSection() {
     const app = this.app;
     const machine = app.state.machine;
+    const namedVariables = !!(DIALECTS[machine.controller.dialect] || {}).namedVariables;
     return section('Machine parameters', [
       addBar('Add parameter…', () => openParameterDialog(app, this), { hint: 'A number of your own that macros can read' }),
       ...Object.keys(machine.parameters || {}).map((key) => row([
@@ -1066,6 +1067,9 @@ export class MachinePanel extends Panel {
         }, { title: `Remove #${key}`, variant: 'warn' }),
       ])),
       el('div.hint', {}, 'A macro reads these by name — #toolChangeX in a body becomes this number. They belong to the machine, so a program that moves to another machine picks up that machine\u2019s positions.'),
+      // On a Siemens they are what the control calls global user data: a
+      // program reads SAFEZ without a DEF, the way it would on the machine.
+      namedVariables ? el('div.hint', {}, 'On this control a program can also read them straight by name, without declaring them — G0 Z=SAFEZ — as the control\u2019s global user data. Program \u203a Variables lists the ones a program reads.') : null,
       el('div.hint', {}, 'A name that is a number is one of the control\u2019s registers instead: 50 is what a Fidia program means by RG 50, so a program that branches on an item number can be read at the number the operator dialled in.'),
     ]);
   }

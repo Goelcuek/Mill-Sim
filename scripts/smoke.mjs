@@ -214,6 +214,43 @@ try {
   check(siemens.dialect === 'siemens', 'loading the Siemens example did not set the dialect');
   check(siemens.errors === 0 && siemens.removed > 1000, 'the Siemens program did not read as Siemens');
 
+  // ---- Program › Variables follows the run -----------------------------
+  //
+  // The example declares its own with DEF. The page has to list them, show
+  // the value in force on the move the machine is on, take the run to the
+  // line that set one, and put a pinned one on the readout.
+  {
+    await page.evaluate(() => window.millsim.setPage('program', 'variables'));
+    await page.waitForTimeout(200);
+    const listed = await page.evaluate(() => [...document.querySelectorAll('.var-row')].map((r) => r.dataset.key));
+    console.log('variables listed:', listed.join(' '));
+    for (const key of ['LENGTH', 'HOLES', 'RINGS', 'R1']) check(listed.includes(key), `Program › Variables does not list ${key}`);
+    const value = (key) => page.evaluate((k) => {
+      const row = [...document.querySelectorAll('.var-row')].find((r) => r.dataset.key === k);
+      return row ? row.querySelector('.var-value').textContent : null;
+    }, key);
+    check(await value('RINGS') === '6', `RINGS should end at 6, reads ${await value('RINGS')}`);
+    // Back to the first move: the rings have not been counted yet.
+    await page.evaluate(() => window.millsim.seekToMove(0));
+    await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 60000 });
+    await page.evaluate(() => window.millsim.panels.program.updateVariables());
+    check(await value('RINGS') === '0', `at the first move RINGS should be 0, reads ${await value('RINGS')}`);
+    // Open its history and go to the third change: the run follows.
+    await page.evaluate(() => {
+      const row = [...document.querySelectorAll('.var-row')].find((r) => r.dataset.key === 'RINGS');
+      row.querySelector('.var-name').click();
+    });
+    await page.evaluate(() => document.querySelectorAll('.var-change')[3].click());
+    await page.waitForFunction(() => window.millsim.state.seekTarget === null, null, { timeout: 60000 });
+    await page.evaluate(() => window.millsim.panels.program.updateVariables());
+    check(await value('RINGS') === '3', `going to the third ring should show RINGS 3, reads ${await value('RINGS')}`);
+    await page.evaluate(() => window.millsim.toggleWatch('RINGS'));
+    await page.evaluate(() => window.millsim.updateHud());
+    const hud = await page.evaluate(() => (document.querySelector('.hud-watch-row') || {}).textContent || '');
+    check(/RINGS\s*3/.test(hud), `the pinned variable is not on the readout: "${hud}"`);
+    await page.evaluate(() => window.millsim.toggleWatch('RINGS'));
+  }
+
   // ---- the stock can be dragged where it belongs ------------------------
   //
   // The handles are only useful if a plain click puts them on the block and
