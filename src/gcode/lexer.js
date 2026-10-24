@@ -154,7 +154,10 @@ export function lex(text, dialect) {
     // Names come out first, whichever reader the rest of the block goes to:
     // what is inside the quotes is a file, not an expression.
     const names = [];
-    body = body.replace(NAME_RE, (all, angle, dq, sq) => {
+    body = body.replace(NAME_RE, (all, angle, dq, sq, at, whole) => {
+      // Text given to a variable — NAME="ROUGH", IF PART=="A" — is a value,
+      // not a file: it stays in the block for the macro reader.
+      if (d.namedVariables && dq !== undefined && /=\s*$/.test(whole.slice(0, at))) return all;
       const name = (angle !== undefined ? angle : dq !== undefined ? dq : sq).trim();
       if (name) names.push(name);
       return ' '.repeat(all.length);
@@ -173,7 +176,7 @@ export function lex(text, dialect) {
         names,
         blockDelete,
         skipped: false,
-        macro: { assigns: macro.assigns, control: macro.control, label: macro.label, call: macro.call },
+        macro: { assigns: macro.assigns, control: macro.control, label: macro.label, call: macro.call, defs: macro.defs || [] },
         error: macro.error,
       });
       continue;

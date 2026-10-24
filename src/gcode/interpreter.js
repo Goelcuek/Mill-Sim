@@ -776,10 +776,31 @@ export function interpret(text, config = {}) {
   // dialled into them. A Fidia branches on one — $IF (RG 50 != 5) — so a
   // program is unreadable without a way to say what RG 50 is: a machine
   // parameter whose name is a number is that register.
+  vars.prefix = dialect.sigil || dialect.letters[0] || '#';
+  // Every change is written down, so the program can be read as it runs:
+  // what R1 was before the fifth move, not only what it ended as.
+  if (cfg.traceVariables !== false) vars.trace = [];
   for (const [key, value] of Object.entries(cfg.parameters || {})) {
     const n = Number(key);
     if (Number.isInteger(n) && n > 0 && Number.isFinite(Number(value))) vars.set(n, Number(value));
+    // A parameter with a name is the machine's own data — on a Siemens, a
+    // global user variable (GUD) a program reads without declaring it.
+    else if (dialect.namedVariables && /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      vars.defineGlobal(key, typeof value === 'string' && !Number.isFinite(Number(value)) ? value : Number(value),
+        typeof value === 'string' && !Number.isFinite(Number(value)) ? 'STRING' : 'REAL');
+    }
   }
+
+  /** Put a value in a variable, numbered or named. */
+  const assign = (a) => {
+    const value = evaluate(a.value, vars);
+    if (a.named) vars.setNamed(a.named, a.index ? a.index.map((e) => evaluate(e, vars)) : null, value);
+    else vars.set(evaluate(a.target, vars), value);
+  };
+  /** What a variable holds, numbered or named. */
+  const valueOf = (a) => (a.named
+    ? vars.getNamed(a.named, a.index ? a.index.map((e) => evaluate(e, vars)) : null)
+    : vars.get(evaluate(a.target, vars)));
 
   /**
    * Where a jump goes, within the source that asked for it.
@@ -926,11 +947,14 @@ export function interpret(text, config = {}) {
       frame.remaining--;
       callStack.push(frame);
       pc = frame.target;
+      // Called again from the top: what it declared starts over.
+      if (frame.scoped) vars.resetScope();
     } else {
       pc = frame.ret;
       // The call's own #1 to #33 go with it, which is what lets one macro
       // call another without the two treading on each other.
       if (frame.macroVars) vars.pop();
+      if (frame.scoped) vars.popScope();
       if (frame.metricWas !== undefined) st.metric = frame.metricWas;
       if (frame.resumeEnded) ended = true;
     }
@@ -978,6 +1002,7 @@ export function interpret(text, config = {}) {
     const b = blocks[pc];
     pc++;
     curSrc = b.src || null;
+    vars.where = { line: b.line, move: moves.length, src: curSrc };
 
     // The end of a subprogram or a macro returns to whatever called it; the
     // end of the main program is the end of the run.
@@ -990,8 +1015,23 @@ export function interpret(text, config = {}) {
     if (b.macro) {
       try {
         // A word's value may be an expression: G1 X[#100 + 2].
+        // DEF REAL DEPTH=5: the program's own variables, before anything
+        // on the block reads them.
+        for (const def of b.macro.defs || []) vars.declare(def, (e) => evaluate(e, vars));
+        // STEP=2.5 reads like an address with a long name; it is one only
+        // if nothing of that name has been declared.
+        if (dialect.namedVariables && b.words.length) {
+          const kept = [];
+          for (const w of b.words) {
+            if (w.letter.length > 1 && vars.hasNamed(w.letter)) {
+              const value = w.expr ? evaluate(w.expr, vars) : w.value;
+              vars.setNamed(w.letter.toUpperCase(), null, value);
+            } else kept.push(w);
+          }
+          if (kept.length !== b.words.length) b.words = kept;
+        }
         for (const w of b.words) if (w.expr) w.value = evaluate(w.expr, vars);
-        for (const a of b.macro.assigns) vars.set(evaluate(a.target, vars), evaluate(a.value, vars));
+        for (const a of b.macro.assigns) assign(a);
 
         const c = b.macro.control;
         if (c) {
@@ -1009,7 +1049,7 @@ export function interpret(text, config = {}) {
           }
           if (c.kind === 'if-goto') continue;              // the condition was false
           if (c.kind === 'if-then') {
-            if (evaluate(c.cond, vars)) vars.set(evaluate(c.assign.target, vars), evaluate(c.assign.value, vars));
+            if (evaluate(c.cond, vars)) assign(c.assign);
             continue;
           }
           if (c.kind === 'while' || c.kind === 'do') {
@@ -1037,17 +1077,17 @@ export function interpret(text, config = {}) {
           if (c.kind === 'for') {
             const end = matchLoop(pc - 1, true);
             if (end < 0) { warn(b.line, 'FOR has no ENDFOR.', 'error'); continue; }
-            vars.set(evaluate(c.counter.target, vars), evaluate(c.counter.value, vars));
-            if (vars.get(evaluate(c.counter.target, vars)) > evaluate(c.last, vars)) pc = end + 1;
+            assign(c.counter);
+            if (valueOf(c.counter) > evaluate(c.last, vars)) pc = end + 1;
             continue;
           }
           if (c.kind === 'end-for') {
             const head = matchLoop(pc - 1, false);
             if (head < 0) { warn(b.line, 'ENDFOR has no FOR above it.', 'error'); continue; }
-            const forControl = blocks[head].macro.control;
-            const n = evaluate(forControl.counter.target, vars);
-            vars.set(n, vars.get(n) + 1);
-            if (vars.get(n) <= evaluate(forControl.last, vars)) pc = head + 1;
+            const counter = blocks[head].macro.control.counter;
+            const next = valueOf(counter) + 1;
+            assign({ ...counter, value: { op: 'num', value: next } });
+            if (valueOf(counter) <= evaluate(blocks[head].macro.control.last, vars)) pc = head + 1;
             continue;
           }
 
@@ -1110,7 +1150,8 @@ export function interpret(text, config = {}) {
       const target = namedTarget(name);
       if (target !== undefined) {
         if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); continue; }
-        callStack.push({ ret: pc, remaining: 0, target });
+        callStack.push({ ret: pc, remaining: 0, target, scoped: true });
+        vars.pushScope(name);
         pc = target;
         continue;
       }
@@ -1805,6 +1846,11 @@ export function interpret(text, config = {}) {
     variables: vars.snapshot(),
     /** How this control writes one, so a readout can say R1 rather than #1. */
     variablePrefix: dialect.sigil || dialect.letters[0] || '#',
+    /** What the program declared, and the machine data it used. */
+    namedVariables: vars.catalogueList(),
+    /** Every change to a variable that lasts, in the order it happened. */
+    variableTrace: vars.trace || [],
+    variableTraceTruncated: vars.traceTruncated,
     /** Which control this program looks written for, when it is not this one. */
     suggested,
     /**

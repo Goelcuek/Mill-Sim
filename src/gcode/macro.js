@@ -37,13 +37,18 @@ const FUNCTIONS = {
   /** Fanuc rounds half away from zero, unlike Math.round on negatives. */
   ROUND: (v) => Math.sign(v) * Math.round(Math.abs(v)),
   FIX: (v) => Math.trunc(v),
+  /** Siemens spellings: TRUNC drops the fraction, POT squares. */
+  TRUNC: (v) => Math.trunc(v),
+  POT: (v) => v * v,
   FUP: (v) => (v < 0 ? Math.floor(v) : Math.ceil(v)),
 };
 
 /** Keyed by what the comparison *is*, not by how a control spells it. */
+const isText = (a, b) => typeof a === 'string' || typeof b === 'string';
 const COMPARE = {
-  eq: (a, b) => (Math.abs(a - b) < 1e-9 ? 1 : 0),
-  ne: (a, b) => (Math.abs(a - b) < 1e-9 ? 0 : 1),
+  // Text compares as text: a STRING variable against a quoted word.
+  eq: (a, b) => (isText(a, b) ? (String(a) === String(b) ? 1 : 0) : (Math.abs(a - b) < 1e-9 ? 1 : 0)),
+  ne: (a, b) => (isText(a, b) ? (String(a) === String(b) ? 0 : 1) : (Math.abs(a - b) < 1e-9 ? 0 : 1)),
   gt: (a, b) => (a > b ? 1 : 0),
   lt: (a, b) => (a < b ? 1 : 0),
   ge: (a, b) => (a >= b ? 1 : 0),
@@ -100,6 +105,8 @@ export function hasMacroSyntax(code, dialect) {
   if (d.sigil && code.includes(d.sigil)) return true;
   if (code.includes(d.group[0])) return true;
   if (code.includes('=')) return true;
+  // DEF REAL STEP declares a variable without giving it a value.
+  if (d.namedVariables && /^\s*DEF\b/i.test(code)) return true;
   // A label definition on a control that names them: "MARK1:".
   if (d.labels === 'name' && /^\s*[A-Za-z_][A-Za-z0-9_.]*\s*:/.test(code)) return true;
   for (const letter of d.letters) {
@@ -151,6 +158,20 @@ function tokenize(code, d) {
     if (c === open) { out.push({ kind: '[', text: c }); i++; continue; }
     if (c === close) { out.push({ kind: ']', text: c }); i++; continue; }
 
+    // Where round brackets group, square ones index an array: ARR[2, 1].
+    if (d.namedVariables && c === '[') { out.push({ kind: 'idx[', text: c }); i++; continue; }
+    if (d.namedVariables && c === ']') { out.push({ kind: 'idx]', text: c }); i++; continue; }
+    if (c === ',') { out.push({ kind: ',', text: c }); i++; continue; }
+
+    // Quoted text, which a STRING variable holds.
+    if (d.namedVariables && c === '"') {
+      const j = text.indexOf('"', i + 1);
+      const end = j < 0 ? text.length : j;
+      out.push({ kind: 'string', value: text.slice(i + 1, end), text: text.slice(i, end + 1) });
+      i = end + 1;
+      continue;
+    }
+
     // An operator spelled as a symbol: <> before <, >= before >.
     const sym = symbols.find((s2) => text.startsWith(s2.text, i));
     if (sym) {
@@ -176,7 +197,9 @@ function tokenize(code, d) {
 
     // A control word with a mark in front of it — $IF, $GOTO — is one word.
     const prefixed = d.keywordPrefix && c === d.keywordPrefix && /[A-Za-z]/.test(text[i + 1] || '');
-    if (/[A-Za-z]/.test(c) || prefixed) {
+    // A name of one's own may start with an underscore: _DEPTH.
+    const named = d.namedVariables && c === '_';
+    if (/[A-Za-z]/.test(c) || prefixed || named) {
       let j = prefixed ? i + 1 : i;
       while (j < text.length && /[A-Za-z_]/.test(text[j])) j++;
       const word = text.slice(i, j).toUpperCase();
@@ -380,7 +403,7 @@ class Parser {
       // of two arguments that knows its quadrant, not an arctangent divided
       // by something: ATAN[-1]/[-1] is 225, and reading it as atan(1) put
       // the third hole of a bolt circle in the first quadrant.
-      if (name === 'ATAN' && this.is('other', ',')) {
+      if (name === 'ATAN' && this.is(',')) {
         this.next();
         const x = this.expression();
         this.expect(']');
@@ -394,7 +417,24 @@ class Parser {
       return { op: 'fn', name, left: arg };
     }
     if (this.peek().kind === 'number') return { op: 'num', value: this.next().value };
+    if (this.peek().kind === 'string') return { op: 'str', value: this.next().value };
+    // A variable called by its name — DEPTH, _COUNT, POS[2] — on a control
+    // that lets a program declare its own.
+    if (this.d.namedVariables && this.peek().kind === 'ident') return this.namedRef();
     throw new Error(`"${this.peek().text || 'the end of the block'}" is not a number, a variable or a bracket`);
+  }
+
+  /** A name, and an index in square brackets if it has one. */
+  namedRef() {
+    const name = this.next().text;
+    let index = null;
+    if (this.is('idx[')) {
+      this.next();
+      index = [this.expression()];
+      while (this.eat(',')) index.push(this.expression());
+      this.expect('idx]');
+    }
+    return { op: 'named', name, index };
   }
 }
 
@@ -415,6 +455,12 @@ export function evaluate(node, vars) {
   }
   switch (node.op) {
     case 'num': return node.value;
+    case 'str': return node.value;
+    case 'named': {
+      const index = node.index ? node.index.map((e) => evaluate(e, vars)) : null;
+      if (vars && typeof vars.getNamed === 'function') return vars.getNamed(node.name, index);
+      throw new Error(`${node.name} is not defined`);
+    }
     case 'var': return vars.get(evaluate(node.left, vars));
     case 'neg': return -evaluate(node.left, vars);
     case 'fn': return FUNCTIONS[node.name](evaluate(node.left, vars));
@@ -460,6 +506,8 @@ export function parseMacroBlock(code, dialect) {
   const d = dialect || DIALECTS.fanuc;
   const words = [];
   const assigns = [];
+  /** DEF declarations: a program's own variables, on a control that has them. */
+  const defs = [];
   let control = null;
   let label = null;
   let call = false;
@@ -483,6 +531,22 @@ export function parseMacroBlock(code, dialect) {
       // An assignment: the variable, however this control writes one.
       if (p.is('#')) {
         assigns.push(assignment());
+        continue;
+      }
+
+      // A declaration: DEF REAL DEPTH=5, STEP  ·  DEF INT POS[3]=(1,2,3)
+      if (d.namedVariables && p.peek().kind === 'ident' && p.peek().text === 'DEF') {
+        p.next();
+        defs.push(...declaration(p));
+        continue;
+      }
+
+      // An element of an array, set: POS[2]=12.5. An address never has an
+      // index, so a name with one is a variable.
+      if (d.namedVariables && p.peek().kind === 'ident' && p.peek(1).kind === 'idx[') {
+        const ref = p.namedRef();
+        p.expect('=');
+        assigns.push({ named: ref.name, index: ref.index, value: p.expression() });
         continue;
       }
 
@@ -578,18 +642,84 @@ export function parseMacroBlock(code, dialect) {
       throw new Error(`"${p.peek().text}" does not belong here`);
     }
   } catch (err) {
-    return { words, assigns, control, label, call, error: err.message };
+    return { words, assigns, control, label, call, defs, error: err.message };
   }
 
-  return { words, assigns, control, label, call };
+  return { words, assigns, control, label, call, defs };
 }
 
 /** The counter of a FOR loop: a variable, an =, and where it starts. */
 function assignmentFor(p) {
+  // FOR COUNT=1 TO 5 counts in a variable of the program's own.
+  if (p.d.namedVariables && p.peek().kind === 'ident') {
+    const ref = p.namedRef();
+    p.expect('=');
+    return { named: ref.name, index: ref.index, value: p.expression() };
+  }
   p.expect('#');
   const target = p.primary();
   p.expect('=');
   return { target, value: p.expression() };
+}
+
+/** The types a Siemens DEF can declare. */
+export const VARIABLE_TYPES = ['REAL', 'INT', 'BOOL', 'CHAR', 'STRING', 'AXIS', 'FRAME'];
+
+/**
+ * The rest of a DEF block: a type, then one name or more, each with an
+ * optional array size and starting value.
+ *
+ *   DEF REAL DEPTH=5, STEP
+ *   DEF INT POS[3]=(1, 2, 3)
+ *   DEF STRING[32] NAME="ROUGH"
+ *   DEF BOOL DONE=FALSE
+ */
+function declaration(p) {
+  const t = p.next();
+  const type = String(t.text || '').toUpperCase();
+  if (!VARIABLE_TYPES.includes(type)) {
+    throw new Error(`DEF needs a type — ${VARIABLE_TYPES.join(', ')} — and found "${t.text || 'nothing'}"`);
+  }
+  // STRING[32]: the longest text it holds, which is not a dimension.
+  let length = null;
+  if (type === 'STRING' && p.is('idx[')) {
+    p.next();
+    length = p.expression();
+    p.expect('idx]');
+  }
+  const out = [];
+  do {
+    if (p.peek().kind === 'address') {
+      // The control's own rule: a letter alone is an address, so a name
+      // starts with two letters or an underscore.
+      throw new Error(`${p.peek().text} is an address; a variable's name starts with two letters or an underscore`);
+    }
+    if (p.peek().kind !== 'ident') throw new Error(`DEF ${type} needs a name, and found "${p.peek().text || 'nothing'}"`);
+    const name = p.next().text;
+    let dims = null;
+    if (p.is('idx[')) {
+      p.next();
+      dims = [p.expression()];
+      while (p.eat(',')) dims.push(p.expression());
+      p.expect('idx]');
+    }
+    let init = null;
+    let initList = null;
+    if (p.eat('=')) {
+      // An array is filled from a list in brackets, or with SET( ).
+      if (dims && (p.is('[') || (p.peek().kind === 'ident' && p.peek().text === 'SET'))) {
+        if (!p.is('[')) p.next();
+        p.expect('[');
+        initList = [p.expression()];
+        while (p.eat(',')) initList.push(p.expression());
+        p.expect(']');
+      } else {
+        init = p.expression();
+      }
+    }
+    out.push({ type, name, dims, init, initList, length });
+  } while (p.eat(','));
+  return out;
 }
 
 /** A level number on DO/END has to be a plain digit, and usually is. */
@@ -597,12 +727,50 @@ function evaluateConstant(node) {
   return node && node.op === 'num' ? node.value : 1;
 }
 
+/** What a declared variable holds before anything is put in it. */
+const EMPTY = { REAL: 0, INT: 0, BOOL: 0, CHAR: 0, STRING: '', AXIS: '', FRAME: '' };
+
+/**
+ * A value made to fit its type, the way the control does it: an INT is
+ * rounded, half away from zero; a BOOL is 1 or 0; a STRING is text; a REAL
+ * will not hold text.
+ */
+export function coerce(type, value, name = '') {
+  switch (type) {
+    case 'INT': {
+      if (typeof value === 'string') throw new Error(`text cannot go in the INT ${name}`);
+      const n = Number(value) || 0;
+      return Math.sign(n) * Math.round(Math.abs(n));
+    }
+    case 'BOOL': return value ? 1 : 0;
+    case 'REAL':
+      if (typeof value === 'string') throw new Error(`text cannot go in the REAL ${name}`);
+      return Number(value) || 0;
+    case 'STRING': return String(value);
+    case 'CHAR': return typeof value === 'string' ? value.slice(0, 1) : Number(value) || 0;
+    default: return value;
+  }
+}
+
+/** The words a Siemens program may use as values without declaring them. */
+const CONSTANTS = { TRUE: 1, FALSE: 0 };
+
 /**
  * The variables a running program has.
  *
  * #1 to #33 are local to the macro call that is running, which is what
  * makes a macro callable from another macro without the two treading on
  * each other. #100 upwards are common to the whole program.
+ *
+ * On a control that lets a program name its own — Siemens: DEF REAL DEPTH
+ * — those live here too, one scope per call, so a subprogram's DEPTH is not
+ * its caller's (LUD). A name nothing has declared is the control's global
+ * user data (GUD), which belongs to the machine and is set up before the
+ * program runs.
+ *
+ * And every change can be written down as it happens — which variable,
+ * what it became, on which line, before which move — so a program can be
+ * looked at as it runs rather than only as it ended.
  */
 export class Vars {
   /**
@@ -614,6 +782,20 @@ export class Vars {
     this.locals = Math.max(0, locals);
     this.common = new Map();
     this.frames = [new Map()];
+    /** How a numbered variable is written: #, R, Q. */
+    this.prefix = '#';
+    /** Named variables, one scope per call; the first is the main program. */
+    this.scopes = [{ label: null, vars: new Map() }];
+    /** Global user data: named, belonging to the machine. */
+    this.globals = new Map();
+    /** Every name ever declared or used as global data, for the readout. */
+    this.catalogue = new Map();
+    /** Changes as they happen, when someone has asked for them. */
+    this.trace = null;
+    this.traceLimit = 200000;
+    this.traceTruncated = false;
+    /** Where the program is: set by the interpreter before each block. */
+    this.where = { line: 0, move: 0, src: null };
   }
 
   get local() { return this.frames[this.frames.length - 1]; }
@@ -640,12 +822,148 @@ export class Vars {
   set(n, value) {
     const k = Math.round(n);
     if (k <= 0) return;
-    (k <= this.locals ? this.local : this.common).set(k, value);
+    const local = k <= this.locals;
+    (local ? this.local : this.common).set(k, value);
+    // A macro's own #1..#33 come and go with each call; the ones that last
+    // are the ones worth following.
+    if (!local) this.record(`${this.prefix}${k}`, value);
+  }
+
+  /** Write a change down, if anyone is reading. */
+  record(key, value) {
+    if (!this.trace) return;
+    if (this.trace.length >= this.traceLimit) { this.traceTruncated = true; return; }
+    this.trace.push({ key, value, line: this.where.line, move: this.where.move, src: this.where.src });
+  }
+
+  // ---- named variables ----------------------------------------------------
+
+  get scope() { return this.scopes[this.scopes.length - 1]; }
+
+  /** A subprogram has started: its declarations are its own. */
+  pushScope(label) { this.scopes.push({ label: label || 'subprogram', vars: new Map() }); }
+
+  popScope() { if (this.scopes.length > 1) this.scopes.pop(); }
+
+  /** The same subprogram again, from the top: its declarations start over. */
+  resetScope() { if (this.scopes.length > 1) this.scope.vars = new Map(); }
+
+  /** How a name is shown: with the subprogram it belongs to, if not the main one. */
+  keyOf(entry) { return entry.scope ? `${entry.name} · ${entry.scope}` : entry.name; }
+
+  /** Global user data, before the program runs. */
+  defineGlobal(name, value, type = 'REAL') {
+    const key = String(name).toUpperCase();
+    const entry = { name: key, type, dims: null, value: coerce(type, value, key), scope: null, global: true };
+    this.globals.set(key, entry);
+    this.catalogue.set(key, { name: key, type, dims: null, scope: 'machine', global: true, line: 0 });
+    this.record(key, entry.value);
+  }
+
+  /**
+   * DEF: a variable of the program's own, in the scope that is running.
+   * Declared again — the same subprogram called a second time — it starts
+   * over, as it does on the control.
+   *
+   * @param {{type:string, name:string, dims:Array|null, init:object|null,
+   *          initList:Array|null}} def  as parsed
+   * @param {(node:object) => *} evalFn  works out an expression
+   */
+  declare(def, evalFn) {
+    const name = def.name;
+    const dims = def.dims ? def.dims.map((e) => Math.max(1, Math.floor(Number(evalFn(e)) || 0))) : null;
+    const size = dims ? dims.reduce((a, b) => a * b, 1) : 1;
+    if (size > 100000) throw new Error(`${name} would have ${size} elements; that is more than this reader holds`);
+    const scope = this.scope;
+    const entry = {
+      name, type: def.type, dims, scope: scope.label,
+      value: dims ? new Array(size).fill(EMPTY[def.type]) : EMPTY[def.type],
+    };
+    scope.vars.set(name, entry);
+    const key = this.keyOf(entry);
+    if (!this.catalogue.has(key)) {
+      this.catalogue.set(key, { name, type: def.type, dims, scope: scope.label, line: this.where.line, src: this.where.src });
+    }
+    if (dims) {
+      const list = def.initList ? def.initList.map(evalFn) : def.init ? [evalFn(def.init)] : [];
+      list.forEach((v, i) => { if (i < size) entry.value[i] = coerce(def.type, v, name); });
+      // Every element as it starts, so the readout has each one from here.
+      for (let i = 0; i < size && i < 256; i++) this.record(this.elementKey(entry, i), entry.value[i]);
+    } else {
+      if (def.init) entry.value = coerce(def.type, evalFn(def.init), name);
+      this.record(key, entry.value);
+    }
+  }
+
+  /** The variable a name means here: this scope's own, or the machine's. */
+  resolve(name) {
+    return this.scope.vars.get(name) || this.globals.get(name) || null;
+  }
+
+  hasNamed(name) { return !!this.resolve(String(name).toUpperCase()); }
+
+  /** Where in a flat array an index lands, checked against the declaration. */
+  offset(entry, index) {
+    if (!entry.dims) {
+      if (index && index.length) throw new Error(`${entry.name} is not an array`);
+      return -1;
+    }
+    if (!index || index.length !== entry.dims.length) {
+      throw new Error(`${entry.name} has ${entry.dims.length} ${entry.dims.length === 1 ? 'index' : 'indices'}`);
+    }
+    let at = 0;
+    for (let i = 0; i < index.length; i++) {
+      const k = Math.round(Number(index[i]));
+      // Siemens counts from 0: POS[3] holds POS[0] to POS[2].
+      if (!(k >= 0 && k < entry.dims[i])) throw new Error(`${entry.name}[${index.join(', ')}] is outside ${entry.name}[${entry.dims.join(', ')}]`);
+      at = at * entry.dims[i] + k;
+    }
+    return at;
+  }
+
+  elementKey(entry, flat) {
+    const idx = [];
+    let rest = flat;
+    for (let i = entry.dims.length - 1; i >= 0; i--) {
+      idx.unshift(rest % entry.dims[i]);
+      rest = Math.floor(rest / entry.dims[i]);
+    }
+    const base = `${entry.name}[${idx.join(', ')}]`;
+    return entry.scope ? `${base} · ${entry.scope}` : base;
+  }
+
+  getNamed(name, index) {
+    const entry = this.resolve(name);
+    if (!entry) {
+      if (name in CONSTANTS) return CONSTANTS[name];
+      throw new Error(`${name} is not defined: declare it with DEF, or give the machine a parameter of that name (global user data)`);
+    }
+    const at = this.offset(entry, index);
+    return at < 0 ? entry.value : entry.value[at];
+  }
+
+  setNamed(name, index, value) {
+    const entry = this.resolve(name);
+    if (!entry) throw new Error(`${name} is not defined: declare it with DEF, or give the machine a parameter of that name (global user data)`);
+    const at = this.offset(entry, index);
+    const v = coerce(entry.type, value, name);
+    if (at < 0) {
+      entry.value = v;
+      this.record(this.keyOf(entry), v);
+    } else {
+      entry.value[at] = v;
+      this.record(this.elementKey(entry, at), v);
+    }
   }
 
   /** What is set, for the summary — the shared ones are the interesting ones. */
   snapshot() {
     return [...this.common.entries()].sort((a, b) => a[0] - b[0]).map(([n, v]) => ({ n, value: v }));
+  }
+
+  /** Every named variable the run declared or used, for the readout. */
+  catalogueList() {
+    return [...this.catalogue.entries()].map(([key, c]) => ({ key, ...c }));
   }
 }
 

@@ -79,8 +79,14 @@ const SIEMENS = {
   },
   locals: 0,
   labels: 'name',
+  /**
+   * A program declares variables of its own — DEF REAL DEPTH=5 — and reads
+   * them by name; names it does not declare are the control's global user
+   * data (GUD), which this reader takes from the machine's parameters.
+   */
+  namedVariables: true,
   call: { code: null, program: 'CALL', ret: 'M17' },
-  marks: ['\\bGOTOF\\b', '\\bGOTOB\\b', '\\bENDWHILE\\b', '\\bR\\d+\\s*=', '\\bMSG\\s*\\(', '\\bCYCLE\\d+', '\\bTRANS\\b'],
+  marks: ['\\bGOTOF\\b', '\\bGOTOB\\b', '\\bENDWHILE\\b', '\\bDEF\\s+(REAL|INT|BOOL|STRING|CHAR)\\b', '\\bR\\d+\\s*=', '\\bMSG\\s*\\(', '\\bCYCLE\\d+', '\\bTRANS\\b'],
 };
 
 const HEIDENHAIN = {
