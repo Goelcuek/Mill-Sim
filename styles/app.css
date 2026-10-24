@@ -533,6 +533,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .pill.seeking { color: var(--accent); background: var(--accent-soft); }
 select.speed { width: 82px; }
+/* The stop switches: M00 and the optional M01. Lit when the run halts at them. */
+.transport .btn.stop-toggle { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 0 8px; height: 30px; letter-spacing: .02em; }
+.transport .btn.stop-toggle:not(.active) { color: var(--text-3); }
+.pill.stopped { color: var(--warn); background: var(--warn-soft); }
+.transport .btn.stop-toggle.halted { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
 
 .transport .btn.icon {
   width: 32px; height: 30px;
@@ -1325,6 +1330,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .toast-host { top: 76px; bottom: auto; left: 8px; right: 8px; align-items: stretch; }
   .transport .pill { display: none; }
   .transport .pill.seeking { display: inline; }
+  .transport .btn.stop-toggle { height: 34px; padding: 0 6px; }
   select.speed { width: 64px; }
 
   .view-overlay { padding: 8px; }

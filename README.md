@@ -416,8 +416,16 @@ always safe. Everything else is editing something that already exists, and
 that happens in the panel directly.
 
 Playback is the one thing that is neither: the bar under the viewport is
-always visible and owns ⏮ ▶ ⏭ ⏭⏭, the scrubber and the speed, so it is
+always visible and owns ⏮ ▶ ⏭ ⇥ ⏭⏭, the scrubber and the speed, so it is
 never repeated in a panel.
+
+**M00** and **M01** on the bar are the stop switches. With M00 on — the
+default, because the machine always stops there — playing halts at an
+`M00` block and waits for ▶; with M01 on, so does `M01`, as with the
+optional-stop switch on the control. The bar says which stop it is
+waiting at and the note says what the line says beside it, which is
+usually why the stop is there: `M00 (TURN THE PART OVER)`. ⏭⏭ and the
+scrubber run straight through. The switches stay where you leave them.
 
 Keyboard: `Space` play/pause, `R` reset, `→` step one move, `F` fit view.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.

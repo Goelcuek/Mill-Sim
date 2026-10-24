@@ -251,6 +251,30 @@ try {
     await page.evaluate(() => window.millsim.toggleWatch('RINGS'));
   }
 
+  // ---- M00 and M01 stop the run, when their switches say so --------------
+  {
+    const stopped = await page.evaluate(async () => {
+      const app = window.millsim;
+      app.loadProgram(['G90 G21', 'G0 X0 Y0 Z5', 'G1 X10 F3000', 'M00 (CHECK)', 'G1 X20', 'M01', 'G1 X30', 'M30'].join('\n'), 'stops.nc');
+      app.state.stops.m0 = true;
+      app.state.stops.m1 = false;
+      app.state.speed = 'max';
+      app.reset();
+      const wait = () => new Promise((resolve) => {
+        const t0 = performance.now();
+        const tick = () => (!app.state.playing || performance.now() - t0 > 20000 ? resolve() : setTimeout(tick, 20));
+        tick();
+      });
+      const out = [];
+      app.play(); await wait(); out.push(Number(app.simulator.pos[0].toFixed(3)));
+      app.play(); await wait(); out.push(Number(app.simulator.pos[0].toFixed(3)));
+      return { at: out, finished: app.simulator.finished };
+    });
+    console.log('stops:', JSON.stringify(stopped));
+    check(stopped.at[0] === 10, `M00 should hold the run at X10, it stopped at X${stopped.at[0]}`);
+    check(stopped.at[1] === 30 && stopped.finished, 'with M01 off the run should go on to the end');
+  }
+
   // ---- the stock can be dragged where it belongs ------------------------
   //
   // The handles are only useful if a plain click puts them on the block and

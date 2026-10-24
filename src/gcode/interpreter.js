@@ -1514,9 +1514,16 @@ export function interpret(text, config = {}) {
       }
 
       switch (code) {
-        case 0: case 1:
-          events.push({ line: b.line, type: 'stop', moveIndex: moves.length, text: code === 0 ? 'Program stop (M00)' : 'Optional stop (M01)' });
+        case 0: case 1: {
+          // What the line says beside it is usually the instruction the stop
+          // is there for: M00 (TURN THE PART OVER).
+          const stop = { line: b.line, type: 'stop', code, moveIndex: moves.length, text: code === 0 ? 'Program stop (M00)' : 'Optional stop (M01)' };
+          const said = (b.comments || []).filter(Boolean).join(' ');
+          if (said) stop.comment = said;
+          if (curSrc) stop.source = curSrc;
+          events.push(stop);
           break;
+        }
         case 2: case 30:
           // The end of a called file on a control that ends them this way.
           if (code === returnCode && callStack.length) { returnFromCall(); break; }

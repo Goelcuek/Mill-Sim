@@ -64,6 +64,22 @@ function placementText(move, turn) {
   return parts.join('  ');
 }
 
+/**
+ * Which stops the run honours: M00 always does on the machine, M01 only
+ * with the optional-stop switch on. Kept in this browser, like the switch
+ * that stays where the operator left it.
+ */
+const STOPS_KEY = 'millsim.stops';
+function loadStops() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STOPS_KEY) || 'null');
+    if (s && typeof s === 'object') return { m0: s.m0 !== false, m1: !!s.m1 };
+  } catch {
+    // Storage is unavailable: the defaults are the machine's.
+  }
+  return { m0: true, m1: false };
+}
+
 const SPEEDS = [
   { value: '0.25', label: '¼×' },
   { value: '1', label: '1×' },
@@ -140,6 +156,8 @@ export class App {
       units: 'mm',
       exportDecimate: 1,
       seekTarget: null,
+      /** Which stops the run halts at: M00 and the optional M01. */
+      stops: loadStops(),
       /** What has been measured on the part, newest last. */
       measurements: [],
       /**
@@ -179,6 +197,8 @@ export class App {
     this.stock = null;
     /** Variables pinned to the readout, by name. */
     this.watch = loadWatch();
+    /** The stop the run last waited at, so play goes on past it. */
+    this.stopCursor = -1;
 
     this.buildLayout();
     this.buildScene();
@@ -643,6 +663,15 @@ export class App {
     }, SPEEDS.map((s) => el('option', { value: s.value, selected: s.value === this.state.speed }, s.label)));
     this.seekNote = el('span.pill.seeking', {}, 'seeking…');
     this.seekNote.style.display = 'none';
+    // Waiting at a stop: which one, until play is pressed again.
+    this.stopNote = el('span.pill.stopped', {}, '');
+    this.stopNote.style.display = 'none';
+    this.stopButtons = {
+      m0: button('M00', () => this.toggleStop('m0'), {}),
+      m1: button('M01', () => this.toggleStop('m1'), {}),
+    };
+    for (const b of Object.values(this.stopButtons)) b.classList.add('stop-toggle');
+    this.showStops();
 
     clear(this.transport);
     this.transport.append(
@@ -650,14 +679,100 @@ export class App {
       this.playBtn,
       button('⏭', () => this.stepMove(), { title: 'Advance one move (→)' }),
       button('⇥', () => this.stepBlock(), { title: 'Single block — run to the end of this block (N)' }),
+      this.stopButtons.m0,
+      this.stopButtons.m1,
       button('⏭⏭', () => this.runToEnd(), { title: 'Simulate the whole program now' }),
       button('⤢', () => this.fitToScene(), { title: 'Fit the job in the view (F)' }),
       this.scrub,
       this.timeLabel,
       this.lineLabel,
+      this.stopNote,
       this.seekNote,
       this.speedSelect,
     );
+  }
+
+  /** Turn a stop on or off, the way the switch on the control does. */
+  toggleStop(which) {
+    this.state.stops[which] = !this.state.stops[which];
+    try { localStorage.setItem(STOPS_KEY, JSON.stringify(this.state.stops)); } catch { /* kept until reload */ }
+    this.showStops();
+    const on = this.state.stops[which];
+    const code = which === 'm0' ? 'M00' : 'M01';
+    const count = this.stopsOf().filter((x) => x.key === which).length;
+    this.notify(`${code} ${on ? 'stops the run' : 'is passed over'}${count ? ` — ${count} in this program` : ''}.`, 'info');
+  }
+
+  showStops() {
+    const titles = {
+      m0: (on) => `Program stop (M00): ${on ? 'on — the run stops at M00 and waits for play, as the machine does' : 'off — M00 is passed over'}`,
+      m1: (on) => `Optional stop (M01): ${on ? 'on — the run stops at M01 and waits for play' : 'off — M01 is passed over, as with the switch off on the control'}`,
+    };
+    for (const [key, b] of Object.entries(this.stopButtons || {})) {
+      const on = !!this.state.stops[key];
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.title = titles[key](on);
+    }
+  }
+
+  /**
+   * Where the program's stops fall in the run: the start of the move after
+   * the block, which is where the machine sits waiting.
+   */
+  stopsOf() {
+    const program = this.state.program;
+    if (!program) return [];
+    if (this._stops && this._stops.program === program) return this._stops.list;
+    const moves = program.moves;
+    const starts = new Float64Array(moves.length + 1);
+    for (let i = 0; i < moves.length; i++) starts[i + 1] = starts[i] + moves[i].time;
+    const list = (program.events || [])
+      .filter((e) => e.type === 'stop' && e.moveIndex < moves.length)
+      .map((e) => ({ ...e, key: e.code === 1 ? 'm1' : 'm0', time: starts[e.moveIndex] }));
+    this._stops = { program, list };
+    // A new program: its stops are counted from its own start.
+    this.stopCursor = -1;
+    return list;
+  }
+
+  /** The next stop the run should halt at, from where it is. */
+  nextStop() {
+    const t = this.simulator.time;
+    const list = this.stopsOf();
+    for (let i = this.stopCursor + 1; i < list.length; i++) {
+      const s = list[i];
+      if (s.time < t - 1e-6) continue;
+      if (this.state.stops[s.key]) return { stop: s, index: i };
+    }
+    return null;
+  }
+
+  /** The run has reached a stop: wait there, and say what it is for. */
+  haltAt(found) {
+    this.stopCursor = found.index;
+    this.pause();
+    const s = found.stop;
+    const code = s.key === 'm0' ? 'M00' : 'M01';
+    this.stopNote.textContent = `${code} · line ${s.line}`;
+    this.stopNote.style.display = '';
+    // The switch that stopped it is lit too: on a phone there is no room
+    // for the label, and the button says the same thing.
+    this.stopButtons[s.key].classList.add('halted');
+    const where = s.source ? ` of ${s.source}` : '';
+    this.notify(`${s.key === 'm0' ? 'Program stop' : 'Optional stop'} (${code}) on line ${s.line}${where}${s.comment ? `: ${s.comment}` : ''}. Press play to go on.`, 'info');
+  }
+
+  /** Anywhere else in the run: the stops ahead are counted from there. */
+  forgetStop() {
+    this.stopCursor = -1;
+    this.clearHalt();
+  }
+
+  /** No longer waiting at a stop. */
+  clearHalt() {
+    if (this.stopNote) this.stopNote.style.display = 'none';
+    for (const b of Object.values(this.stopButtons || {})) b.classList.remove('halted');
   }
 
   bindKeys() {
@@ -1819,6 +1934,7 @@ export class App {
     if (this.simulator.finished) this.simulator.reset();
     this.state.playing = true;
     this.playBtn.textContent = '⏸';
+    this.clearHalt();
   }
 
   pause() {
@@ -1828,6 +1944,7 @@ export class App {
 
   reset() {
     this.pause();
+    this.forgetStop();
     this.simulator.reset();
     this.stockView.sync(true);
     this.state.seekTarget = null;
@@ -1886,6 +2003,7 @@ export class App {
 
   seekTo(time) {
     this.pause();
+    this.forgetStop();
     this.state.seekTarget = time;
   }
 
@@ -1970,9 +2088,16 @@ export class App {
       }
     } else if (this.state.playing) {
       const speed = this.state.speed === 'max' ? Infinity : parseFloat(this.state.speed);
-      const r = sim.run(Number.isFinite(speed) ? dt * speed : Infinity, 14);
+      let step = Number.isFinite(speed) ? dt * speed : Infinity;
+      // An M00, or an M01 with the switch on, ahead of where this frame
+      // would take the run: go exactly as far as it and no further.
+      const ahead = this.nextStop();
+      if (ahead && sim.time + step >= ahead.stop.time) step = Math.max(0, ahead.stop.time - sim.time);
+      const r = sim.run(step, 14);
       worked = true;
-      if (r.done) {
+      if (ahead && !r.done && sim.time >= ahead.stop.time - 1e-6) {
+        this.haltAt(ahead);
+      } else if (r.done) {
         this.pause();
         this.refreshResults();
         this.notify(sim.collisions.length

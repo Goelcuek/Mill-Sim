@@ -250,3 +250,17 @@ test('a file with both a number and a name answers to either', () => {
   assert.equal(byNumber.moves[1].source, 'drill.nc');
   assert.equal(byName.moves[1].source, 'drill.nc');
 });
+
+test('M00 and M01 are stops, with the line they are on and what it says', () => {
+  const p = run([
+    'G90 G21',
+    'G1 X10 F500',
+    'M00 (TURN THE PART OVER)',
+    'G1 X20',
+    'M01',
+    'G1 X30',
+    'M30',
+  ]);
+  const stops = p.events.filter((e) => e.type === 'stop').map((e) => [e.code, e.line, e.moveIndex, e.comment || null]);
+  assert.deepEqual(stops, [[0, 3, 1, 'TURN THE PART OVER'], [1, 5, 2, null]]);
+});

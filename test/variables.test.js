@@ -348,3 +348,21 @@ test('the control\'s own variables are said once, and #3000 stops the run', () =
   assert.ok(notes.some((m) => /raises alarm 3001 here, and the machine stops/.test(m)));
   assert.deepEqual(at(p).map((m) => m[0]), [1, 2], 'nothing after the alarm runs');
 });
+
+test('a Fidia definition is the register, its number and the value: RG 34 .005', () => {
+  const p = fidia([
+    'TTYP 2 1',
+    'TDIAM__1 2 10.0',
+    'RG 34 .005',
+    'RG 35 -.25',
+    'PT 3 .5',
+    '>G90 G21',
+    '>G0 X=RG 34 Y=RG 35 Z=PT 3',
+    'M30',
+  ]);
+  assert.deepEqual(errs(p), []);
+  assert.equal(last(p, 'RG34'), 0.005);
+  assert.equal(last(p, 'RG35'), -0.25);
+  assert.equal(last(p, 'PT3'), 0.5);
+  assert.deepEqual(at(p)[0], [0.005, -0.25, 0.5]);
+});
