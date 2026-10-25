@@ -554,6 +554,43 @@ try {
       app.models.remove(app.models.models.find((m) => m.id === id));
       app.refreshTarget();
     }, probe.id);
+
+    // A gouge in the wall of a side hole, found while the program runs.
+    // The part this time has every hole the program makes, the first one
+    // Ø9.4: the Ø10 cutter takes 0.3 out of its wall, under a top nothing
+    // touched — the one place a look from above cannot see.
+    const gouge = await page.evaluate(async () => {
+      const app = window.millsim;
+      const { TriDexelStock } = await import('/src/sim/triDexel.js');
+      const { dexelTriangles } = await import('/src/sim/dexelMesh.js');
+      const { buildTool, makeTool } = await import('/src/tools/toolDefs.js');
+      const st = app.stock;
+      const ref = new TriDexelStock({ origin: st.origin.slice(), size: st.size.slice(), resolution: st.cell });
+      const env = (d) => buildTool(makeTool({ type: 'flat', diameter: d, fluteLength: 40 })).cutEnvelope;
+      for (let y = -40; y <= 40; y += 8) ref.carveLinear(env(16), [-70, y, -1], [70, y, -1], [0, 0, 1], 0);
+      ref.carveLinear(env(9.4), [70, 0, -15], [45, 0, -15], [1, 0, 0], 1);
+      ref.carveLinear(env(10), [70, 20, -15], [45, 20, -15], [1, 0, 0], 1);
+      ref.carveLinear(env(10), [50, 0, 5], [50, 0, -20], [0, 0, 1], 1);
+      const model = app.models.add({ name: 'tight side hole', positions: dexelTriangles(ref).positions, role: 'reference' });
+      app.refreshTarget();
+      // The reference is itself on the lattice, so a looser tolerance than
+      // a CAD model would need keeps its own facets from reading as gouges.
+      app.setGougeTolerance(0.1);
+      app.reset();
+      const sim = app.simulator;
+      let n = 0;
+      while (!sim.finished && n++ < 100000) sim.run(Infinity, 50);
+      const firstHole = app.state.source.split('\n').findIndex((l) => /^G01 Z-15 F300/.test(l)) + 1;
+      const found = sim.collisions.filter((c) => c.type === 'gouge').map((c) => ({ line: c.line, depth: +c.depth.toFixed(3), at: c.position.map((v) => +v.toFixed(1)) }));
+      app.setGougeTolerance(0.02);
+      app.models.remove(model);
+      app.refreshTarget();
+      return { firstHole, found };
+    });
+    console.log('3D gouge:', JSON.stringify(gouge));
+    const wall = gouge.found.find((g) => g.line === gouge.firstHole);
+    check(wall && wall.depth > 0.2 && wall.depth < 0.45, `the Ø10 cutter in the Ø9.4 hole should be a 0.3 gouge on line ${gouge.firstHole}: ${JSON.stringify(gouge.found)}`);
+    check(gouge.found.every((g) => g.depth < 0.45), `nothing else should gouge: ${JSON.stringify(gouge.found)}`);
   }
 
   // ---- a program written for another control says so --------------------

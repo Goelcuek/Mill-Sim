@@ -269,3 +269,50 @@ test('a side hole is not a collision for a holder passing over it', () => {
   assert.equal(td.probeBody(body, 0, 0, -16), null, 'inside the hole');
   assert.ok(td.probeBody(body, 0, 8, -16), 'beside it, in metal');
 });
+
+// ---- gouges found along the lines -----------------------------------------
+
+import { buildTargetMap } from '../src/sim/target.js';
+
+/** A closed box as triangles, outward faces. */
+function boxTris(lo, hi) {
+  const v = (i) => [i & 1 ? hi[0] : lo[0], i & 2 ? hi[1] : lo[1], i & 4 ? hi[2] : lo[2]];
+  const faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  const t = [];
+  for (const [a, b, c, d] of faces) t.push(...v(a), ...v(b), ...v(c), ...v(a), ...v(c), ...v(d));
+  return Float32Array.from(t);
+}
+
+test('a gouge in a wall under the top is found while cutting, at its true depth', () => {
+  const td = block(0.25);
+  // The part is the block less its right-hand 10 mm: a wall at X10.
+  const target = buildTargetMap(td, [{ positions: boxTris([-20, -20, -30], [10, 20, 0]) }]);
+  assert.ok(target.closed, 'the reference is a solid');
+  const opts = { target, tolerance: 0.02 };
+  // From the side, 15 down, to X5: five into the wall, under a top that
+  // nothing touched — which is all a look from above can see.
+  const r = td.carveLinear(flat6.cutEnvelope, [25, 0, -15], [5, 0, -15], [1, 0, 0], 0, opts);
+  assert.ok(r.volume > 0);
+  assert.equal(r.gouge, null, 'the tops never changed, so the look from above sees nothing');
+  assert.ok(r.gouge3, 'found along the lines');
+  near(r.gouge3.depth, 5, 0.3, 'as deep as the cutter went past the wall');
+  near(r.gouge3.x, 5, 0.3, 'at the end of the cutter');
+
+  // Stopping 0.01 short of the wall is on size, and says nothing.
+  const clean = block(0.25);
+  const ok = clean.carveLinear(flat6.cutEnvelope, [25, 0, -15], [10.01, 0, -15], [1, 0, 0], 0, { target: buildTargetMap(clean, [{ positions: boxTris([-20, -20, -30], [10, 20, 0]) }]), tolerance: 0.02 });
+  assert.ok(ok.volume > 0);
+  assert.equal(ok.gouge3, null);
+});
+
+test('a line running just inside a wall is not a deep gouge', () => {
+  // Cutting 0.05 into the part's wall along it: every Y line through the
+  // cut is inside the part end to end, 40 long — but the cut is 0.05 deep,
+  // and that is what is reported.
+  const td = block(0.25);
+  const target = buildTargetMap(td, [{ positions: boxTris([-20, -20, -30], [10, 20, 0]) }]);
+  const r = td.carveLinear(flat6.cutEnvelope, [12.95, -25, -15], [12.95, 25, -15], [0, 0, 1], 0, { target, tolerance: 0.02 });
+  assert.ok(r.volume > 0);
+  assert.ok(r.gouge3, 'a gouge');
+  assert.ok(r.gouge3.depth < 0.3, `reported as ${r.gouge3.depth}, not the length of the line`);
+});

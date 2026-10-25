@@ -32,6 +32,7 @@
 // rejection, the force model, snapping, picking) keeps working.
 
 import { Stock, TILE } from './stock.js';
+import { lineInside, nearestWithin } from './surfaceIndex.js';
 import { profileOf } from '../tools/profile.js';
 
 /**
@@ -50,6 +51,10 @@ const MAX_INTERVALS = 255;
 const SCRATCH = new Float32Array(2 * (MAX_INTERVALS + 2));
 const SCRATCH_W = new Uint8Array(2 * (MAX_INTERVALS + 2));
 const HIT = [0, 0];
+/** What the last subtract took out of its line, [from, to] pairs in the line's own measure. */
+const REMOVED = [];
+/** How many places a carve may ask the part about exactly. */
+const GOUGE_CANDIDATES = 4;
 const SPAN = [0, 0];
 
 const PARALLEL = 0;
@@ -57,6 +62,19 @@ const PERP_FLAT = 1;
 const PERP_PLUNGE = 2;
 const PERP_RAMP = 3;
 const OBLIQUE = 4;
+
+/** The other two coordinates of p, in the order a family along `axis` keeps them. */
+function rest(axis, p) {
+  return axis === 0 ? [p[1], p[2]] : axis === 1 ? [p[0], p[2]] : [p[0], p[1]];
+}
+
+/** How far v is from leaving the stretch of `inside` it is in; 0 when in none. */
+function depthAlong(inside, v) {
+  for (let q = 0; q < inside.length; q += 2) {
+    if (v >= inside[q] && v <= inside[q + 1]) return Math.min(v - inside[q], inside[q + 1] - v);
+  }
+  return 0;
+}
 
 /** A cell size that keeps the three grids within the line budget. */
 function cellFor(size, requested, maxRays) {
@@ -261,6 +279,10 @@ export class TriDexelStock extends Stock {
     this.d3 = [this.dx, this.dy, this.size[2] / nz];
     this.o3 = [this.origin[0], this.origin[1], this.base];
     this.fam = [0, 1, 2].map((a) => this.makeFamily(a));
+    /** The reference part along each line, as it is asked for; made when there is one. */
+    this.partCache = { target: null, lines: [] };
+    this.partLines = null;
+    this.candidates = [];
     this.reset();
   }
 
@@ -437,6 +459,8 @@ export class TriDexelStock extends Stock {
       if (b >= e0 && a - s0 > SLIVER && (n === 1 || a >= pool[o + k - 1])) {
         const removed = e0 - a;
         if (removed <= MIN_CUT) return 0;
+        REMOVED.length = 0;
+        REMOVED.push(a, e0);
         pool[o + k + 1] = a;
         who[o + k + 1] = flag;
         return removed;
@@ -444,6 +468,7 @@ export class TriDexelStock extends Stock {
     }
     let m = 0;
     let removed = 0;
+    REMOVED.length = 0;
     for (let k = 0; k < n; k++) {
       const s = pool[o + 2 * k];
       const e = pool[o + 2 * k + 1];
@@ -453,6 +478,7 @@ export class TriDexelStock extends Stock {
         continue;
       }
       removed += (e < b ? e : b) - (s > a ? s : a);
+      REMOVED.push(s > a ? s : a, e < b ? e : b);
       if (a - s > SLIVER) {
         SCRATCH[m] = s; SCRATCH_W[m++] = who[o + 2 * k];
         SCRATCH[m] = a; SCRATCH_W[m++] = flag;
@@ -536,18 +562,123 @@ export class TriDexelStock extends Stock {
     const flag = Math.min(255, toolIndex + 1);
     this.gouge = null;
     this.gougeOpts = opts.target ? opts : null;
+    // A closed reference part can be asked along every line, not only
+    // from above: see gougeAlong.
+    const t = opts.target;
+    this.partLines = t && t.closed && t.surface ? t : null;
+    if (this.partLines && this.partCache.target !== t) this.partCache = this.newPartCache(t);
+    this.candidates = [];
     let volume = 0;
     for (const F of this.fam) {
       const len = this.carveFamily(F, prof, tipA, D, dir, flag);
       if (F.a === 2) volume = len * F.db * F.dc;
     }
     const gouge = this.gouge;
+    const gouge3 = this.measureCandidates(opts.tolerance || 0);
     this.gouge = null;
     this.gougeOpts = null;
-    if (volume <= 0) return { volume: 0, gouge };
+    this.partLines = null;
+    if (volume <= 0) return { volume: 0, gouge, gouge3 };
     this.version++;
     this.removedVolume += volume;
-    return { volume, gouge };
+    return { volume, gouge, gouge3 };
+  }
+
+  /**
+   * Did what line r just lost reach into the part?
+   *
+   * The part is asked along the same line: where it is solid there. A
+   * stretch removed from inside it is a gouge at most as deep as the
+   * furthest it gets from the ends of the part's stretch — and, since a
+   * point that deep along one line need not be deep at all (a line running
+   * just inside a wall is inside it end to end), the same is asked along
+   * the other two axes through that point, and the least of the three kept.
+   * What is still deeper than the tolerance is a candidate; the deepest few
+   * are measured to the part's surface at the end of the carve.
+   */
+  gougeAlong(F, r, i, j, tolerance) {
+    const { a, b, c } = F;
+    const L = this.partCache.lines[a];
+    const pb = this.o3[b] + (i + 0.5) * F.db;
+    const pc = this.o3[c] + (j + 0.5) * F.dc;
+    if (L.off[r] < 0) {
+      const hits = lineInside(this.partLines.surface, a, pb, pc);
+      const n = Math.min(hits.length, 2 * MAX_INTERVALS);
+      if (L.used + n > L.pool.length) {
+        const grown = new Float32Array(Math.max(2 * L.pool.length, L.used + n, 1024));
+        grown.set(L.pool.subarray(0, L.used));
+        L.pool = grown;
+      }
+      L.pool.set(hits.subarray(0, n), L.used);
+      L.off[r] = L.used;
+      L.cnt[r] = n / 2;
+      L.used += n;
+    }
+    const n = L.cnt[r];
+    if (!n) return;
+    const part = L.pool;
+    const base = L.off[r];
+    const oa = this.o3[a];
+    for (let k = 0; k < REMOVED.length; k += 2) {
+      const x0 = oa + REMOVED[k];
+      const x1 = oa + REMOVED[k + 1];
+      for (let q = base; q < base + 2 * n; q += 2) {
+        const ps = part[q];
+        const pe = part[q + 1];
+        const y0 = Math.max(x0, ps);
+        const y1 = Math.min(x1, pe);
+        if (!(y1 > y0)) continue;
+        const mid = Math.min(y1, Math.max(y0, (ps + pe) / 2));
+        let bound = Math.min(mid - ps, pe - mid);
+        if (bound <= tolerance) continue;
+        const p = [0, 0, 0];
+        p[a] = mid; p[b] = pb; p[c] = pc;
+        for (const other of [b, c]) {
+          bound = Math.min(bound, depthAlong(lineInside(this.partLines.surface, other, ...rest(other, p)), p[other]));
+          if (bound <= tolerance) break;
+        }
+        if (bound <= tolerance) continue;
+        this.candidates.push({ bound, p });
+        if (this.candidates.length > 4 * GOUGE_CANDIDATES) this.trimCandidates();
+      }
+    }
+  }
+
+  /**
+   * Where each line is inside the reference, filled in as lines are cut:
+   * per family an offset into a pool (−1 until asked) and a count, the
+   * way the stock keeps its own stretches — a Map of little arrays ran to
+   * hundreds of megabytes on a fine lattice.
+   */
+  newPartCache(target) {
+    return {
+      target,
+      lines: this.fam.map((F) => ({
+        off: new Int32Array(F.rays).fill(-1), cnt: new Uint8Array(F.rays), pool: new Float32Array(0), used: 0,
+      })),
+    };
+  }
+
+  trimCandidates() {
+    this.candidates.sort((u, v) => v.bound - u.bound);
+    this.candidates.length = Math.min(this.candidates.length, GOUGE_CANDIDATES);
+  }
+
+  /** The deepest of the candidates, measured to the part's surface. */
+  measureCandidates(tolerance) {
+    if (!this.candidates || !this.candidates.length || !this.partCache.target) return null;
+    this.trimCandidates();
+    const surface = this.partCache.target.surface;
+    let best = null;
+    for (const { bound, p } of this.candidates) {
+      // Inside the part, so the nearest face is how deep: and no further
+      // than the bound, which is what the search is limited to.
+      const d = nearestWithin(surface, p[0], p[1], p[2], bound + 1e-6);
+      const depth = d < Infinity ? d : bound;
+      if (depth > tolerance && (!best || depth > best.depth)) best = { depth, x: p[0], y: p[1], z: p[2] };
+    }
+    this.candidates = [];
+    return best;
   }
 
   /** One family's share of a cut. Returns the material removed, in mm along its lines. */
@@ -868,6 +999,7 @@ export class TriDexelStock extends Stock {
         if (tIn < aLo) aLo = tIn;
         if (tOut > aHi) aHi = tOut;
         if (a === 2) this.topChanged(F, r, i, j);
+        if (this.partLines) this.gougeAlong(F, r, i, j, this.gougeOpts.tolerance || 0);
       }
     }
 

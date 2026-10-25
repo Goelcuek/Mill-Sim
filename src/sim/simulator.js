@@ -989,12 +989,17 @@ export class Simulator {
     if (stock) {
       const opts = { target: this.target, tolerance: this.gougeTolerance };
       let gouged = null;
+      // Found along the lines rather than from above, and already measured
+      // to the part's surface: see TriDexelStock.gougeAlong.
+      let gouged3 = null;
+      const take3 = (r) => { if (r.gouge3 && (!gouged3 || r.gouge3.depth > gouged3.depth)) gouged3 = r.gouge3; };
       if (!tilted) {
         // Before the carve: the stock still holds what this chunk will cut.
         if (this.analyzer) this.analyzer.sample(stock, slot, mv, poseA.tip, poseB.tip);
         const result = stock.carveSweep(slot.built.cutEnvelope, poseA.tip, poseB.tip, slot.index, opts);
         removed = result.volume;
         gouged = result.gouge;
+        take3(result);
       } else if (stock.carveLinear && sameAxis(poseA.dir, poseB.dir)) {
         // Leaning but not swinging — 3+2 work — is a straight sweep of a
         // fixed solid, which a stock kept along all three axes solves
@@ -1002,11 +1007,13 @@ export class Simulator {
         const result = stock.carveLinear(slot.built.cutEnvelope, poseA.tip, poseB.tip, poseA.dir, slot.index, opts);
         removed = result.volume;
         gouged = result.gouge;
+        take3(result);
       } else {
         for (const [tip, dir] of this.stamps(poseA, poseB, slot, mv, from, to, u0, u1)) {
           const result = stock.carveTilted(slot.built.cutEnvelope, tip, dir, slot.built.fluteLength, slot.index, opts);
           removed += result.volume;
           if (result.gouge && (!gouged || result.gouge.depth > gouged.depth)) gouged = result.gouge;
+          take3(result);
         }
       }
       // The carver finds a gouge looking straight down, which overstates it
@@ -1016,6 +1023,7 @@ export class Simulator {
         const depth = gougeDepth(this.target, gouged.x, gouged.y, gouged.z, gouged.z + gouged.depth);
         gouged = depth > this.gougeTolerance ? { ...gouged, depth } : null;
       }
+      if (gouged3 && (!gouged || gouged3.depth > gouged.depth)) gouged = gouged3;
       if (gouged) {
         const g = gouged;
         this.report('gouge', {

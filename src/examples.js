@@ -215,7 +215,7 @@ export const EXAMPLES = [
       }
     },
     "file": "examples/side-holes-full-3d-stock.nc",
-    "lines": 59
+    "lines": 58
   }
 ];
 

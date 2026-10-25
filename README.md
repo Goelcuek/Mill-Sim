@@ -633,10 +633,21 @@ rather than a pose the machine cannot make.
 ### Gouging
 
 Import a model as a **reference part** and it becomes the shape the job is
-supposed to produce. It is rasterised onto the stock's own grid, so the
-check costs one array read inside the carving loop that is already running:
-cut below that surface by more than the tolerance and it is reported as a
-gouge, with its depth, alongside the collisions.
+supposed to produce, and the run is checked against it as it cuts: cut into
+it by more than the tolerance and it is reported as a gouge, with its
+depth, alongside the collisions.
+
+From above, its top is rasterised onto the stock's grid and every Z line
+whose top comes down is compared with it — one array read inside the
+carving loop. A closed model is also asked along the stock's own lines:
+the first time a line is cut, the part is cast along it once and its solid
+stretches kept, and every stretch the cut removes is set against them. A
+point that deep along one line need not be deep at all — a line running
+just inside a wall is inside it end to end — so the deepest candidates are
+bounded along the other two axes as well and only the deepest few are
+measured to the part's surface. That is how a Ø10 cutter in a hole the
+part wants at Ø9.4 is reported as the 0.30 mm gouge it is, on the line
+that drilled it, though no top changed.
 
 The Results panel also reports the other half of the comparison — how much
 stock is still standing above the part, and what fraction of the reference
@@ -673,7 +684,7 @@ same measure gives the reading under the pointer.
 | **Table collision** | The assembly went below the table surface inside its footprint. |
 | **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — with the part's name and the axis it rides on. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
-| **Gouge into the reference part** | The cutter went below the reference surface by more than the tolerance. |
+| **Gouge into the reference part** | The cutter went into the reference part by more than the tolerance — measured to the part's nearest face, so a gouge in a wall or the side of a hole is as deep as it really is. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
 | **No tool assembly loaded** | The program selected a `T` number the library has no assembly for. |
 
@@ -730,10 +741,11 @@ silently ignored.
 
 ## Honest limitations
 
-- **The gouge check during the run is top-down.** It compares the highest
-  material on each Z line with the reference part's top, so a gouge in the
-  wall of a side hole shows on the deviation map but is not reported while
-  the program runs.
+- **The gouge check during the run needs a closed reference for 3D.**
+  Against a closed model every cut is checked along all three families of
+  lines, so a gouge in the wall of a side hole is reported while the
+  program runs. An open sheet of faces has only a top, and is checked from
+  above.
 - **A leaning tool moving at an angle to the lines is stamped** rather
   than solving it exactly.
 - **The surface is as fine as its lattice.** A fin or a slot thinner

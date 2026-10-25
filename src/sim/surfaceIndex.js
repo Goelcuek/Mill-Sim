@@ -374,3 +374,111 @@ export function nearestWithin(index, px, py, pz, r) {
   }
   return found ? Math.sqrt(best2) : Infinity;
 }
+
+// ---- the part along a line ---------------------------------------------------
+//
+// The stock is kept as stretches along lines parallel to X, Y and Z; asking
+// the part the same question — where along this line is it solid — lets a
+// cut be compared with the part line by line, which is how a gouge in the
+// wall of a side hole is found while the program runs. The triangles are
+// bucketed once per axis over the plane square to it.
+
+/** Most buckets a triangle goes in before it is on the list everyone checks. */
+const BIG_LINE = 256;
+
+function lineGrid(index, a) {
+  index.lineGrids = index.lineGrids || [null, null, null];
+  if (index.lineGrids[a]) return index.lineGrids[a];
+  const b = a === 0 ? 1 : 0;
+  const c = a === 2 ? 1 : 2;
+  const { box, count } = index;
+  const lo = [index.bounds[b], index.bounds[c]];
+  const hi = [index.bounds[b + 3], index.bounds[c + 3]];
+  const span = Math.max(hi[0] - lo[0], hi[1] - lo[1], 1e-6);
+  const cell = Math.max(span / 512, 0.5);
+  const nu = Math.max(1, Math.ceil((hi[0] - lo[0]) / cell) + 1);
+  const nv = Math.max(1, Math.ceil((hi[1] - lo[1]) / cell) + 1);
+  const at = (v, l, n) => Math.min(n - 1, Math.max(0, Math.floor((v - l) / cell)));
+  const big = [];
+  const counts = new Uint32Array(nu * nv + 1);
+  const span4 = (i) => [at(box[i * 6 + b], lo[0], nu), at(box[i * 6 + 3 + b], lo[0], nu), at(box[i * 6 + c], lo[1], nv), at(box[i * 6 + 3 + c], lo[1], nv)];
+  const isBig = new Uint8Array(count);
+  for (let i = 0; i < count; i++) {
+    const [u0, u1, v0, v1] = span4(i);
+    if ((u1 - u0 + 1) * (v1 - v0 + 1) > BIG_LINE) { big.push(i); isBig[i] = 1; continue; }
+    for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) counts[v * nu + u + 1]++;
+  }
+  for (let k = 1; k <= nu * nv; k++) counts[k] += counts[k - 1];
+  const items = new Uint32Array(counts[nu * nv]);
+  const fill = counts.slice(0, nu * nv);
+  for (let i = 0; i < count; i++) {
+    if (isBig[i]) continue;
+    const [u0, u1, v0, v1] = span4(i);
+    for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) items[fill[v * nu + u]++] = i;
+  }
+  index.lineGrids[a] = { b, c, lo, cell, nu, nv, starts: counts, items, big: Uint32Array.from(big) };
+  return index.lineGrids[a];
+}
+
+const HITS = [];
+
+/**
+ * Where a line parallel to axis `a`, through (u, v) on the other two axes
+ * in order, is inside the part: [in, out, in, out, …] along the axis,
+ * sorted. Each part is counted on its own and the answer is their union,
+ * as insideSolid does. Only meaningful for a closed part.
+ *
+ * @returns {Float64Array}
+ */
+export function lineInside(index, a, u, v) {
+  if (!index) return new Float64Array(0);
+  const g = lineGrid(index, a);
+  const { tris, part, seen } = index;
+  const { b, c } = g;
+  // Off the round numbers models and lattices are made of, as the inside
+  // test is: a line through a shared edge is otherwise counted twice.
+  const pu = u + JX;
+  const pv = v + JY;
+  HITS.length = 0;
+  const stamp = nextStamp(index);
+  const test = (i) => {
+    if (seen[i] === stamp) return;
+    seen[i] = stamp;
+    const o = i * 9;
+    const au = tris[o + b], av = tris[o + c];
+    const e0u = tris[o + 3 + b] - au, e0v = tris[o + 3 + c] - av;
+    const e1u = tris[o + 6 + b] - au, e1v = tris[o + 6 + c] - av;
+    const den = e0u * e1v - e1u * e0v;
+    if (Math.abs(den) < 1e-18) return;           // edge-on along the line
+    const qu = pu - au, qv = pv - av;
+    const s = (qu * e1v - e1u * qv) / den;
+    if (s < 0 || s > 1) return;
+    const t = (e0u * qv - qu * e0v) / den;
+    if (t < 0 || s + t > 1) return;
+    const aa = tris[o + a];
+    HITS.push(aa + s * (tris[o + 3 + a] - aa) + t * (tris[o + 6 + a] - aa), part[i]);
+  };
+  for (let n = 0; n < g.big.length; n++) test(g.big[n]);
+  const iu = Math.floor((pu - g.lo[0]) / g.cell);
+  const iv = Math.floor((pv - g.lo[1]) / g.cell);
+  if (iu >= 0 && iv >= 0 && iu < g.nu && iv < g.nv) {
+    const k = iv * g.nu + iu;
+    for (let n = g.starts[k]; n < g.starts[k + 1]; n++) test(g.items[n]);
+  }
+  const m = HITS.length / 2;
+  if (!m) return new Float64Array(0);
+  const order = Array.from({ length: m }, (_, k) => k).sort((x, y) => HITS[2 * x] - HITS[2 * y]);
+  for (let p = 0; p < index.partCount; p++) PARITY[p] = 0;
+  const out = [];
+  let inside = 0;
+  for (const k of order) {
+    const p = HITS[2 * k + 1];
+    const was = inside;
+    PARITY[p] ^= 1;
+    inside += PARITY[p] ? 1 : -1;
+    if (!was && inside) out.push(HITS[2 * k]);
+    else if (was && !inside) out.push(HITS[2 * k]);
+  }
+  if (out.length % 2) out.pop();               // an open skin: no closing crossing
+  return Float64Array.from(out);
+}
