@@ -667,7 +667,13 @@ test('a trunnion swung on its own turns the part: the slides stay, the tool stay
   // no table under a tool the table turned away from.
   const onSwing = sim.collisions.filter((c) => c.line === p.moves[swing].line);
   assert.deepEqual(onSwing.map((c) => c.message), [], 'a swing well clear of everything');
-  // Lower the tool until the table's edge, swinging up, really does meet
+  // The table checked is the round platter that is drawn, not a generic
+  // rectangle: at Z100 a corner 230 mm out would meet the tool, the
+  // 165 mm platter swings past it.
+  const mid = run('G90\nG0 X0 Y0 Z100\nA-90\nM30').sim;
+  mid.runAll();
+  assert.deepEqual(mid.collisions.filter((c) => /table/.test(c.message)).map((c) => c.message), [], 'the round platter misses');
+  // Lower the tool until the platter's rim, swinging up, really does meet
   // it: that one is a crash, and it is reported as one.
   const low = run('G90\nG0 X0 Y0 Z60\nA-90\nM30').sim;
   low.runAll();

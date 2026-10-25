@@ -354,6 +354,20 @@ export class Simulator {
     return !!(this.kinematics && this.kinematics.extras().length);
   }
 
+  /**
+   * The table the tool is checked against: the one the machine draws, when
+   * it draws one, at the height the setting gives. A trunnion's platter is
+   * a circle 330 across; the setting's 900 by 460 slab is a three-axis
+   * table, and swung up on end it reached a tool nothing on screen was near.
+   */
+  tableShape() {
+    const t = this.machine && this.machine.table;
+    if (!t) return t;
+    const k = this.kinematics;
+    const drawn = k && this.machine.proxies !== false && k.tableFootprint ? k.tableFootprint() : null;
+    return drawn ? { ...t, xMin: -Infinity, xMax: Infinity, yMin: -Infinity, yMax: Infinity, ...drawn } : t;
+  }
+
   /** Gauge length of the assembly currently in the spindle. */
   get gaugeLength() {
     return this.activeSlot ? this.activeSlot.built.gaugeLength : 0;
@@ -845,7 +859,7 @@ export class Simulator {
       }
 
       if (this.machine) {
-        const tbl = checkTable(slot.spheres, tip, this.machine.table, clearance, dir);
+        const tbl = checkTable(slot.spheres, tip, this.tableShape(), clearance, dir);
         if (tbl && tbl.gap < 0) {
           this.report('table', {
             line: mv.line,

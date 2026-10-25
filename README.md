@@ -181,7 +181,10 @@ hides beneath the top surface is taken to be solid.
 
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
-imported fixtures, the table surface and the travel limits. **Setup ›
+imported fixtures, the table surface and the travel limits. The table
+checked is the one the machine draws, round platter or slotted
+rectangle, and it turns with its axes; the castings that carry it
+(cradle, cheeks, column) are drawn but not yet checked. **Setup ›
 Checks** decides what counts: ask for clearance and a pass that clears a
 clamp by 2 mm is reported as the near miss it is, rather than only metal
 in metal. Which parts of the assembly are checked at all is a switch, and

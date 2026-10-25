@@ -246,7 +246,7 @@ export function checkFixtures(spheres, tip, fixtures, skipBelow = 0, clearance =
  */
 export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
   if (!table || !table.enabled) return null;
-  const { z, xMin, xMax, yMin, yMax } = table;
+  const { z, xMin, xMax, yMin, yMax, round } = table;
   const want = Math.max(clearance, 0);
   let worst = null;
   // Each part of the assembly is asked about where it is, not where the
@@ -256,7 +256,12 @@ export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
     // On the edge of the table is beside it, not over it: a tool laid flat
     // against the table's side face touches it and is not in it.
     const e = 1e-6;
-    if (x <= xMin + e || x >= xMax - e || y <= yMin + e || y >= yMax - e) return;
+    if (round) {
+      // A rotary table's platter: round, whatever angle it is at.
+      const dx = x - round.cx;
+      const dy = y - round.cy;
+      if (dx * dx + dy * dy >= (round.r - e) * (round.r - e)) return;
+    } else if (x <= xMin + e || x >= xMax - e || y <= yMin + e || y >= yMax - e) return;
     const gap = bottom - z;
     if (gap < want && (!worst || gap < worst.gap)) {
       worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ, x, y };

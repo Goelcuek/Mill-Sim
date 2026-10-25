@@ -446,6 +446,31 @@ export class Kinematics {
   }
 
   /**
+   * The table the part sits on, as the machine draws it, in part
+   * coordinates: a platter's circle or a slab's rectangle, from the casting
+   * on the work node. Null when the work node draws no table — a machine
+   * built from the shop's own bodies — and the table setting is what there
+   * is to go on.
+   *
+   * @returns {null | {round?:{cx:number, cy:number, r:number},
+   *   xMin?:number, xMax?:number, yMin?:number, yMax?:number}}
+   */
+  tableFootprint() {
+    const node = this.workNode && this.byId.get(this.workNode);
+    const z = this.tableOffset;
+    for (const q of (node && node.proxy) || []) {
+      if (q.part === 'rotaryTable' && q.radius > 0) {
+        const at = q.at || [0, 0, 0];
+        return { round: { cx: at[0] - z[0], cy: at[1] - z[1], r: q.radius } };
+      }
+      if ((q.part === 'slotted' || q.part === 'block') && q.min && q.max) {
+        return { xMin: q.min[0] - z[0], xMax: q.max[0] - z[0], yMin: q.min[1] - z[1], yMax: q.max[1] - z[1] };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Where the part's zero sits in the work frame, for a given tool.
    *
    * This is the tool tip at machine home, which is the point `toolInPart`
