@@ -591,3 +591,35 @@ test('the nearer of the two solutions wins, and an angle wraps towards where the
   const still = k.rotariesForToolAxis([0, 0, 1], { B: 0, C: 123.4 }, 0);
   assert.ok(Math.abs(still.B) < 1e-6 && Math.abs(still.C - 123.4) < 1e-6, JSON.stringify(still));
 });
+
+test('a rotary takes time to turn: at its own rapid, at F in degrees, never faster than it can', () => {
+  const times = (code, cfg = {}) => interpret(code, cfg).moves.map((m) => m.time);
+  const near = (a, b, what) => assert.ok(Math.abs(a - b) < 1e-9, `${what}: ${a} vs ${b}`);
+  // G0 A90 alone at the default 7200°/min — a quarter turn in 0.75 s, not
+  // in no time because the tip did not move.
+  near(times('G90 G0 A90')[0], 0.75, 'a rapid swing');
+  near(times('G90 G0 A90', { rotaryRapid: 3600 })[0], 1.5, 'a slower rotary');
+  // With X as well, the slower of the two decides.
+  near(times('G90 G0 X100 A10')[0], 0.4, 'X is the long pole');
+  near(times('G90 G0 X10 C180')[0], 1.5, 'C is the long pole');
+  // A feed of a rotary alone is degrees a minute.
+  near(times('G90 G94 G1 C90 F1800')[0], 3, 'C90 at F1800');
+  // Mixed: a Fanuc runs F along all of them together, degrees as mm;
+  // Siemens along the linear path, the rotary keeping up.
+  near(times('G90 G94 G1 X30 A40 F1000')[0], 3, 'Fanuc composite');
+  near(times('G90 G94 G1 X30 A40 F1000', { controller: { flavour: 'siemens' } })[0], 1.8, 'Siemens linear path');
+  // However slow the feed of the tip, the rotary cannot outrun itself:
+  // a long swing on a short move is the rotary's time.
+  near(times('G90 G94 G1 X1 C360 F100000', { controller: { flavour: 'siemens' } })[0], 3, 'capped by the rotary');
+  // Inverse time is the program's own say, unless the rotary cannot do it.
+  near(times('G90 G93 G1 X30 A40 F2')[0], 30, 'G93 F2');
+  near(times('G90 G93 G1 A360 F60')[0], 3, 'G93 faster than the rotary can');
+});
+
+test('on a machine whose A and C are its own axes, a turn is counted once', () => {
+  const machine = buildPreset('tableTable');
+  const p = interpret('G90 G21\nG0 A30\nG94 G1 C90 F1800\nM30', { kinematics: machine });
+  const [swing, feed] = p.moves.filter((m) => m.kind !== 'dwell');
+  assert.ok(Math.abs(swing.time - 0.25) < 1e-9, `G0 A30 at 7200°/min: ${swing.time}`);
+  assert.ok(Math.abs(feed.time - 3) < 1e-9, `G1 C90 F1800: ${feed.time}`);
+});

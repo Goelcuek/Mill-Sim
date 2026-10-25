@@ -738,6 +738,16 @@ return planes, `Q` pecks, `P` dwells and `L` repeats
 `G69` cancel, `G53.1` orient the tool normal to the plane, `G43.4`/`G43.5`
 tool centre point control, and `A`/`B`/`C` words on any move
 
+**How long a move takes** counts every axis it moves. A `G0` takes as long
+as its slowest axis: the linear ones at the rapid rate, the rotaries at the
+rotary rapid (**Machine › Travels**, 7200°/min by default), so a head
+swinging 90° with the tip standing still takes 0.75 s, not no time. Under
+`G94`, `F` alone on a rotary is degrees a minute; with linear axes too, a
+Fanuc runs it along all of them together (degrees counted as millimetres)
+and Siemens, Heidenhain and Fidia along the linear path, as does any control
+under tool centre point. `G93` is the program's own time. Whatever `F`
+says, no rotary turns faster than its rotary rapid.
+
 **Other** `G04` dwell, `G28`/`G30` reference return, `G40`–`G42`,
 `G61`/`G64`, `G93`/`G94`/`G95`
 

@@ -7,6 +7,7 @@
 ;   RTCP ON   holds the tool tip still while the rotaries move
 ;   G0/G2/G3  last one block; a bare block of coordinates is a feed
 ;   R         is written negative for the arc a Fanuc writes positive
+;   F90000    is 900 a minute: the feed is written a hundred times over
 ;   G92       reads DX/DY/DZ — which way the tool points — and works
 ;             out the rotary positions itself. G93 goes back.
 ;   RG 50 1   sets a register; $IF (RG 50 = 1) tests one.
@@ -37,7 +38,7 @@ RTCP ON
 
 ; ---- a slot, to show G0 lasting exactly one block --------------------
 >G0 X-30 Y0 Z10
-F900
+F90000
 X-30 Y0 Z-3
 X30 Y0 Z-3
 >G0 Z10
@@ -49,7 +50,7 @@ X30 Y0 Z-3
 ;      it, it says which way round the work is sitting. So the same four
 ;      blocks cut four grooves, a quarter turn apart.
 >G0 X-30 Y-14 Z2
-F900
+F90000
 $REP 4
 Z-1                     ; down into the metal
 X30                     ; cut across
@@ -63,7 +64,7 @@ $END
 
 ; ---- an arc, radius written negative ---------------------------------
 >G0 X-20 Y22 Z10
-F700
+F70000
 X-20 Y22 Z-2.5
 G03 X20 Y22 R-25
 >G0 Z10
@@ -74,7 +75,7 @@ $IF (RG 50 = 0) $GOTO DONE
 
 G92
 >G0 X0 Y-22 Z20
-F500
+F50000
 ; tip the tool over up here, where nothing can be touched on the way
 X0 Y-22 Z20 DX0 DY-0.4226 DZ0.9063
 X0 Y-22 Z2 DX0 DY-0.4226 DZ0.9063

@@ -1145,6 +1145,7 @@ export class MachinePanel extends Panel {
             onChange: (v) => app.setMachine({ tableZ: v || 0, table: { ...m.table, z: v || 0 } }),
           }),
           field('Rapid rate', m.rapidRate, { min: 100, step: 500, unit: 'mm/min', onChange: (v) => app.setMachine({ rapidRate: Math.max(100, v || 1000) }) }),
+          field('Rotary rapid', m.rotaryRapid || 7200, { min: 60, step: 360, unit: '°/min', title: 'How fast the rotaries turn at G0, and the fastest they turn at all', onChange: (v) => app.setMachine({ rotaryRapid: Math.max(60, v || 7200) }) }),
         ]),
         row([
           field('Spindle nose \u00d8', m.spindleDiameter, { min: 0, step: 5, unit: 'mm', onChange: (v) => app.setMachine({ spindleDiameter: Math.max(0, v || 0) }) }),

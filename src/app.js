@@ -953,6 +953,8 @@ export class App {
     } else {
       this.applyMachineParts();
       this.simulator.retune({ machine: this.state.machine });
+      // How long every move takes is read from the rates.
+      if (patch.rapidRate !== undefined || patch.rotaryRapid !== undefined) this.reinterpret();
       if (this.panels && this.panels.machine) this.panels.machine.refresh();
     }
     this.viewer.invalidate();
@@ -2013,6 +2015,7 @@ export class App {
     if (name) this.state.programName = name;
     const program = interpret(text, {
       rapidRate: this.state.machine.rapidRate,
+      rotaryRapid: this.state.machine.rotaryRapid || 7200,
       wcs: this.state.wcs,
       machineZero: homeOf(this.state.machine),
       g30: homeOf(this.state.machine),

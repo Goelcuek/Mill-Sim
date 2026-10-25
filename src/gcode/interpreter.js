@@ -17,6 +17,11 @@ export const DEFAULT_CONFIG = {
   /** Rapid traverse used for time estimates, mm/min. */
   rapidRate: 15000,
   /**
+   * How fast the rotaries turn at rapid, degrees a minute — and the fastest
+   * they turn at all, whatever F asks for. 7200 is 20 rpm.
+   */
+  rotaryRapid: 7200,
+  /**
    * The control's own defaults — the modal state a program starts in
    * before it says anything.
    *
@@ -416,7 +421,8 @@ export function interpret(text, config = {}) {
   const extras = extraLetters(cfg);
   const auxLinear = new Set([...extras].filter(([, kind]) => kind === 'linear').map(([L]) => L));
   /** Rotary letters: the three by convention, plus whatever else turns. */
-  const turning = ['A', 'B', 'C', ...[...extras].filter(([, k]) => k === 'rotary').map(([L]) => L)];
+  // Once each: a machine's own A and C are among its extras as well.
+  const turning = [...new Set(['A', 'B', 'C', ...[...extras].filter(([, k]) => k === 'rotary').map(([L]) => L)])];
 
   const moves = [];
   const warnings = [];
@@ -528,11 +534,48 @@ export function interpret(text, config = {}) {
    * sensible speed along the tip. Read as mm/min, F0.1 at S1000 took a
    * thousand minutes over a 100 mm line, and a G93 F2 took fifty.
    */
-  const timing = (kind, len, feed) => {
-    if (kind === 'rapid') return { feed: cfg.rapidRate, time: len > 0 ? (len / cfg.rapidRate) * 60 : 0 };
-    if (st.feedMode === 93 && st.feedRaw > 0) return { feed: len * st.feedRaw, time: 60 / st.feedRaw };
+  const timing = (kind, tipLen, feed) => {
+    // The other axes the move turns or slides. A swing of the head with the
+    // tip standing still is not a move of no length: it takes as long as
+    // the slowest axis needs, and a U/V/W slide is travel like X, Y and Z.
+    const { turn, turnSq, slideSq } = otherTravel();
+    const len = slideSq > 0 ? Math.sqrt(tipLen * tipLen + slideSq) : tipLen;
+    // No rotary turns faster than its own rapid, whatever F says.
+    const turnMin = turn > 0 ? (turn / Math.max(cfg.rotaryRapid, 1e-6)) * 60 : 0;
+    if (kind === 'rapid') {
+      return { feed: cfg.rapidRate, time: Math.max(len > 0 ? (len / cfg.rapidRate) * 60 : 0, turnMin) };
+    }
+    if (st.feedMode === 93 && st.feedRaw > 0) return { feed: len * st.feedRaw, time: Math.max(60 / st.feedRaw, turnMin) };
     const rate = st.feedMode === 95 && st.rpm > 0 ? feed * st.rpm : feed;
-    return { feed: rate, time: len > 0 ? (len / Math.max(rate, 1e-6)) * 60 : 0 };
+    // What F is a speed along. A rotary alone: degrees a minute. With the
+    // linear axes, a Fanuc applies it to all of them together, degrees
+    // counted as millimetres; Siemens, Heidenhain and Fidia to the linear
+    // path, the rotaries keeping pace — as does any control under tool
+    // centre point, where F is the tip's speed along the part.
+    let span = len;
+    if (turnSq > 0) {
+      if (len <= 1e-9) span = Math.sqrt(turnSq);
+      else if (dialect.id === 'fanuc' && !st.tcp) span = Math.sqrt(len * len + turnSq);
+    }
+    const t = span > 0 ? (span / Math.max(rate, 1e-6)) * 60 : 0;
+    return { feed: rate, time: Math.max(t, turnMin) };
+  };
+
+  /** How far this move turns the rotaries (largest, and sum of squares) and slides U/V/W. */
+  const otherTravel = () => {
+    let turn = 0;
+    let turnSq = 0;
+    let slideSq = 0;
+    for (const L of turning) {
+      const d = Math.abs((st.rot[L] || 0) - (st.rotPrev[L] || 0));
+      if (d > turn) turn = d;
+      turnSq += d * d;
+    }
+    for (const L of auxLinear) {
+      const d = (st.rot[L] || 0) - (st.rotPrev[L] || 0);
+      slideSq += d * d;
+    }
+    return { turn, turnSq, slideSq };
   };
 
   const emitLinear = (line, kind, target, feed) => {

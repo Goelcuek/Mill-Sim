@@ -18,7 +18,7 @@ import { defaultMacros, DEFAULT_PARAMETERS } from './macros.js';
  */
 export const MACHINE_SETTINGS = [
   'home', 'tableSize', 'tableZ', 'spindleDiameter', 'spindleLength',
-  'limits', 'table', 'rapidRate', 'maxFeed', 'proxies', 'accent',
+  'limits', 'table', 'rapidRate', 'rotaryRapid', 'maxFeed', 'proxies', 'accent',
 ];
 
 export const DEFAULT_MACHINE = {
@@ -49,6 +49,8 @@ export const DEFAULT_MACHINE = {
   limits: { enabled: true, frame: 'home', min: [-380, -215, -370], max: [380, 215, 80] },
   table: { enabled: true, z: -80, xMin: -450, xMax: 450, yMin: -230, yMax: 230 },
   rapidRate: 15000,
+  /** How fast the rotaries turn at rapid, °/min — their top speed. */
+  rotaryRapid: 7200,
   maxFeed: 10000,
   /**
    * Draw a stand-in casting for an axis that has no body of its own.
