@@ -396,6 +396,8 @@ try {
   {
     await loadExample(page, 8, 'Side holes');
     await runToEnd(page);
+    // The surface catches up on idle frames after the run.
+    await page.waitForFunction(() => !window.millsim.stockView.pending, null, { timeout: 30000 }).catch(() => {});
     const side = await page.evaluate(() => {
       const app = window.millsim;
       const st = app.stock;
@@ -405,7 +407,11 @@ try {
         findings: app.simulator.collisions.length,
         errors: app.state.program.warnings.filter((w) => w.severity === 'error').length,
         overHole: st.stretchesAt(2, [52.1, 20.1, 0]).map((r) => r.map((v) => +v.toFixed(2))),
-        drawn: app.stockView.cloud ? app.stockView.cloud.group.children.length : 0,
+        drawn: app.stockView.surface ? app.stockView.surface.triangleCount() : 0,
+        pending: app.stockView.pending,
+        // Pointing at the right face, level with the first hole: the ray
+        // goes down it and stops at its bottom, 15 in from the face.
+        pick: (() => { const h = st.raycast([120, 0.05, -15.05], [-1, 0, 0]); return h ? +h.point[0].toFixed(2) : null; })(),
       };
     });
     console.log('side holes:', JSON.stringify(side));
@@ -413,7 +419,20 @@ try {
     check(side.errors === 0 && side.findings === 0, 'the side-hole example should run clean');
     check(side.overHole.length === 2 && Math.abs(side.overHole[0][1] + 20) < 0.05 && Math.abs(side.overHole[1][0] + 10) < 0.05,
       `the Z line over the second side hole should have metal under and over it: ${JSON.stringify(side.overHole)}`);
-    check(side.drawn > 0, 'the full 3D stock drew nothing');
+    check(side.drawn > 1000, 'the full 3D stock drew nothing');
+    check(!side.pending, 'the full 3D surface was still being made after the run');
+    check(side.pick !== null && Math.abs(side.pick - 45) < 0.05, `a ray down the side hole should stop at its bottom (x 45): ${side.pick}`);
+    // A section through the holes draws the inside as the cut face.
+    const caps = await page.evaluate(() => {
+      const app = window.millsim;
+      app.state.display.sectionPct = 60;
+      app.applyDisplay();
+      const side = app.stockView.surface.material.side;
+      app.state.display.sectionPct = 100;
+      app.applyDisplay();
+      return { cut: side, whole: app.stockView.surface.material.side };
+    });
+    check(caps.cut === 2 && caps.whole === 0, `a section should draw both sides, and none only the outside: ${JSON.stringify(caps)}`);
     await loadExample(page, 0, 'Demo bracket');
     const back = await page.evaluate(() => window.millsim.stock.kind || 'heightmap');
     check(back === 'heightmap', 'the next example kept the Full 3D stock');

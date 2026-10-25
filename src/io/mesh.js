@@ -5,6 +5,22 @@
 // actual geometry, so the heightmap is triangulated here: top surface,
 // four side walls and a bottom, giving a closed solid.
 
+import { dexelTriangles } from '../sim/dexelMesh.js';
+
+/**
+ * The machined part as triangles, whichever way the stock is kept: a Full
+ * 3D stock writes the closed surface its lines describe — side holes,
+ * undercuts and all — and a heightmap its top, walls and bottom.
+ *
+ * @param {import('../sim/stock.js').Stock} stock
+ * @param {{decimate?:number}} [opts]
+ * @returns {{positions:Float32Array, triangles:number}}
+ */
+export function stockToTriangles(stock, opts = {}) {
+  if (stock.kind === 'tridexel') return dexelTriangles(stock, opts);
+  return heightmapToTriangles(stock, opts);
+}
+
 /**
  * Triangulate a stock heightmap into a watertight mesh.
  *

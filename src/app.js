@@ -28,7 +28,7 @@ import { silhouetteSpheres, checkLimits } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
 import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
 
-import { heightmapToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
+import { stockToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
 import { buildTargetMap, compareToTarget, columnDeviation, DEV_JUDGED, DEV_WALL } from './sim/target.js';
 import { writeSTL, writeOBJ, parseSTL } from './io/stl.js';
 import { writeZip, readZip } from './io/zip.js';
@@ -2920,7 +2920,7 @@ export class App {
 
   exportStockStl() {
     if (!this.stock) return;
-    const mesh = heightmapToTriangles(this.stock, { decimate: this.state.exportDecimate });
+    const mesh = stockToTriangles(this.stock, { decimate: this.state.exportDecimate });
     const buffer = writeSTL(mesh.positions, { name: 'machined-stock' });
     download('machined-part.stl', new Blob([buffer], { type: 'model/stl' }));
     this.notify(`Exported ${mesh.triangles.toLocaleString()} triangles.`, 'ok');
@@ -2928,7 +2928,7 @@ export class App {
 
   exportStockObj() {
     if (!this.stock) return;
-    const mesh = heightmapToTriangles(this.stock, { decimate: this.state.exportDecimate });
+    const mesh = stockToTriangles(this.stock, { decimate: this.state.exportDecimate });
     download('machined-part.obj', writeOBJ(mesh.positions, { name: 'machined-stock' }), 'text/plain');
     this.notify(`Exported ${mesh.triangles.toLocaleString()} triangles.`, 'ok');
   }

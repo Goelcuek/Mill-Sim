@@ -1,38 +1,29 @@
-// Drawing a tri-dexel stock: the surface as the lines see it.
+// Drawing a tri-dexel stock: the closed surface of what is left.
 //
-// Every place a line goes into the material or comes out of it is a point
-// on the surface. Drawn as small shaded discs that overlap their neighbours
-// they make the part, holes from the side and all — no mesh has to be
-// built, and a cut only redraws the chunks of lines it changed.
-//
-// Each point's facing comes from its neighbours on the same family: the
-// slope across the grid of where they meet the surface. Where a family
-// meets the surface nearly edge on — a wall seen down the Z lines — its
-// points are left out, because another family crosses that wall squarely
-// and draws it properly. Every face is crossed within 54.7° of square by
-// one of the three.
+// The mesh comes from the stretches a block at a time (see
+// sim/dexelMesh.js), and a cut remakes only the blocks it went through.
+// It is shaded as the heightmap's surface is — the same steel, the same
+// tool colours — and because it is closed, a section through it shows
+// the inside of the part: the faces seen from behind are drawn as the cut
+// face, flat and level, in their own colour.
 
 import * as THREE from 'three';
+import { DexelMesher } from '../sim/dexelMesh.js';
 
 const MAX_TOOL_COLORS = 8;
 /**
- * Display lines per chunk side; a chunk is one draw call. Small enough that
- * a cut redraws little more than the lines it touched, big enough that the
- * whole stock is a few hundred draws.
+ * Triangles the whole view may hold before the lattice is thinned for
+ * display. A phone has a quarter of a desktop's room for them.
  */
-const CHUNK = 32;
+const TRI_BUDGET = coarsePointer() ? 600000 : 2400000;
 /**
- * Points the whole view may hold before lines are thinned for display. A
- * phone's GPU fills discs several times slower than a desktop's, so it
- * gets a quarter of them, drawn twice the size.
- */
-const POINT_BUDGET = coarsePointer() ? 600000 : 2400000;
-/**
- * Milliseconds a frame may spend redrawing chunks while the run plays. The
+ * Milliseconds a frame may spend remaking blocks while the run plays. The
  * rest wait for the next frame: the picture trails the cut by a frame or
  * two instead of the run stuttering to keep it exact.
  */
 const FRAME_BUDGET = 4;
+/** What a full redraw may take at once; the rest follow on idle frames. */
+const FORCE_BUDGET = 150;
 
 function coarsePointer() {
   try {
@@ -42,297 +33,246 @@ function coarsePointer() {
   }
 }
 
-/** Scratch for one chunk's points, grown as needed and reused. */
-let SP = new Float32Array(3 * 8192);
-let SN = new Float32Array(3 * 8192);
-let SW = new Float32Array(8192);
-function ensure(n) {
-  if (SW.length >= n) return;
-  const m = Math.max(n, SW.length * 2);
-  const grow = (a, k) => { const b = new Float32Array(k * m); b.set(a); return b; };
-  SP = grow(SP, 3);
-  SN = grow(SN, 3);
-  SW = grow(SW, 1);
+/**
+ * Every how many lines the display mesh is made from: enough that a block
+ * with its faces cut up somewhat stays inside the budget.
+ */
+export function displayStep(stock, budget = TRI_BUDGET) {
+  const [sx, sy, sz] = stock.size;
+  const area = 2 * (sx * sy + sy * sz + sx * sz);
+  const cell = Math.cbrt(stock.d3[0] * stock.d3[1] * stock.d3[2]);
+  // Two triangles a lattice square, and half as much again for the cutting.
+  const tris = (3 * area) / (cell * cell);
+  return Math.max(1, Math.ceil(Math.sqrt(tris / budget)));
 }
-/** A family seeing a face nearer edge-on than this leaves it to the others. */
-const GRAZING = 0.3;
 
-export class DexelCloud {
+export class DexelSurface {
   /**
    * @param {import('../sim/triDexel.js').TriDexelStock} stock
-   * @param {{stockColor:THREE.Color, cutColor:THREE.Color, toolColors:THREE.Color[]}} colors
+   * @param {{stockColor:THREE.Color, cutColor:THREE.Color, toolColors:THREE.Color[], capColor?:THREE.Color}} colors
    */
   constructor(stock, colors) {
     this.stock = stock;
     this.group = new THREE.Group();
-    this.group.name = 'stock-dexels';
-    // Thin the lines for display when there are more than the budget: every
-    // step-th line in each direction, drawn bigger to close the gaps.
-    const rays = stock.rayCount;
-    this.step = Math.max(1, Math.ceil(Math.sqrt((2 * rays) / POINT_BUDGET)));
-    const spacing = Math.max(...stock.d3) * this.step;
+    this.group.name = 'stock-surface';
+    this.step = displayStep(stock);
+    this.mesher = new DexelMesher(stock, { step: this.step });
     this.uniforms = {
-      uSize: { value: spacing * 2.0 },
-      uScale: { value: 400 },
       uStockColor: { value: colors.stockColor },
       uCutColor: { value: colors.cutColor },
       uToolColors: { value: colors.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
       uSectionZ: { value: 1e9 },
+      uCapColor: { value: colors.capColor || new THREE.Color('#c4705a') },
     };
-    this.material = new THREE.ShaderMaterial({
-      uniforms: this.uniforms,
-      vertexShader: /* glsl */ `
-        uniform float uSize;
-        uniform float uScale;
-        attribute vec3 aNormal;
-        attribute float aWho;
-        varying vec3 vNormal;
-        varying float vWho;
-        varying float vWorldZ;
-        void main() {
-          vec4 world = modelMatrix * vec4( position, 1.0 );
-          vWorldZ = world.z;
-          vec4 mv = viewMatrix * world;
-          vNormal = normalize( mat3( viewMatrix ) * mat3( modelMatrix ) * aNormal );
+    this.material = this.buildMaterial();
+    this.blocks = new Array(this.mesher.blockCount).fill(null);
+    this.dirty = new Uint8Array(this.mesher.blockCount).fill(1);
+    this.pending = true;
+    stock.takeDirty3();
+    this.sync(false, FORCE_BUDGET);
+  }
+
+  buildMaterial() {
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      roughness: 0.44,
+      metalness: 0.45,
+      side: THREE.FrontSide,
+    });
+    const uniforms = this.uniforms;
+    material.onBeforeCompile = (shader) => {
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `
+          #include <common>
+          attribute float aWho;
+          flat varying float vWho;
+          varying float vWorkZ;
+          varying vec3 vCapNormal;
+        `)
+        .replace('#include <begin_vertex>', `
+          #include <begin_vertex>
           vWho = aWho;
-          gl_Position = projectionMatrix * mv;
-          gl_PointSize = max( 1.5, uSize * uScale / max( -mv.z, 1e-3 ) );
-        }
-      `,
-      fragmentShader: /* glsl */ `
-        uniform vec3 uStockColor;
-        uniform vec3 uCutColor;
-        uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
-        uniform float uShowTools;
-        uniform float uSectionZ;
-        varying vec3 vNormal;
-        varying float vWho;
-        varying float vWorldZ;
-        void main() {
-          if ( vWorldZ > uSectionZ ) discard;
-          vec2 q = gl_PointCoord * 2.0 - 1.0;
-          if ( dot( q, q ) > 1.0 ) discard;
-          vec3 n = normalize( vNormal );
-          // The surface is closed, so a point facing away is hidden behind
-          // the front of the part — the underside seen through the gaps
-          // between the top's discs, if it were drawn.
-          if ( n.z < -0.15 ) discard;
-          if ( n.z < 0.0 ) n = -n;
-          vec3 base = uStockColor;
-          if ( vWho > 0.5 ) {
-            if ( uShowTools > 0.5 ) {
-              // Rounded before the wrap: a 1 that arrives as 0.9999 would
-              // otherwise wrap to the last slot and fall through to grey.
-              int k = int( mod( floor( vWho + 0.5 ) - 1.0, ${MAX_TOOL_COLORS}.0 ) + 0.5 );
-              for ( int i = 0; i < ${MAX_TOOL_COLORS}; i++ ) if ( i == k ) base = uToolColors[ i ];
-            } else base = uCutColor;
+          vWorkZ = position.z;
+          // Straight up in the stock's own frame: the section's cut face.
+          vCapNormal = normalize( normalMatrix * vec3( 0.0, 0.0, 1.0 ) );
+        `);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `
+          #include <common>
+          uniform vec3 uStockColor;
+          uniform vec3 uCutColor;
+          uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
+          uniform float uShowTools;
+          uniform float uSectionZ;
+          uniform vec3 uCapColor;
+          flat varying float vWho;
+          varying float vWorkZ;
+          varying vec3 vCapNormal;
+        `)
+        .replace('#include <color_fragment>', `
+          #include <color_fragment>
+          if ( vWorkZ > uSectionZ ) discard;
+          vec3 surface = uStockColor;
+          float tinted = 0.0;
+          if ( !gl_FrontFacing ) {
+            // The inside of the part, seen through the section.
+            surface = uCapColor;
+          } else if ( vWho > 0.5 ) {
+            int ti = int( clamp( vWho - 1.0 + 0.5, 0.0, ${MAX_TOOL_COLORS - 1}.0 ) );
+            vec3 machined = uToolColors[ 0 ];
+            for ( int k = 0; k < ${MAX_TOOL_COLORS}; k ++ ) {
+              if ( k == ti ) machined = uToolColors[ k ];
+            }
+            surface = mix( uCutColor, machined, uShowTools );
+            tinted = uShowTools;
           }
-          vec3 l1 = normalize( vec3( 0.35, 0.55, 0.75 ) );
-          vec3 l2 = normalize( vec3( -0.6, -0.2, 0.5 ) );
-          float d = 0.32 + 0.58 * max( dot( n, l1 ), 0.0 ) + 0.22 * max( dot( n, l2 ), 0.0 );
-          gl_FragColor = vec4( base * d, 1.0 );
-        }
-      `,
-    });
-    /** Per family: its chunks and which of them need drawing again. */
-    this.chunks = stock.fam.map((F) => {
-      const nb = Math.ceil(F.nb / this.step);
-      const nc = Math.ceil(F.nc / this.step);
-      const cb = Math.ceil(nb / CHUNK);
-      const cc = Math.ceil(nc / CHUNK);
-      return { cb, cc, list: new Array(cb * cc).fill(null), dirty: new Uint8Array(cb * cc).fill(1), seen: -1 };
-    });
-    this.sync(true);
+          diffuseColor.rgb *= surface;
+        `)
+        .replace('#include <normal_fragment_begin>', `
+          #include <normal_fragment_begin>
+          // Seen from behind is seen through the cut: lit as the flat face
+          // the section would leave, not as the inside of a wall.
+          if ( !gl_FrontFacing ) normal = normalize( vCapNormal );
+        `)
+        .replace('#include <metalnessmap_fragment>', `
+          #include <metalnessmap_fragment>
+          metalnessFactor *= mix( 1.0, 0.55, tinted );
+          roughnessFactor = mix( roughnessFactor, 0.55, tinted );
+          if ( !gl_FrontFacing ) { metalnessFactor = 0.1; roughnessFactor = 0.8; }
+        `);
+    };
+    material.customProgramCacheKey = () => 'millsim-dexel-surface';
+    return material;
   }
 
   /**
-   * Redraw the chunks the cutter changed since the last look, for no more
+   * Remake the blocks the cutter changed since the last look, for no more
    * than `budget` milliseconds; whatever is left is still waiting, and
    * `pending` says so.
    */
   sync(force = false, budget) {
-    if (!(budget >= 0)) budget = force ? Infinity : FRAME_BUDGET;
-    const stock = this.stock;
-    for (let f = 0; f < 3; f++) {
-      const F = stock.fam[f];
-      const C = this.chunks[f];
-      if (force) {
-        C.dirty.fill(1);
-        F.dirty = null;
-      } else if (F.dirty) {
-        // A line's points take their facing from its neighbours, so the
-        // chunks either side of a change are redrawn with it.
-        const span = CHUNK * this.step;
-        const [i0, j0, i1, j1] = F.dirty;
-        F.dirty = null;
-        const ci0 = Math.max(0, Math.floor((i0 - this.step) / span));
-        const ci1 = Math.min(C.cb - 1, Math.floor((i1 + this.step) / span));
-        const cj0 = Math.max(0, Math.floor((j0 - this.step) / span));
-        const cj1 = Math.min(C.cc - 1, Math.floor((j1 + this.step) / span));
-        for (let cj = cj0; cj <= cj1; cj++) for (let ci = ci0; ci <= ci1; ci++) C.dirty[cj * C.cb + ci] = 1;
+    if (!(budget >= 0)) budget = force ? FORCE_BUDGET : FRAME_BUDGET;
+    const m = this.mesher;
+    if (force) {
+      this.dirty.fill(1);
+      this.stock.takeDirty3();
+    } else {
+      const box = this.stock.takeDirty3();
+      if (box) {
+        const [bx0, by0, bz0, bx1, by1, bz1] = m.blocksFor(box);
+        for (let bz = bz0; bz <= bz1; bz++) {
+          for (let by = by0; by <= by1; by++) {
+            for (let bx = bx0; bx <= bx1; bx++) this.dirty[m.blockIndex(bx, by, bz)] = 1;
+          }
+        }
       }
     }
     const t0 = performance.now();
     let changed = false;
     let left = false;
-    for (let f = 0; f < 3 && !left; f++) {
-      const C = this.chunks[f];
-      for (let k = 0; k < C.dirty.length; k++) {
-        if (!C.dirty[k]) continue;
-        if (changed && performance.now() - t0 > budget) { left = true; break; }
-        C.dirty[k] = 0;
-        this.buildChunk(f, k % C.cb, Math.floor(k / C.cb));
-        changed = true;
-      }
+    for (let k = 0; k < this.dirty.length; k++) {
+      if (!this.dirty[k]) continue;
+      if (changed && performance.now() - t0 > budget) { left = true; break; }
+      this.dirty[k] = 0;
+      this.buildBlock(k);
+      changed = true;
     }
     this.pending = left;
     return changed;
   }
 
-  buildChunk(f, ci, cj) {
-    const stock = this.stock;
-    const F = stock.fam[f];
-    const C = this.chunks[f];
-    const k = cj * C.cb + ci;
-    const step = this.step;
-    const { a, b, c, db, dc } = F;
-    const o3 = stock.o3;
-    const i0 = ci * CHUNK * step;
-    const i1 = Math.min(F.nb, i0 + CHUNK * step);
-    const j0 = cj * CHUNK * step;
-    const j1 = Math.min(F.nc, j0 + CHUNK * step);
-    const tol = 4 * Math.max(db, dc) * step;
-    const p = [0, 0, 0];
-    const n = [0, 0, 0];
-    let m = 0;
-    for (let j = j0; j < j1; j += step) {
-      for (let i = i0; i < i1; i += step) {
-        const r = j * F.nb + i;
-        const cnt = F.cnt[r];
-        if (!cnt) continue;
-        const o = F.off[r];
-        ensure(m + 2 * cnt);
-        p[b] = o3[b] + (i + 0.5) * db;
-        p[c] = o3[c] + (j + 0.5) * dc;
-        for (let e = 0; e < 2 * cnt; e++) {
-          const v = F.pool[o + e];
-          const exit = e & 1;
-          // The slope of the surface across the grid, from the neighbours.
-          const gb = slope(F, i, j, step, 0, v, exit, tol) / (db * step);
-          const gc = slope(F, i, j, step, 1, v, exit, tol) / (dc * step);
-          const sgn = exit ? 1 : -1;
-          n[a] = sgn;
-          n[b] = -sgn * gb;
-          n[c] = -sgn * gc;
-          const len = Math.hypot(n[0], n[1], n[2]);
-          if (Math.abs(n[a]) / len < GRAZING) continue;
-          p[a] = o3[a] + v;
-          SP[3 * m] = p[0]; SP[3 * m + 1] = p[1]; SP[3 * m + 2] = p[2];
-          SN[3 * m] = n[0] / len; SN[3 * m + 1] = n[1] / len; SN[3 * m + 2] = n[2] / len;
-          SW[m] = F.who[o + e];
-          m++;
-        }
-      }
-    }
-
-    let pts = C.list[k];
-    if (!m) {
-      if (pts) pts.geometry.setDrawRange(0, 0);
+  buildBlock(k) {
+    const out = this.mesher.buildBlock(k);
+    let mesh = this.blocks[k];
+    if (!out.indices) {
+      if (mesh) mesh.geometry.setDrawRange(0, 0);
       return;
     }
-    // A chunk keeps its buffers and is refilled in place while its points
-    // fit; only a chunk that outgrows them gets new ones. Reallocating and
-    // re-sending every chunk a cut touched was most of a frame.
-    if (!pts || pts.userData.capacity < m) {
-      if (pts) {
-        this.group.remove(pts);
-        pts.geometry.dispose();
+    const V = out.vertices;
+    const I = out.indices;
+    // A block keeps its buffers and is refilled in place while it fits;
+    // only one that outgrows them gets new ones.
+    if (!mesh || mesh.userData.vCap < V || mesh.userData.iCap < I) {
+      if (mesh) {
+        this.group.remove(mesh);
+        mesh.geometry.dispose();
       }
-      const capacity = Math.ceil(m * 1.3) + 256;
+      const vCap = Math.ceil(V * 1.3) + 64;
+      const iCap = Math.ceil(I * 1.3) + 192;
       const g = new THREE.BufferGeometry();
-      for (const [name, size] of [['position', 3], ['aNormal', 3], ['aWho', 1]]) {
-        const attr = new THREE.BufferAttribute(new Float32Array(capacity * size), size);
-        attr.setUsage(THREE.DynamicDrawUsage);
-        g.setAttribute(name, attr);
-      }
-      // The chunk's own block of space, which no cut can take it out of.
-      const lo = [0, 0, 0];
-      const hi = [0, 0, 0];
-      lo[a] = o3[a]; hi[a] = o3[a] + F.len;
-      lo[b] = o3[b] + i0 * db; hi[b] = o3[b] + i1 * db;
-      lo[c] = o3[c] + j0 * dc; hi[c] = o3[c] + j1 * dc;
+      const attr = (array, size, normalized) => {
+        const a = new THREE.BufferAttribute(array, size, normalized);
+        a.setUsage(THREE.DynamicDrawUsage);
+        return a;
+      };
+      g.setAttribute('position', attr(new Float32Array(3 * vCap), 3, false));
+      g.setAttribute('normal', attr(new Int8Array(3 * vCap), 3, true));
+      g.setAttribute('aWho', attr(new Uint8Array(vCap), 1, false));
+      // A block holds fewer vertices than a 16-bit index can name.
+      g.setIndex(attr(vCap < 65536 ? new Uint16Array(iCap) : new Uint32Array(iCap), 1, false));
+      const [lo, hi] = this.mesher.blockBox(k);
       g.boundingBox = new THREE.Box3(new THREE.Vector3(...lo), new THREE.Vector3(...hi));
       g.boundingSphere = g.boundingBox.getBoundingSphere(new THREE.Sphere());
-      pts = new THREE.Points(g, this.material);
-      pts.frustumCulled = true;
-      // Discs are sized in millimetres, so the scale follows the camera.
-      pts.onBeforeRender = (renderer, scene, camera) => {
-        const hgt = renderer.getDrawingBufferSize(SIZE).y;
-        this.uniforms.uScale.value = camera.isPerspectiveCamera
-          ? hgt / (2 * Math.tan((camera.fov * Math.PI) / 360))
-          : hgt / ((camera.top - camera.bottom) / camera.zoom);
-      };
-      pts.userData.family = f;
-      pts.userData.capacity = capacity;
-      C.list[k] = pts;
-      this.group.add(pts);
+      mesh = new THREE.Mesh(g, this.material);
+      mesh.name = 'stock-block';
+      mesh.frustumCulled = true;
+      mesh.userData.vCap = vCap;
+      mesh.userData.iCap = iCap;
+      mesh.userData.block = k;
+      this.blocks[k] = mesh;
+      this.group.add(mesh);
     }
-    const g = pts.geometry;
-    const fill = (name, src, size) => {
-      const attr = g.attributes[name];
-      attr.array.set(src.subarray(0, m * size));
-      attr.clearUpdateRanges();
-      attr.addUpdateRange(0, m * size);
-      attr.needsUpdate = true;
-    };
-    fill('position', SP, 3);
-    fill('aNormal', SN, 3);
-    fill('aWho', SW, 1);
-    g.setDrawRange(0, m);
+    const g = mesh.geometry;
+    const pos = g.attributes.position;
+    pos.array.set(out.positions.subarray(0, 3 * V));
+    const nrm = g.attributes.normal;
+    const na = nrm.array;
+    const src = out.normals;
+    for (let q = 0; q < 3 * V; q++) na[q] = Math.round(src[q] * 127);
+    const who = g.attributes.aWho;
+    who.array.set(out.who.subarray(0, V));
+    const idx = g.index;
+    idx.array.set(out.index.subarray(0, I));
+    for (const [a, n] of [[pos, 3 * V], [nrm, 3 * V], [who, V], [idx, I]]) {
+      a.clearUpdateRanges();
+      a.addUpdateRange(0, n);
+      a.needsUpdate = true;
+    }
+    g.setDrawRange(0, I);
+  }
+
+  /** Triangles drawn right now, for the readout and the tests. */
+  triangleCount() {
+    let n = 0;
+    for (const m of this.blocks) if (m) n += m.geometry.drawRange.count === Infinity ? 0 : m.geometry.drawRange.count / 3;
+    return n;
+  }
+
+  /**
+   * Clip everything above `z`. A closed surface cut open shows its own
+   * inside, which is drawn as the cut face — so both sides are drawn while
+   * there is a section, and only the outside when there is not.
+   */
+  setSection(z) {
+    this.uniforms.uSectionZ.value = z === null ? 1e9 : z;
+    const side = z === null ? THREE.FrontSide : THREE.DoubleSide;
+    if (this.material.side !== side) {
+      this.material.side = side;
+      this.material.needsUpdate = true;
+    }
   }
 
   setVisible(v) { this.group.visible = v; }
 
   dispose() {
-    for (const C of this.chunks) {
-      for (const pts of C.list) {
-        if (!pts) continue;
-        this.group.remove(pts);
-        pts.geometry.dispose();
-      }
+    for (const mesh of this.blocks) {
+      if (!mesh) continue;
+      this.group.remove(mesh);
+      mesh.geometry.dispose();
     }
+    this.blocks = [];
     this.material.dispose();
   }
-}
-
-const SIZE = new THREE.Vector2();
-
-/**
- * How far the surface moves from line (i, j) to its neighbours along one
- * grid direction, at the endpoint `v` of the given kind — central where
- * both neighbours have one nearby, one-sided where only one does.
- */
-function slope(F, i, j, step, dir, v, exit, tol) {
-  const plus = near(F, dir ? i : i + step, dir ? j + step : j, v, exit, tol);
-  const minus = near(F, dir ? i : i - step, dir ? j - step : j, v, exit, tol);
-  if (plus !== null && minus !== null) return (plus - minus) / 2;
-  if (plus !== null) return plus - v;
-  if (minus !== null) return v - minus;
-  return 0;
-}
-
-/** The endpoint of the same kind on line (i, j) nearest v, or null. */
-function near(F, i, j, v, exit, tol) {
-  if (i < 0 || j < 0 || i >= F.nb || j >= F.nc) return null;
-  const r = j * F.nb + i;
-  const cnt = F.cnt[r];
-  const o = F.off[r];
-  let best = null;
-  let bd = tol;
-  for (let k = exit; k < 2 * cnt; k += 2) {
-    const d = Math.abs(F.pool[o + k] - v);
-    if (d <= bd) { bd = d; best = F.pool[o + k]; }
-  }
-  return best;
 }

@@ -281,8 +281,6 @@ export class TriDexelStock extends Stock {
       pool: new Float32Array(0),
       who: new Uint8Array(0),
       used: 0,
-      /** Lines changed since the display last looked: [i0, j0, i1, j1] or null. */
-      dirty: null,
       version: 0,
     };
   }
@@ -321,8 +319,33 @@ export class TriDexelStock extends Stock {
       at += 2 * F.cap[r];
     }
     F.used = at;
-    F.dirty = [0, 0, F.nb - 1, F.nc - 1];
     F.version++;
+    const o = this.o3;
+    this.markDirty3(o[0], o[1], o[2], o[0] + this.size[0], o[1] + this.size[1], o[2] + this.size[2]);
+  }
+
+  /**
+   * The box of space whose material changed since the display last asked,
+   * world mm: [x0, y0, z0, x1, y1, z1], or null. A box rather than the
+   * lines' footprint, because a Z line cut at the top is unchanged lower
+   * down, and the surface is redrawn by the block.
+   */
+  markDirty3(x0, y0, z0, x1, y1, z1) {
+    const d = this.dirty3;
+    if (!d) { this.dirty3 = [x0, y0, z0, x1, y1, z1]; return; }
+    if (x0 < d[0]) d[0] = x0;
+    if (y0 < d[1]) d[1] = y0;
+    if (z0 < d[2]) d[2] = z0;
+    if (x1 > d[3]) d[3] = x1;
+    if (y1 > d[4]) d[4] = y1;
+    if (z1 > d[5]) d[5] = z1;
+  }
+
+  /** The changed box, cleared for next time. */
+  takeDirty3() {
+    const d = this.dirty3 || null;
+    this.dirty3 = null;
+    return d;
   }
 
   /** Stretches of each line inside a shaped stock, from its column heights. */
@@ -602,6 +625,7 @@ export class TriDexelStock extends Stock {
 
     let total = 0;
     let ti0 = Infinity, tj0 = Infinity, ti1 = -1, tj1 = -1;
+    let aLo = Infinity, aHi = -Infinity;
     const o = [0, 0, 0];
     o[a] = oa;
 
@@ -841,21 +865,21 @@ export class TriDexelStock extends Stock {
         if (i > ti1) ti1 = i;
         if (j < tj0) tj0 = j;
         if (j > tj1) tj1 = j;
+        if (tIn < aLo) aLo = tIn;
+        if (tOut > aHi) aHi = tOut;
         if (a === 2) this.topChanged(F, r, i, j);
       }
     }
 
     if (ti1 >= 0) {
-      const dr = F.dirty;
-      if (!dr) F.dirty = [ti0, tj0, ti1, tj1];
-      else {
-        if (ti0 < dr[0]) dr[0] = ti0;
-        if (tj0 < dr[1]) dr[1] = tj0;
-        if (ti1 > dr[2]) dr[2] = ti1;
-        if (tj1 > dr[3]) dr[3] = tj1;
-      }
       F.version++;
       if (a === 2) this.markDirtyRect(ti0, tj0, ti1, tj1);
+      const lo = [0, 0, 0];
+      const hi = [0, 0, 0];
+      lo[a] = oa + Math.max(0, aLo); hi[a] = oa + Math.min(F.len, aHi);
+      lo[b] = ob + ti0 * db; hi[b] = ob + (ti1 + 1) * db;
+      lo[c] = oc + tj0 * dc; hi[c] = oc + (tj1 + 1) * dc;
+      this.markDirty3(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
     }
     return total;
   }
@@ -1028,6 +1052,122 @@ export class TriDexelStock extends Stock {
   inside(x, y, z) {
     for (const [lo, hi] of this.stretchesAt(2, [x, y, z])) if (z >= lo && z <= hi) return true;
     return false;
+  }
+
+  /** Is the point inside on the line of family a nearest it? */
+  onLine(a, p) {
+    const F = this.fam[a];
+    const i = Math.floor((p[F.b] - this.o3[F.b]) / F.db);
+    const j = Math.floor((p[F.c] - this.o3[F.c]) / F.dc);
+    if (i < 0 || j < 0 || i >= F.nb || j >= F.nc) return false;
+    const r = j * F.nb + i;
+    const v = p[a] - this.o3[a];
+    const o = F.off[r];
+    for (let k = 0; k < F.cnt[r]; k++) {
+      if (v >= F.pool[o + 2 * k] && v <= F.pool[o + 2 * k + 1]) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Cast a ray at the material, overhangs and side holes included.
+   *
+   * The heightmap's walk asks a column how high it is; here a point is
+   * metal when two of the three lines nearest it say so, which no single
+   * family's rounding can overturn. The hit is then put exactly where the
+   * line running most nearly along the ray goes into the metal — so a ray
+   * down a side hole stops at the true bottom of it, and one at a wall on
+   * the wall, not on the nearest column.
+   *
+   * @param {[number,number,number]} origin ray origin, world mm
+   * @param {[number,number,number]} dir    normalised direction
+   * @returns {null | {point:[number,number,number], distance:number, face:string}}
+   */
+  raycast(origin, dir) {
+    const o3 = this.o3;
+    const min = [o3[0], o3[1], o3[2]];
+    const max = [o3[0] + this.size[0], o3[1] + this.size[1], o3[2] + this.size[2]];
+    let t0 = 0;
+    let t1 = Infinity;
+    for (let a = 0; a < 3; a++) {
+      if (Math.abs(dir[a]) < 1e-12) {
+        if (origin[a] < min[a] || origin[a] > max[a]) return null;
+        continue;
+      }
+      let near = (min[a] - origin[a]) / dir[a];
+      let far = (max[a] - origin[a]) / dir[a];
+      if (near > far) { const t = near; near = far; far = t; }
+      if (near > t0) t0 = near;
+      if (far < t1) t1 = far;
+      if (t0 > t1) return null;
+    }
+    if (t1 < 0) return null;
+    const P = [0, 0, 0];
+    const at = (t) => {
+      P[0] = origin[0] + dir[0] * t;
+      P[1] = origin[1] + dir[1] * t;
+      P[2] = origin[2] + dir[2] * t;
+      return P;
+    };
+    const solid = (t) => {
+      const p = at(t);
+      return (this.onLine(0, p) ? 1 : 0) + (this.onLine(1, p) ? 1 : 0) + (this.onLine(2, p) ? 1 : 0) >= 2;
+    };
+    // Half a cell at a time, then halve the step that crossed.
+    const step = Math.max(0.5 * Math.min(this.d3[0], this.d3[1], this.d3[2]), 1e-3);
+    let prev = t0;
+    let hit = -1;
+    if (solid(t0)) hit = t0;
+    else {
+      for (let t = t0 + step; t <= t1 + step; t += step) {
+        const tc = Math.min(t, t1);
+        if (solid(tc)) {
+          let lo = prev;
+          let hi = tc;
+          for (let k = 0; k < 24; k++) {
+            const mid = (lo + hi) * 0.5;
+            if (solid(mid)) hi = mid; else lo = mid;
+          }
+          hit = hi;
+          break;
+        }
+        if (tc >= t1) break;
+        prev = tc;
+      }
+    }
+    if (hit < 0) return null;
+
+    // On the line most nearly along the ray, the end the ray came in by.
+    let a = 0;
+    for (let q = 1; q < 3; q++) if (Math.abs(dir[q]) > Math.abs(dir[a])) a = q;
+    const p = at(hit);
+    const F = this.fam[a];
+    const i = Math.floor((p[F.b] - o3[F.b]) / F.db);
+    const j = Math.floor((p[F.c] - o3[F.c]) / F.dc);
+    let face = 'surface';
+    if (i >= 0 && j >= 0 && i < F.nb && j < F.nc) {
+      const r = j * F.nb + i;
+      const v = p[a] - o3[a];
+      const o = F.off[r];
+      // Going up the line the ray meets an entry; going down it, an exit.
+      const kind = dir[a] > 0 ? 0 : 1;
+      let best = null;
+      let bd = 2 * Math.max(F.db, F.dc, this.d3[a]);
+      for (let k = kind; k < 2 * F.cnt[r]; k += 2) {
+        const d = Math.abs(F.pool[o + k] - v);
+        if (d <= bd) { bd = d; best = F.pool[o + k]; }
+      }
+      if (best !== null) {
+        const t = hit + (best - v) / dir[a];
+        if (t >= t0 - 1e-9) {
+          hit = Math.max(t0, t);
+          // A ray that ends on a face of the block it came in through.
+          if (Math.abs(best) < 1e-6 || Math.abs(best - F.len) < 1e-6) face = ['x', 'y', 'z'][a];
+        }
+      }
+    }
+    const pt = at(hit);
+    return { point: [pt[0], pt[1], pt[2]], distance: hit, face };
   }
 
   /** Bytes held, for the readout. */

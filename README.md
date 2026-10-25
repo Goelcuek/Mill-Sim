@@ -140,14 +140,30 @@ wall, a hole at a compound angle. On a 3-axis job it agrees with the
 heightmap, and where the two differ — the steep flanks of a ball nose —
 it is the closer of the two to the exact surface in every column.
 
-It costs more. On the shipped examples it takes 3.2–3.5 times as long as
-the heightmap at 0.25 mm and 5–7 times as long at 0.1 mm — the five-axis
-example's whole run is 2.3 s and 13.5 s — and about 3.5 MB per 100,000
-lines: 35 MB for the 120 × 80 bracket at 0.1 mm, 49 MB for the five-axis
-block. The display draws points where the lines meet the metal rather than
-a mesh. The deviation map and the STL export still read the top surface. The
-**Side holes in a full 3D stock** example switches it on; any other
-example puts the heightmap back.
+It is drawn as the closed surface of what is left. The lines of the three
+families cross on one lattice and every edge of it lies on a line, so where
+the surface crosses an edge is not estimated: it is the end of a stretch,
+where the cutter put it. A vertex goes in each cell the surface passes
+through, at the point that best fits the planes of its crossings (dual
+contouring), which keeps a floor meeting a wall a sharp corner rather than
+a bevel the size of a cell — on a plain block every vertex lies on a face,
+and on a slotted one within 0.02 mm of the true part at a 0.25 mm lattice.
+The mesh is built in blocks of 32 cells, about 0.8 ms each, and a cut
+remakes only the blocks it reached. Being closed, a **View › Inspect ›
+Section view** through it shows the inside as a solid cut face. Picking
+and measuring land on it — a click down a side hole stops at the bottom of
+the hole — and **Results › Export › Part as STL** writes it, side holes and
+all, as a closed mesh. Past a triangle budget (2.4 million, 600,000 on a
+phone) the display uses every second or third line; the export uses every
+line unless Export detail says otherwise.
+
+It costs more. On the shipped examples a run takes 1.9–3.6 times as long as
+the heightmap at 0.25 mm and 2.1–5.3 times as long at 0.1 mm — the
+five-axis example's whole run is 1.6 s and 8.9 s — and about 3.5 MB per
+100,000 lines: 35 MB for the 120 × 80 bracket at 0.1 mm, 49 MB for the
+five-axis block. The deviation map still reads the top surface. The **Side
+holes in a full 3D stock** example switches it on; any other example puts
+the heightmap back.
 
 **Stock that is not a block.** **Add stock…** offers three shapes, because
 three is what a shop has: a rectangular block (X, Y, Z), a round bar (Ø and
@@ -713,10 +729,14 @@ silently ignored.
   collision-checked, but the material beneath an overhang will not be
   removed. The Tools panel says so when you build one. Set the stock model
   to **Full 3D** for side holes and undercuts.
-- **Full 3D is phase one.** The material and the cutting are complete; the
-  display is a field of shaded points rather than a mesh, a section shows
-  the surfaces below the cut rather than a capped solid, and the deviation
-  map and the STL export still read the top surface.
+- **Full 3D has no deviation map yet.** The material, the cutting, the
+  surface, sections, picking and the STL export are complete; the
+  deviation map against a reference part still reads the top surface, so
+  it says nothing about a side hole. A leaning tool moving along lines at
+  an angle to it is still stamped rather than solved exactly.
+- **A Full 3D surface is as fine as its lattice.** A fin or a slot thinner
+  than one cell of the displayed lattice can fall between its points and
+  not be drawn, though the lines still hold it and the volumes count it.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
@@ -765,13 +785,14 @@ src/
   sim/
     stock.js          heightmap, swept and tilted carving, tile pyramid
     triDexel.js       the full 3D stock: material along X, Y and Z
+    dexelMesh.js      its closed surface, by dual contouring on the line crossings
     target.js         reference-part rasterisation and gouge comparison
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
   scene/
     viewer.js         renderer, camera, lighting
     stockView.js      GPU-displaced heightmap mesh
-    dexelView.js      the full 3D stock, as shaded points
+    dexelView.js      the full 3D stock's surface, block by block, with section caps
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
     machineView.js    the chain-driven rig: one group per axis

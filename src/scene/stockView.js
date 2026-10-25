@@ -20,7 +20,7 @@
 
 import * as THREE from 'three';
 import { blockDeviation, DEV_JUDGED } from '../sim/target.js';
-import { DexelCloud } from './dexelView.js';
+import { DexelSurface } from './dexelView.js';
 
 const MAX_TOOL_COLORS = 8;
 
@@ -75,15 +75,16 @@ export class StockView {
     if (!stock) return;
 
     // A stock kept along all three axes has no single surface to displace
-    // a grid to; it is drawn as the points where its lines meet the metal.
+    // a grid to; it is drawn as the closed surface its lines describe.
     if (stock.kind === 'tridexel') {
-      this.cloud = new DexelCloud(stock, {
+      this.surface = new DexelSurface(stock, {
         stockColor: new THREE.Color(this.stockHex || '#8e97a6'),
         cutColor: this.cutColor,
         toolColors: this.toolColors,
       });
-      this.cloud.uniforms.uShowTools.value = this.showTools === false ? 0 : 1;
-      this.group.add(this.cloud.group);
+      this.surface.uniforms.uShowTools.value = this.showTools === false ? 0 : 1;
+      if (this.sectionZ !== undefined) this.surface.setSection(this.sectionZ);
+      this.group.add(this.surface.group);
       return;
     }
 
@@ -426,13 +427,13 @@ export class StockView {
    */
   sync(force = false, budget) {
     const stock = this.stock;
-    if (this.cloud) {
-      // Chunks still waiting from the last frames are drawn even when
+    if (this.surface) {
+      // Blocks still waiting from the last frames are made even when
       // nothing new was cut, so the picture catches up with the run.
-      if (!force && stock.version === this.lastVersion && !this.cloud.pending) return false;
+      if (!force && stock.version === this.lastVersion && !this.surface.pending) return false;
       this.lastVersion = stock.version;
       stock.clearDirty();
-      return this.cloud.sync(force, force ? Infinity : budget);
+      return this.surface.sync(force, budget);
     }
     if (!stock || !this.data) return false;
     if (!force && stock.version === this.lastVersion) return false;
@@ -532,13 +533,13 @@ export class StockView {
   /** The shade a machined face takes when the tool is not being named. */
   setCutColor(hex) {
     if (this.uniforms) this.uniforms.uCutColor.value.set(hex);
-    if (this.cloud) this.cloud.uniforms.uCutColor.value.set(hex);
+    if (this.surface) this.surface.uniforms.uCutColor.value.set(hex);
   }
 
   setStockColor(hex) {
     this.stockHex = hex;
     if (this.uniforms) this.uniforms.uStockColor.value.set(hex);
-    if (this.cloud) this.cloud.uniforms.uStockColor.value.set(hex);
+    if (this.surface) this.surface.uniforms.uStockColor.value.set(hex);
   }
 
   setToolColor(index, hex) {
@@ -549,7 +550,7 @@ export class StockView {
   setShowToolColors(on) {
     this.showTools = !!on;
     if (this.uniforms) this.uniforms.uShowTools.value = on ? 1 : 0;
-    if (this.cloud) this.cloud.uniforms.uShowTools.value = on ? 1 : 0;
+    if (this.surface) this.surface.uniforms.uShowTools.value = on ? 1 : 0;
   }
 
   /** Is the reference map drawn on this stock's grid? A stale one is not. */
@@ -589,14 +590,15 @@ export class StockView {
 
   /** Clip everything above `z`, for looking inside a pocket. */
   setSection(z) {
+    this.sectionZ = z;
     if (this.uniforms) this.uniforms.uSectionZ.value = z === null ? 1e9 : z;
-    if (this.cloud) this.cloud.uniforms.uSectionZ.value = z === null ? 1e9 : z;
+    if (this.surface) this.surface.setSection(z);
   }
 
   setVisible(v) { this.group.visible = v; }
 
   /** Is part of the picture still waiting to be drawn? */
-  get pending() { return !!(this.cloud && this.cloud.pending); }
+  get pending() { return !!(this.surface && this.surface.pending); }
 
   boundingBox() {
     if (!this.stock) return new THREE.Box3();
@@ -608,10 +610,10 @@ export class StockView {
   }
 
   dispose() {
-    if (this.cloud) {
-      this.cloud.dispose();
-      this.group.remove(this.cloud.group);
-      this.cloud = null;
+    if (this.surface) {
+      this.surface.dispose();
+      this.group.remove(this.surface.group);
+      this.surface = null;
     }
     if (this.mesh) {
       this.mesh.geometry.dispose();
