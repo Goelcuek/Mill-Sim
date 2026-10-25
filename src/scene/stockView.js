@@ -20,6 +20,7 @@
 
 import * as THREE from 'three';
 import { blockDeviation, DEV_JUDGED } from '../sim/target.js';
+import { DexelCloud } from './dexelView.js';
 
 const MAX_TOOL_COLORS = 8;
 
@@ -72,6 +73,19 @@ export class StockView {
     this.stock = stock;
     this.renderer = opts.renderer || this.renderer;
     if (!stock) return;
+
+    // A stock kept along all three axes has no single surface to displace
+    // a grid to; it is drawn as the points where its lines meet the metal.
+    if (stock.kind === 'tridexel') {
+      this.cloud = new DexelCloud(stock, {
+        stockColor: new THREE.Color(this.stockHex || '#8e97a6'),
+        cutColor: this.cutColor,
+        toolColors: this.toolColors,
+      });
+      this.cloud.uniforms.uShowTools.value = this.showTools === false ? 0 : 1;
+      this.group.add(this.cloud.group);
+      return;
+    }
 
     // One reduction factor drives both the mesh and the texture: sampling
     // the heightmap finer than the mesh that displaces it buys nothing.
@@ -412,6 +426,12 @@ export class StockView {
    */
   sync(force = false) {
     const stock = this.stock;
+    if (this.cloud) {
+      if (!force && stock.version === this.lastVersion) return false;
+      this.lastVersion = stock.version;
+      stock.clearDirty();
+      return this.cloud.sync(force);
+    }
     if (!stock || !this.data) return false;
     if (!force && stock.version === this.lastVersion) return false;
     this.lastVersion = stock.version;
@@ -510,10 +530,13 @@ export class StockView {
   /** The shade a machined face takes when the tool is not being named. */
   setCutColor(hex) {
     if (this.uniforms) this.uniforms.uCutColor.value.set(hex);
+    if (this.cloud) this.cloud.uniforms.uCutColor.value.set(hex);
   }
 
   setStockColor(hex) {
+    this.stockHex = hex;
     if (this.uniforms) this.uniforms.uStockColor.value.set(hex);
+    if (this.cloud) this.cloud.uniforms.uStockColor.value.set(hex);
   }
 
   setToolColor(index, hex) {
@@ -522,7 +545,9 @@ export class StockView {
 
   /** Colour machined faces per tool, or use a single machined colour. */
   setShowToolColors(on) {
+    this.showTools = !!on;
     if (this.uniforms) this.uniforms.uShowTools.value = on ? 1 : 0;
+    if (this.cloud) this.cloud.uniforms.uShowTools.value = on ? 1 : 0;
   }
 
   /** Is the reference map drawn on this stock's grid? A stale one is not. */
@@ -563,6 +588,7 @@ export class StockView {
   /** Clip everything above `z`, for looking inside a pocket. */
   setSection(z) {
     if (this.uniforms) this.uniforms.uSectionZ.value = z === null ? 1e9 : z;
+    if (this.cloud) this.cloud.uniforms.uSectionZ.value = z === null ? 1e9 : z;
   }
 
   setVisible(v) { this.group.visible = v; }
@@ -577,6 +603,11 @@ export class StockView {
   }
 
   dispose() {
+    if (this.cloud) {
+      this.cloud.dispose();
+      this.group.remove(this.cloud.group);
+      this.cloud = null;
+    }
     if (this.mesh) {
       this.mesh.geometry.dispose();
       this.mesh.material.dispose();

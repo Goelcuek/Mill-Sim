@@ -200,6 +200,23 @@ export const EXAMPLES = [
     },
     "file": "examples/fidia-vector-hole.nc",
     "lines": 57
+  },
+  {
+    "name": "Side holes in a full 3D stock",
+    "description": "Two holes drilled into the side through a G68.2 tilted plane, then one from the top that meets the first. A heightmap cannot hold a hole under the top, so this sets Setup › Stock › Stock model to Full 3D, which keeps the material along X, Y and Z.",
+    "setup": {
+      "stock": {
+        "size": [120, 90, 40],
+        "origin": [-60, -45, -40],
+        "resolution": 0.25,
+        "model3d": "tridexel"
+      },
+      "machine": {
+        "preset": "headTable"
+      }
+    },
+    "file": "examples/side-holes-full-3d-stock.nc",
+    "lines": 59
   }
 ];
 

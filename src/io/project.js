@@ -90,6 +90,8 @@ export async function writeProject(app) {
     origin: [...state.stock.origin],
     rotation: Number(state.stock.rotation) || 0,
     resolution: state.stock.resolution,
+    /** Which model holds the material: the heightmap, or all three axes. */
+    model3d: state.stock.model3d === 'tridexel' ? 'tridexel' : 'heightmap',
     diameter: state.stock.diameter,
     model: null,
   };
@@ -197,6 +199,7 @@ export async function readProject(app, entries) {
       origin: [...def.stock.origin],
       rotation: Number(def.stock.rotation) || 0,
       resolution: def.stock.resolution,
+      model3d: def.stock.model3d === 'tridexel' ? 'tridexel' : 'heightmap',
       diameter: def.stock.diameter,
       model: null,
     };

@@ -69,6 +69,11 @@ function segmentsOf(mv) {
   return len;
 }
 
+/** Do two tool axes point the same way, near enough that nothing swings? */
+function sameAxis(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] > 1 - 1e-12;
+}
+
 export class Simulator {
   constructor() {
     this.program = null;
@@ -661,6 +666,13 @@ export class Simulator {
         const result = stock.carveSweep(slot.built.cutEnvelope, poseA.tip, poseB.tip, slot.index, opts);
         removed = result.volume;
         gouged = result.gouge;
+      } else if (stock.carveLinear && sameAxis(poseA.dir, poseB.dir)) {
+        // Leaning but not swinging — 3+2 work — is a straight sweep of a
+        // fixed solid, which a stock kept along all three axes solves
+        // exactly wherever its lines allow, rather than stamp by stamp.
+        const result = stock.carveLinear(slot.built.cutEnvelope, poseA.tip, poseB.tip, poseA.dir, slot.index, opts);
+        removed = result.volume;
+        gouged = result.gouge;
       } else {
         for (const [tip, dir] of this.stamps(poseA, poseB, slot)) {
           const result = stock.carveTilted(slot.built.cutEnvelope, tip, dir, slot.built.fluteLength, slot.index, opts);
@@ -842,7 +854,12 @@ export class Simulator {
     // swing between stamps moves the far end of the flutes much further
     // than the tip. Capping the step keeps a tilting face mill from leaving
     // a scalloped wall, and the floor at one cell stops it going pointless.
-    const spacing = Math.max(cell, Math.min(r * 0.12, 0.8));
+    // A stock kept along all three axes is there to be read closely, so it
+    // is stamped more finely: cusps of a few tenths of a micron rather than
+    // a few microns.
+    const spacing = this.stock && this.stock.kind === 'tridexel'
+      ? Math.max(cell * 0.5, Math.min(r * 0.05, 0.3))
+      : Math.max(cell, Math.min(r * 0.12, 0.8));
     // The far end of the flutes travels further than the tip when the tool
     // swings, so the swing gets a say in the count as well.
     const arc = swing * Math.max(slot.built.fluteLength, r);

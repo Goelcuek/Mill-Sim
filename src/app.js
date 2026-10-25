@@ -5,6 +5,7 @@ import * as THREE from 'three';
 
 import { Viewer } from './scene/viewer.js';
 import { StockView } from './scene/stockView.js';
+import { TriDexelStock } from './sim/triDexel.js';
 import { ToolView } from './scene/toolView.js';
 import { ToolpathView } from './scene/toolpathView.js';
 import { MachineView, DEFAULT_MACHINE, MACHINE_SETTINGS } from './scene/machineView.js';
@@ -107,6 +108,13 @@ export class App {
          */
         rotation: 0,
         resolution: 0.28,
+        /**
+         * What holds the material. The heightmap keeps the top of each
+         * column — fast, and all a 3-axis job needs. The tri-dexel keeps
+         * the material along X, Y and Z, so a hole from the side or a cut
+         * under an overhang is there to see.
+         */
+        model3d: 'heightmap',
         /** Round bar only. */
         diameter: 80,
         /** A model used as stock: its triangles, kept in memory only. */
@@ -872,7 +880,8 @@ export class App {
     // clamped at an angle is simulated in a grid big enough for its corners
     // while its own size stays what the shop typed in.
     const grid = stockGrid(s);
-    this.stock = new Stock({
+    const Model = s.model3d === 'tridexel' ? TriDexelStock : Stock;
+    this.stock = new Model({
       origin: grid.origin,
       size: grid.size,
       resolution: s.resolution,
@@ -1915,7 +1924,9 @@ export class App {
     // The machine comes first: changing the chain reloads the program, and
     // the stock has to be the right size before that runs.
     if (setup.machine) {
-      Object.assign(this.state.stock, setup.stock || {});
+      // An example says which model its stock needs; one that does not
+      // say is a heightmap job, whatever the last example asked for.
+      Object.assign(this.state.stock, setup.stock ? { model3d: 'heightmap', ...setup.stock } : {});
       if (setup.stock) this.rebuildStock();
       this.setMachine(setup.machine);
       this.panels.setup.refresh();
@@ -1923,7 +1934,7 @@ export class App {
       return;
     }
     if (setup.stock) {
-      Object.assign(this.state.stock, setup.stock);
+      Object.assign(this.state.stock, { model3d: 'heightmap', ...setup.stock });
       this.rebuildStock();
       this.panels.setup.refresh();
     }

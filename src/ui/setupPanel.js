@@ -164,9 +164,10 @@ export class SetupPanel extends Panel {
       const st = app.stock;
       if (!st) { info.textContent = ''; return; }
       const asked = app.state.stock.resolution;
+      const unit = st.kind === 'tridexel' ? 'line' : 'column';
       info.innerHTML = st.cell > asked * 1.05
-        ? `Asked for <b>${units.lenU(asked, 3)}</b> cells; this block needs more columns than the memory budget allows, so it is simulated at <b>${units.lenU(st.cell, 3)}</b>.`
-        : `Simulated at <b>${units.lenU(st.cell, 3)}</b> per column.`;
+        ? `Asked for <b>${units.lenU(asked, 3)}</b> cells; this block needs more ${unit}s than the memory budget allows, so it is simulated at <b>${units.lenU(st.cell, 3)}</b>.`
+        : `Simulated at <b>${units.lenU(st.cell, 3)}</b> per ${unit}.`;
     };
     updateInfo();
 
@@ -199,10 +200,14 @@ export class SetupPanel extends Panel {
         el('div.stat-label', {}, label),
         el(`div.stat-value${dim ? '.dim' : ''}`, {}, value),
       ]);
+      const count = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1000).toFixed(0)}k`);
+      const tri = st.kind === 'tridexel';
       detail.replaceChildren(
         stat('Shape', describeShape(s)),
-        stat('Grid', `${st.nx} × ${st.ny}`),
-        stat('Columns', st.cellCount >= 1e6 ? `${(st.cellCount / 1e6).toFixed(1)}M` : `${(st.cellCount / 1000).toFixed(0)}k`),
+        stat('Grid', tri ? st.n3.join(' × ') : `${st.nx} × ${st.ny}`),
+        tri
+          ? stat('Lines', `${count(st.rayCount)} · ${(st.memoryBytes() / 1e6).toFixed(0)} MB`)
+          : stat('Columns', count(st.cellCount)),
         stat('Cell', `${units.len(st.dx, 3)} × ${units.lenU(st.dy, 3)}`, true),
         stat('Stock', units.volumeU(st.stockVolume, 2)),
         stat('Removed', `${units.volumeU(cut, 2)} · ${st.stockVolume > 0 ? ((cut / st.stockVolume) * 100).toFixed(1) : '0'}%`),
@@ -263,6 +268,15 @@ export class SetupPanel extends Panel {
         },
         { label: 'Reset the cut', onClick: () => app.resetStock(), hint: 'Put the material back and start the run over' },
       ]),
+      select('Stock model', [
+        { value: 'heightmap', label: 'Height map — fast, 3-axis' },
+        { value: 'tridexel', label: 'Full 3D (tri-dexel) — side holes, undercuts' },
+      ], s.model3d || 'heightmap', (v) => { app.setStock({ model3d: v }); this.refresh(); }, {
+        title: 'What holds the material: the top of each column, or the material along X, Y and Z',
+      }),
+      el('div.hint', {}, s.model3d === 'tridexel'
+        ? 'Keeps the material along X, Y and Z, so a hole drilled from the side, a cut under a ledge or a wall leaning under itself is there to see. Slower and bigger than the height map at the same cell. The deviation map and the STL export still read the top surface.'
+        : 'Keeps the top of each column: fast, and exact for anything cut from above. A hole from the side or a cut under an overhang is beyond it — use Full 3D for those.'),
       el('label.field', {}, [
         el('span.field-label', {}, ['Simulation resolution ', resLabel]),
         res,

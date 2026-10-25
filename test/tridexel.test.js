@@ -193,6 +193,9 @@ test('every exact sweep agrees with stamping it eight hundred times', () => {
     ['lollipop ramp', lolly6, [-8, 0, -6], [8, 2, -9], [0, 0, 1]],
     ['side ramp', flat6, [24, -2, -10], [4, 3, -13], [1, 0, 0]],
     ['leaning ball', ball6, [-8, -6, -6], [7, 5, -8], unit([0.2, -0.3, 0.9])],
+    ['drill ramp', drill8, [-9, -4, 1], [8, 5, -9], [0, 0, 1]],
+    ['bull nose ramp', tool({ type: 'bull', diameter: 10, cornerRadius: 1.5, fluteLength: 25 }), [-9, 3, -1], [9, -4, -7], [0, 0, 1]],
+    ['short ball ramp', tool({ type: 'ball', diameter: 10, fluteLength: 6 }), [-9, -2, -2], [9, 3, -7], [0, 0, 1]],
   ];
   for (const [name, t, a, b, d] of cases) {
     const exact = block(0.25);

@@ -60,6 +60,36 @@ export class Profile {
     // passes through those heights at all.
     this.peakLo = this.lower[this.n];
     this.peakHi = this.upper[this.n];
+    // Can a straight move be swept piece by piece in closed form? A sphere
+    // swept along a line is a capsule, but only the whole sphere is: the
+    // piece has to start at the sphere's bottom, and the rest of the ball
+    // above it has to be inside the tool anyway — the shank of a ball nose
+    // covers the top half, unless the flutes are shorter than the ball.
+    this.closedForm = this.checkClosedForm();
+    // Looking along the axis, every straight piece also has to be a plain
+    // cylinder: a cone's reach along the axis changes with the radius.
+    let flatSides = true;
+    for (let k = 0; k < this.pieces.length; k += STRIDE) {
+      if (this.pieces[k + 2] === LINE && Math.abs(this.pieces[k + 4]) > 1e-12) flatSides = false;
+    }
+    this.parallelClosed = this.closedForm && flatSides;
+  }
+
+  checkClosedForm() {
+    const p = this.pieces;
+    for (let k = 0; k < p.length; k += STRIDE) {
+      if (p[k + 2] !== SPHERE) continue;
+      const rad = Math.sqrt(p[k + 3]);
+      const centre = p[k + 4];
+      if (p[k] > centre - rad + 1e-9) return false;          // not from its bottom
+      if (centre + rad > this.top + 1e-9) return false;      // pokes out of the top
+      for (let i = 0; i <= 32; i++) {
+        const sAt = p[k + 1] + ((centre + rad - p[k + 1]) * i) / 32;
+        const ball = Math.sqrt(Math.max(0, p[k + 3] - (sAt - centre) * (sAt - centre)));
+        if (this.radiusAt(sAt) < ball - 1e-9) return false;
+      }
+    }
+    return true;
   }
 
   /** The widest the solid gets between heights sa and sb. */

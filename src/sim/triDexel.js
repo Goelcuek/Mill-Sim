@@ -34,10 +34,16 @@
 import { Stock, TILE } from './stock.js';
 import { profileOf } from '../tools/profile.js';
 
-/** Removals smaller than this, in mm along a line, are rounding, not cuts. */
-const MIN_CUT = 1e-6;
+/**
+ * Removals smaller than this, in mm along a line, are rounding, not cuts.
+ * The stretches are kept in single precision — about 8e-6 mm at 120 mm
+ * from the origin — so a cut that only retraces a face already there (a
+ * tool backing out of its own hole) recomputes it a few of those away.
+ * Counted, that is a rapid "removing material" through air.
+ */
+const MIN_CUT = 1e-4;
 /** What is left of a stretch shorter than this is dropped. */
-const SLIVER = 1e-5;
+const SLIVER = 1e-4;
 /** Stretches one line can hold. A comb with more teeth than this is merged. */
 const MAX_INTERVALS = 255;
 
@@ -100,6 +106,118 @@ function capsuleLine(x0, y0, x1, y1, r, yl, out) {
   out[1] = hi;
   return true;
 }
+
+/**
+ * Where the line o + t·e_a (e_a the unit vector along axis a) runs through
+ * a capsule: every point within `rad` of the segment P0–P1. A ball swept
+ * along a straight line is exactly this. Convex, so one interval: the hull
+ * of the two end balls and the round side between them.
+ */
+function rayCapsule(o, a, P0, P1, rad, out) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  const r2 = rad * rad;
+  for (let k = 0; k < 2; k++) {
+    const P = k ? P1 : P0;
+    const qx = o[0] - P[0], qy = o[1] - P[1], qz = o[2] - P[2];
+    const qa = a === 0 ? qx : a === 1 ? qy : qz;
+    const disc = qa * qa - (qx * qx + qy * qy + qz * qz - r2);
+    if (disc >= 0) {
+      const sq = Math.sqrt(disc);
+      if (-qa - sq < lo) lo = -qa - sq;
+      if (-qa + sq > hi) hi = -qa + sq;
+    }
+  }
+  const wx = P1[0] - P0[0], wy = P1[1] - P0[1], wz = P1[2] - P0[2];
+  const L2 = wx * wx + wy * wy + wz * wz;
+  if (L2 > 1e-18) {
+    const qx = o[0] - P0[0], qy = o[1] - P0[1], qz = o[2] - P0[2];
+    const qw = qx * wx + qy * wy + qz * wz;
+    const wa = a === 0 ? wx : a === 1 ? wy : wz;
+    const qa = a === 0 ? qx : a === 1 ? qy : qz;
+    // Squared distance to the segment's line, less r², as a quadratic in t.
+    const A2 = 1 - (wa * wa) / L2;
+    const A1 = 2 * (qa - (qw * wa) / L2);
+    const A0 = qx * qx + qy * qy + qz * qz - (qw * qw) / L2 - r2;
+    let ta = -Infinity;
+    let tb = Infinity;
+    let ok = true;
+    if (A2 > 1e-14) {
+      const disc = A1 * A1 - 4 * A2 * A0;
+      if (disc < 0) ok = false;
+      else {
+        const sq = Math.sqrt(disc);
+        ta = (-A1 - sq) / (2 * A2);
+        tb = (-A1 + sq) / (2 * A2);
+      }
+    } else if (A0 > 0) ok = false;
+    if (ok) {
+      // Only alongside the segment, not past its ends.
+      if (Math.abs(wa) > 1e-14) {
+        let t0 = -qw / wa;
+        let t1 = (L2 - qw) / wa;
+        if (t0 > t1) { const t = t0; t0 = t1; t1 = t; }
+        if (t0 > ta) ta = t0;
+        if (t1 < tb) tb = t1;
+      } else if (qw < 0 || qw > L2) ok = false;
+      if (ok && ta <= tb) {
+        if (ta < lo) lo = ta;
+        if (tb > hi) hi = tb;
+      }
+    }
+  }
+  if (lo > hi) return false;
+  out[0] = lo;
+  out[1] = hi;
+  return true;
+}
+
+/**
+ * The stretch of the line y = yl inside the hull of two discs: a disc whose
+ * centre and radius both move in a straight line sweeps exactly that, which
+ * is a cone of the cutter moving square to its axis. The hull's outline is
+ * the two circles and the two outer tangents between them.
+ */
+function hullLine(x0, y0, r0, x1, y1, r1, yl, out) {
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let k = 0; k < 2; k++) {
+    const x = k ? x1 : x0, y = k ? y1 : y0, r = k ? r1 : r0;
+    const d = y - yl;
+    if (d * d <= r * r) {
+      const w = Math.sqrt(r * r - d * d);
+      if (x - w < lo) lo = x - w;
+      if (x + w > hi) hi = x + w;
+    }
+  }
+  const dx = x1 - x0, dy = y1 - y0;
+  const dist = Math.hypot(dx, dy);
+  if (dist > Math.abs(r1 - r0) + 1e-12) {
+    const ex = dx / dist, ey = dy / dist;
+    const cs = (r0 - r1) / dist;
+    const sn = Math.sqrt(Math.max(0, 1 - cs * cs));
+    for (let sgn = -1; sgn <= 1; sgn += 2) {
+      const nx = cs * ex - sgn * sn * ey;
+      const ny = cs * ey + sgn * sn * ex;
+      const ax = x0 + r0 * nx, ay = y0 + r0 * ny;
+      const bx = x1 + r1 * nx, by = y1 + r1 * ny;
+      if ((ay - yl) * (by - yl) <= 0 && Math.abs(by - ay) > 1e-15) {
+        const lam = (yl - ay) / (by - ay);
+        const x = ax + lam * (bx - ax);
+        if (x < lo) lo = x;
+        if (x > hi) hi = x;
+      }
+    }
+  }
+  if (lo > hi) return false;
+  out[0] = lo;
+  out[1] = hi;
+  return true;
+}
+
+const PIECE = [0, 0];
+const BALL0 = [0, 0, 0];
+const BALL1 = [0, 0, 0];
 
 /** Golden-section minimum of a convex function on [a, b], seeded with the ends. */
 function goldenMin(f, a, b, iters) {
@@ -491,7 +609,47 @@ export class TriDexelStock extends Stock {
 
         let tIn;
         let tOut;
-        if (mode === PARALLEL) {
+        if (mode === PARALLEL && prof.parallelClosed) {
+          // Piece by piece, in closed form: a cylinder reaches its whole
+          // height wherever the line is inside its radius, and a ball sweeps
+          // a capsule.
+          const wb = A[b] - o[b], wc = A[c] - yc;
+          const c0 = wb * wb + wc * wc;
+          const c1 = 2 * (wb * D[b] + wc * D[c]);
+          const c2 = D[b] * D[b] + D[c] * D[c];
+          const tipA = A[a] - oa;
+          const Da = D[a];
+          const pc = prof.pieces;
+          tIn = Infinity;
+          tOut = -Infinity;
+          for (let k = 0; k < pc.length; k += 5) {
+            if (pc[k + 2] === 1) {
+              const sc = pc[k + 4];
+              BALL0[0] = A[0] + d[0] * sc; BALL0[1] = A[1] + d[1] * sc; BALL0[2] = A[2] + d[2] * sc;
+              BALL1[0] = BALL0[0] + D[0]; BALL1[1] = BALL0[1] + D[1]; BALL1[2] = BALL0[2] + D[2];
+              if (!rayCapsule(o, a, BALL0, BALL1, Math.sqrt(pc[k + 3]), PIECE)) continue;
+            } else {
+              const rr2 = pc[k + 3] * pc[k + 3];
+              let u1 = 0;
+              let u2 = 1;
+              if (c2 > 1e-15) {
+                const disc = c1 * c1 - 4 * c2 * (c0 - rr2);
+                if (disc <= 0) continue;
+                const sq = Math.sqrt(disc);
+                u1 = Math.max(0, (-c1 - sq) / (2 * c2));
+                u2 = Math.min(1, (-c1 + sq) / (2 * c2));
+                if (u1 > u2) continue;
+              } else if (c0 > rr2) continue;
+              const ta = tipA + Da * u1, tb = tipA + Da * u2;
+              const lo = ta < tb ? ta : tb, hi = ta < tb ? tb : ta;
+              if (sgn > 0) { PIECE[0] = lo + pc[k]; PIECE[1] = hi + pc[k + 1]; }
+              else { PIECE[0] = lo - pc[k + 1]; PIECE[1] = hi - pc[k]; }
+            }
+            if (PIECE[0] < tIn) tIn = PIECE[0];
+            if (PIECE[1] > tOut) tOut = PIECE[1];
+          }
+          if (!(tOut > tIn)) continue;
+        } else if (mode === PARALLEL) {
           // Distance from the line to the moving axis, as a quadratic in u.
           const wb = A[b] - o[b], wc = A[c] - yc;
           const c0 = wb * wb + wc * wc;
@@ -550,6 +708,35 @@ export class TriDexelStock extends Stock {
             const w = Math.sqrt(rr * rr - V0 * V0);
             tIn = W0 - w;
             tOut = W0 + w;
+          } else if (prof.closedForm) {
+            // A ramp, piece by piece: a ball sweeps a capsule; a straight
+            // piece, in the stretch of the move while the line is level
+            // with it, is a disc whose centre and radius both move
+            // linearly — the hull of its first and last disc.
+            const Wd = D[a];
+            const pc = prof.pieces;
+            tIn = Infinity;
+            tOut = -Infinity;
+            for (let k = 0; k < pc.length; k += 5) {
+              if (pc[k + 2] === 1) {
+                const sc = pc[k + 4];
+                BALL0[0] = A[0] + d[0] * sc; BALL0[1] = A[1] + d[1] * sc; BALL0[2] = A[2] + d[2] * sc;
+                BALL1[0] = BALL0[0] + D[0]; BALL1[1] = BALL0[1] + D[1]; BALL1[2] = BALL0[2] + D[2];
+                if (!rayCapsule(o, a, BALL0, BALL1, Math.sqrt(pc[k + 3]), PIECE)) continue;
+              } else {
+                let ua = (s0 - pc[k + 1]) / Dd;
+                let ub = (s0 - pc[k]) / Dd;
+                if (ua > ub) { const t = ua; ua = ub; ub = t; }
+                if (ua < 0) ua = 0;
+                if (ub > 1) ub = 1;
+                if (ua > ub) continue;
+                const ra = Math.max(0, pc[k + 3] + pc[k + 4] * (s0 - ua * Dd));
+                const rb = Math.max(0, pc[k + 3] + pc[k + 4] * (s0 - ub * Dd));
+                if (!hullLine(W0 + ua * Wd, V0 + ua * Dv, ra, W0 + ub * Wd, V0 + ub * Dv, rb, 0, PIECE)) continue;
+              }
+              if (PIECE[0] < tIn) tIn = PIECE[0];
+              if (PIECE[1] > tOut) tOut = PIECE[1];
+            }
           } else {
             // A ramp: the slice moves across and the radius changes with it.
             // Only while the line is level with the cutting part is there a

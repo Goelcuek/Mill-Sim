@@ -118,6 +118,37 @@ envelope, so what you see is the surface the tool actually leaves —
 scallops from a ball nose stepover, the radius a cutter leaves in a square
 corner, the ramp from a helical entry.
 
+**A full 3D stock, for what the heightmap cannot hold.** A heightmap keeps
+the top of each column and takes everything under it to be solid: a hole
+drilled into the side of a part, a groove cut by a lollipop under a ledge,
+a cut a leaning tool makes under standing metal — none of them can be in
+it. **Setup › Stock › Stock model › Full 3D** keeps the material along X,
+Y and Z instead: three grids of lines, each line holding the stretches of
+it that are inside metal (a *tri-dexel* model). A hole from the side is a
+gap in the lines it runs along and in every line it crosses; every face of
+the part is crossed by one of the three families within 54.7° of square,
+so walls are seen as well as floors.
+
+Cutting is solved on each line against the cutter itself — kept as exact
+pieces, with a ball nose a true sphere — rather than a faceted copy:
+closed form along the tool axis and square to it, a search for a ramp or a
+plunge, and fine stamping only for a leaning tool moving along lines at an
+angle to it. Against answers worked out by hand: a side hole's volume and
+position, two crossing holes against the Steinmetz solid, a lollipop
+tunnel, wall positions along X and Y to a tenth of a micron, a 20° leaning
+wall, a hole at a compound angle. On a 3-axis job it agrees with the
+heightmap, and where the two differ — the steep flanks of a ball nose —
+it is the closer of the two to the exact surface in every column.
+
+It costs more. On the shipped examples it takes 3.2–3.5 times as long as
+the heightmap at 0.25 mm and 5–7 times as long at 0.1 mm — the five-axis
+example's whole run is 2.3 s and 13.5 s — and about 3.5 MB per 100,000
+lines: 35 MB for the 120 × 80 bracket at 0.1 mm, 49 MB for the five-axis
+block. The display draws points where the lines meet the metal rather than
+a mesh. The deviation map and the STL export still read the top surface. The
+**Side holes in a full 3D stock** example switches it on; any other
+example puts the heightmap back.
+
 **Stock that is not a block.** **Add stock…** offers three shapes, because
 three is what a shop has: a rectangular block (X, Y, Z), a round bar (Ø and
 height), and a model — a casting, a forging, a weldment, or the output of
@@ -676,11 +707,16 @@ silently ignored.
 
 ## Honest limitations
 
-- **The stock is a heightmap, so it cannot represent undercuts.** Each
-  column stores one top surface. This is the standard trade-off for
+- **The default stock is a heightmap, so it cannot represent undercuts.**
+  Each column stores one top surface. This is the standard trade-off for
   interactive 3-axis verification. Undercut tools are drawn and
   collision-checked, but the material beneath an overhang will not be
-  removed. The Tools panel says so when you build one.
+  removed. The Tools panel says so when you build one. Set the stock model
+  to **Full 3D** for side holes and undercuts.
+- **Full 3D is phase one.** The material and the cutting are complete; the
+  display is a field of shaded points rather than a mesh, a section shows
+  the surfaces below the cut rather than a capped solid, and the deviation
+  map and the STL export still read the top surface.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
@@ -688,7 +724,8 @@ silently ignored.
   one surface per column, so an undercut a leaning cutter creates cannot be
   drawn. The carver refuses to remove a column the tool passes entirely
   beneath rather than report material gone that is still there, which is the
-  honest failure of the two.
+  honest failure of the two. On the five-axis example's swarf pass that is
+  about 6 % of the metal; Full 3D removes it.
 - **Non-TCP five-axis programs assume the part zero is at the machine's home
   tip.** Without `G43.4` the programmed X/Y/Z are axis positions, and turning
   those into a point on the part needs the work offset and the tool length
@@ -727,12 +764,14 @@ src/
     interpreter.js    modal state machine -> flat move list
   sim/
     stock.js          heightmap, swept and tilted carving, tile pyramid
+    triDexel.js       the full 3D stock: material along X, Y and Z
     target.js         reference-part rasterisation and gouge comparison
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
   scene/
     viewer.js         renderer, camera, lighting
     stockView.js      GPU-displaced heightmap mesh
+    dexelView.js      the full 3D stock, as shaded points
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
     machineView.js    the chain-driven rig: one group per axis

@@ -387,6 +387,38 @@ try {
   check(fidia.tipped, 'the tool vector did not turn the rotaries');
   check(fidia.tcp, 'RTCP ON did not reach the moves');
 
+  // ---- a full 3D stock holds a hole drilled from the side ---------------
+  //
+  // The example drills two holes into the right face through a tilted
+  // plane and one from the top into the first. A heightmap cannot hold any
+  // of the side holes; the tri-dexel has to, and has to hand the next
+  // example back to the heightmap.
+  {
+    await loadExample(page, 8, 'Side holes');
+    await runToEnd(page);
+    const side = await page.evaluate(() => {
+      const app = window.millsim;
+      const st = app.stock;
+      return {
+        kind: st.kind,
+        removed: app.simulator.removedVolume,
+        findings: app.simulator.collisions.length,
+        errors: app.state.program.warnings.filter((w) => w.severity === 'error').length,
+        overHole: st.stretchesAt(2, [52.1, 20.1, 0]).map((r) => r.map((v) => +v.toFixed(2))),
+        drawn: app.stockView.cloud ? app.stockView.cloud.group.children.length : 0,
+      };
+    });
+    console.log('side holes:', JSON.stringify(side));
+    check(side.kind === 'tridexel', 'the side-hole example did not switch the stock to Full 3D');
+    check(side.errors === 0 && side.findings === 0, 'the side-hole example should run clean');
+    check(side.overHole.length === 2 && Math.abs(side.overHole[0][1] + 20) < 0.05 && Math.abs(side.overHole[1][0] + 10) < 0.05,
+      `the Z line over the second side hole should have metal under and over it: ${JSON.stringify(side.overHole)}`);
+    check(side.drawn > 0, 'the full 3D stock drew nothing');
+    await loadExample(page, 0, 'Demo bracket');
+    const back = await page.evaluate(() => window.millsim.stock.kind || 'heightmap');
+    check(back === 'heightmap', 'the next example kept the Full 3D stock');
+  }
+
   // ---- a program written for another control says so --------------------
   //
   // Read against the wrong one, a Fidia program is a page of errors and no
