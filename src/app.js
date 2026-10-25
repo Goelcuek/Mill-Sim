@@ -29,7 +29,7 @@ import { interpret } from './gcode/interpreter.js';
 import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
 
 import { stockToTriangles, latheToTriangles, boxToTriangles } from './io/mesh.js';
-import { buildTargetMap, compareToTarget, columnDeviation, DEV_JUDGED, DEV_WALL } from './sim/target.js';
+import { buildTargetMap, compareToTarget, pointDeviation, DEV_JUDGED } from './sim/target.js';
 import { writeSTL, writeOBJ, parseSTL } from './io/stl.js';
 import { writeZip, readZip } from './io/zip.js';
 import { writeProject, readProject, isProject } from './io/project.js';
@@ -169,6 +169,12 @@ export class App {
       stops: loadStops(),
       /** What has been measured on the part, newest last. */
       measurements: [],
+      /**
+       * Points pinned on the deviation map, each read again as the cutting
+       * goes on: where it was pointed at — a ray, in the part's frame — and
+       * what the surface there now reads.
+       */
+      devProbes: [],
       /**
        * What the crash model looks for.
        *
@@ -354,6 +360,7 @@ export class App {
     this.viewer.outlineRoots = [this.machineView.group, this.toolView.group];
 
     this.measure = new MeasureView(this.viewer, this.viewOverlay);
+    this.probeView = new MeasureView(this.viewer, this.viewOverlay);
     /** Scratch for carrying a point between the part and coordinate frames. */
     this._frameSwap = new THREE.Matrix4();
 
@@ -580,7 +587,11 @@ export class App {
         s.axisLock === null ? 'X / Y / Z to lock an axis' : `locked to ${'XYZ'[s.axisLock]}`));
       if (s.axisLock !== null) this.pickBar.lastChild.classList.add('on');
     }
-    this.pickBar.appendChild(button('Cancel', () => this.pick.cancel(), { title: 'Escape' }));
+    // A probe says what it would pin before it is clicked.
+    if (s.request.probe && s.hover) {
+      this.pickBar.appendChild(el('span.pick-coord', {}, this.describeDeviation(this.deviationAt(s.hover.point)).text));
+    }
+    this.pickBar.appendChild(button(s.request.probe ? 'Done' : 'Cancel', () => this.pick.cancel(), { title: 'Escape' }));
   }
 
   saveScreenshot() {
@@ -1587,7 +1598,7 @@ export class App {
     this.updateHud();
     this.refreshMeasurements();
     this.buildRibbon();
-    this.renderDeviationLegend();
+    this.refreshProbes();
     this.notify(next === 'in'
       ? 'Showing inches. Everything is still held in millimetres — this is how it is read, not what it is.'
       : 'Showing millimetres.', 'ok');
@@ -1616,7 +1627,8 @@ export class App {
     this.viewer.setOutlines(d.edges !== false);
     this.stockView.setDeviationMode(!!d.deviation, d.devRange);
     this.models.hideRole('reference', !!d.deviation);
-    this.renderDeviationLegend();
+    if (!d.deviation && this.pick && this.pick.active && this.pick.request.probe) this.pick.cancel();
+    this.refreshProbes();
     if (this.originView) this.originView.setVisible(d.origins);
 
     if (this.stock) {
@@ -1760,7 +1772,7 @@ export class App {
     this.simulator.target = this.target;
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
-    this.renderDeviationLegend();
+    this.refreshProbes();
     if (parts.length && this.target) {
       this.notify(`Reference part mapped in ${(performance.now() - started).toFixed(0)} ms — cuts into it are reported as gouges, measured along the surface normal, walls and bores included.`, 'ok');
     }
@@ -1771,7 +1783,7 @@ export class App {
     this.state.gougeTolerance = Math.max(0, mm || 0);
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
-    this.renderDeviationLegend();
+    this.refreshProbes();
     this.refreshResults();
   }
 
@@ -1798,6 +1810,8 @@ export class App {
       host.append(el('div.dev-note', {}, 'No reference part yet. Add the finished part as a model with the role Reference part, and the stock is coloured by how far it stands from it.'));
       return;
     }
+    const picking = !!(this.pick && this.pick.active && this.pick.request.probe);
+    const probes = this.state.devProbes;
     host.append(
       el('div.dev-bar', {}, [
         el('span.dev-gouge'), el('span.dev-ok'), el('span.dev-left'),
@@ -1810,42 +1824,154 @@ export class App {
       el('div.dev-keys', {}, [
         el('span', {}, 'gouged'), el('span', {}, 'on size'), el('span', {}, 'stock left'),
       ]),
-      this.devReadout = el('div.dev-readout', {}, 'Point at the part for a reading.'),
+      this.devReadout = el('div.dev-readout', {}, picking ? 'Click the part to pin a reading.' : 'Point at the part for a reading.'),
+      el('div.dev-probes', {}, [
+        el('div.dev-probe-actions', {}, [
+          (() => {
+            const b = button(picking ? 'Done' : 'Pick points', () => (picking ? this.pick.cancel() : this.pickDeviationPoints()), {
+              title: 'Pin readings on the part: how much is left, or how deep it is gouged, at each point',
+            });
+            if (picking) b.classList.add('on');
+            return b;
+          })(),
+          probes.length ? button('Clear', () => this.clearProbes()) : null,
+        ].filter(Boolean)),
+        probes.length ? el('div.dev-probe-list', {}, probes.map((p) => {
+          const r = this.describeProbe(p);
+          return el('div.dev-probe', { title: p.point ? `X ${units.len(p.point[0], 3)}  Y ${units.len(p.point[1], 3)}  Z ${units.len(p.point[2], 3)} ${units.lengthLabel()}` : '' }, [
+            el('b', {}, p.name),
+            el(`span.val.${r.tone}`, {}, [r.value, el('small', {}, r.verdict)]),
+            el('button', { type: 'button', title: `Remove ${p.name}`, onclick: () => this.removeProbe(p.id) }, '×'),
+          ]);
+        })) : null,
+      ].filter(Boolean)),
     );
+  }
+
+  /**
+   * The deviation at a point of the cut surface: measured in three
+   * dimensions — to the nearest face of the part, inside it or out — so a
+   * wall, a bore or the inside of a side hole reads as truly as a floor.
+   */
+  deviationAt(point) {
+    if (!this.target || !point) return null;
+    return pointDeviation(this.target, point[0], point[1], point[2], 50);
+  }
+
+  /** A deviation in words: the number, its colour, and what it means. */
+  describeDeviation(dev) {
+    const tol = this.state.gougeTolerance;
+    if (!dev || dev.state !== DEV_JUDGED) return { tone: 'off', value: '—', verdict: 'outside the part', text: 'Outside the reference part.' };
+    const v = dev.deviation;
+    const value = `${dev.beyond ? '> ' : ''}${v >= 0 ? '+' : '−'}${units.lenU(Math.abs(v), 3)}`;
+    if (Math.abs(v) <= tol) return { tone: 'ok', value, verdict: 'on size', text: `${value} — on size` };
+    if (v > 0) return { tone: 'left', value, verdict: 'stock left', text: `${value} — stock still to come off` };
+    return { tone: 'gouge', value, verdict: 'gouged', text: `${value} — cut past the part` };
   }
 
   /** The deviation at the pointer, read off the cut stock itself. */
   hoverDeviation(event) {
     if (!this.state.display.deviation || !this.target || !this.stock || !this.devReadout) return;
-    if (!event) { this.devReadout.textContent = 'Point at the part for a reading.'; return; }
+    if (!event) {
+      this.devReadout.textContent = this.pick && this.pick.active ? 'Click the part to pin a reading.' : 'Point at the part for a reading.';
+      return;
+    }
     this._devEvent = event;
     if (this._devFrame) return;
     this._devFrame = requestAnimationFrame(() => {
       this._devFrame = null;
       const e = this._devEvent;
-      if (!e || !this.pick || !this.stock) return;
+      if (!e || !this.pick || !this.stock || !this.devReadout) return;
       this.pick.rayFor(e);
       const r = this.pick.workRay;
       const hit = this.stock.raycast([r.origin.x, r.origin.y, r.origin.z], [r.direction.x, r.direction.y, r.direction.z]);
       if (!hit) { this.devReadout.textContent = 'Point at the part for a reading.'; return; }
-      const s = this.stock;
-      const i = Math.floor((hit.point[0] - s.origin[0]) / s.dx);
-      const j = Math.floor((hit.point[1] - s.origin[1]) / s.dy);
-      const tol = this.state.gougeTolerance;
-      const dev = columnDeviation(s, this.target, i, j, tol, 50);
-      let text;
-      if (dev.state === DEV_JUDGED) {
-        const v = dev.deviation;
-        const amount = `${dev.beyond ? 'more than ' : ''}${v >= 0 ? '+' : '−'}${units.len(Math.abs(v), 3)} ${units.lengthLabel()}`;
-        text = Math.abs(v) <= tol ? `${amount} — on size`
-          : v > 0 ? `${amount} — stock still to come off` : `${amount} — cut past the part`;
-      } else if (dev.state === DEV_WALL) {
-        text = 'A wall of the part: measured straight down, it cannot be judged here.';
-      } else {
-        text = 'Outside the reference part.';
-      }
-      this.devReadout.textContent = text;
+      this.devReadout.textContent = this.describeDeviation(this.deviationAt(hit.point)).text;
     });
+  }
+
+  // ---- deviation probes -----------------------------------------------------
+  //
+  // A pinned reading is a line of sight rather than a fixed point: the place
+  // that was clicked is cut away as the program runs, and what the probe
+  // reads is wherever that same line meets the surface now — the floor of a
+  // pocket as it goes down, the wall of a bore as it opens up.
+
+  /** Click points on the part, each pinned with its reading, until Escape. */
+  pickDeviationPoints() {
+    if (!this.target || !this.stock) {
+      this.notify('Add a reference part first: a probe reads how far the cut stands from it.', 'error');
+      return;
+    }
+    this.pick.begin({
+      steps: 1,
+      stockOnly: true,
+      probe: true,
+      title: 'Deviation probe',
+      hints: ['Click the part to pin a reading — Escape when done'],
+      onDone: ([point]) => {
+        const r = this.pick.workRay;
+        this.addProbe(point, [r.origin.x, r.origin.y, r.origin.z], [r.direction.x, r.direction.y, r.direction.z]);
+        // One after another until Escape or Done.
+        if (this.state.display.deviation) this.pickDeviationPoints();
+      },
+      onCancel: () => this.renderDeviationLegend(),
+    });
+    this.renderDeviationLegend();
+  }
+
+  addProbe(point, origin, dir) {
+    const used = new Set(this.state.devProbes.map((p) => p.name));
+    let n = 1;
+    while (used.has(`P${n}`)) n++;
+    const probe = { id: uid('probe'), name: `P${n}`, origin, dir, point, dev: null };
+    this.state.devProbes.push(probe);
+    this.refreshProbes();
+    const r = this.describeProbe(probe);
+    this.notify(`${probe.name}: ${r.text}`, r.tone === 'gouge' ? 'error' : 'ok');
+  }
+
+  removeProbe(id) {
+    this.state.devProbes = this.state.devProbes.filter((p) => p.id !== id);
+    this.refreshProbes();
+  }
+
+  clearProbes() {
+    this.state.devProbes = [];
+    this.refreshProbes();
+  }
+
+  describeProbe(p) {
+    if (!p.point) return { tone: 'off', value: '—', verdict: 'cut through', text: 'nothing left on that line — cut through' };
+    return this.describeDeviation(p.dev);
+  }
+
+  /**
+   * Read every probe again — where its line meets the surface now, and how
+   * that stands against the part — and redraw them and the legend.
+   */
+  refreshProbes() {
+    const on = !!(this.state.display.deviation && this.target && this.stock);
+    for (const p of this.state.devProbes) {
+      if (!on) break;
+      const hit = this.stock.raycast(p.origin, p.dir);
+      p.point = hit ? hit.point : null;
+      p.dev = hit ? this.deviationAt(hit.point) : null;
+    }
+    this._probeVersion = this.stock ? this.stock.version : -1;
+    this.probeView.attach(this.pick.frameObject() || this.viewer.scene);
+    this.probeView.setItems(on ? this.state.devProbes.filter((p) => p.point).map((p) => {
+      const r = this.describeProbe(p);
+      return { id: p.id, kind: 'probe', points: [p.point], tone: r.tone, label: `${p.name}  ${r.value}` };
+    }) : []);
+    this.renderDeviationLegend();
+    // View › Inspect offers to clear them, by count: redrawn when that changes,
+    // not every time the cut moves a reading.
+    if (this._probeCount !== this.state.devProbes.length) {
+      this._probeCount = this.state.devProbes.length;
+      if (this.panels && this.panels.view && this.activeTab === 'view') this.panels.view.refresh();
+    }
+    this.viewer.invalidate();
   }
 
   /** Where the finished stock stands against the reference part. */
@@ -2268,6 +2394,16 @@ export class App {
       this.updateTransport();
       this._resultTick = (this._resultTick || 0) + 1;
       if (this._resultTick % 20 === 0) this.refreshResults();
+    }
+
+    // Pinned readings follow the cut: a few times a second while it plays,
+    // and once more whenever the stock has changed since.
+    if (this.state.devProbes.length && this.state.display.deviation && this.stock && this.stock.version !== this._probeVersion) {
+      const now = performance.now();
+      if (!worked || now - (this._probeAt || 0) > 250) {
+        this._probeAt = now;
+        this.refreshProbes();
+      }
     }
 
     // A full 3D stock draws a few chunks a frame; when the run stops, the

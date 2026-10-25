@@ -17,7 +17,7 @@
 // along the surface normal against the triangles — see surfaceIndex.js —
 // which is what lets walls, slopes and bores be judged at all.
 
-import { buildSurfaceIndex, nearestWithin } from './surfaceIndex.js';
+import { buildSurfaceIndex, nearestWithin, isClosed, insideSolid } from './surfaceIndex.js';
 
 /**
  * Rasterise reference triangles into a target heightmap.
@@ -101,6 +101,10 @@ export function buildTargetMap(stock, parts) {
   return {
     map, edge, edgeCells, lateral: Math.max(stock.dx, stock.dy),
     surface: buildSurfaceIndex(parts, Math.max(2, stock.dx * 8, stock.dy * 8)),
+    // A solid has an inside to ask about; an open sheet of faces only has
+    // a top, and under the top is the best that can be said of it.
+    closed: parts.every((p) => isClosed(p.positions)),
+    grid: { ox, oy, dx, dy, nx, ny },
   };
 }
 
@@ -322,6 +326,79 @@ export function columnDeviation(stock, target, i, j, tolerance = 0.02, cap = 25)
   if (!over) return { state: DEV_OUTSIDE, deviation: 0 };
   if (bound <= cap) return { state: DEV_JUDGED, deviation: sign * bound };
   return { state: DEV_JUDGED, deviation: sign * cap, beyond: true };
+}
+
+// ---- in three dimensions ----------------------------------------------------
+//
+// A column has one top, so the map above judges the top of each column. A
+// full 3D stock has faces facing every way — the inside of a side hole, the
+// roof of an undercut — and each is judged where it is: the distance from
+// that point of the cut surface to the nearest face of the part, negative
+// when the point is inside the part. Inside is asked of the part itself,
+// not of its top, so a side hole in the part is air and the metal under an
+// overhang of it is part.
+
+/** The column of the reference map over a point, or -1 off the grid. */
+function columnOf(target, x, y) {
+  const g = target.grid;
+  if (!g) return -1;
+  const i = Math.floor((x - g.ox) / g.dx);
+  const j = Math.floor((y - g.oy) / g.dy);
+  if (i < 0 || j < 0 || i >= g.nx || j >= g.ny) return -1;
+  return j * g.nx + i;
+}
+
+/**
+ * Is a point inside the reference part? A closed model is asked directly;
+ * an open one — a sheet of finished faces — only has a top, and a point
+ * under it is taken to be inside.
+ */
+export function insidePart(target, x, y, z) {
+  if (!target) return false;
+  if (target.closed && target.surface) return insideSolid(target.surface, x, y, z);
+  const k = columnOf(target, x, y);
+  return k >= 0 && target.map[k] > -Infinity && z < target.map[k];
+}
+
+/**
+ * How one point of the cut surface stands against the reference part.
+ *
+ * The distance is to the nearest face of the part, in any direction, and
+ * it is a gouge (negative) when the point is inside the part, stock left
+ * (positive) when it is outside. Beyond `cap` the exact figure is not
+ * looked for and `beyond` says so. Stock left further off than that is
+ * the part's business only over its footprint — the top of the block over
+ * the part — and not out in the margin round it, as on the column map.
+ *
+ * @param {number} [cap] mm beyond which the exact distance is not wanted
+ * @param {number} [onSize] this close, which side the point is on is not
+ *   asked — it is on size either way, and a map of a finished part is
+ *   mostly that
+ * @returns {{state:number, deviation:number, beyond?:boolean}}
+ */
+export function pointDeviation(target, x, y, z, cap = 25, onSize = 0) {
+  if (!target) return { state: DEV_OUTSIDE, deviation: 0 };
+  const surf = target.surface;
+  const k = columnOf(target, x, y);
+  const over = k >= 0 && target.map[k] > -Infinity;
+  if (!surf) {
+    // Only the top to go on: the vertical gap, where there is a top.
+    if (!over) return { state: DEV_OUTSIDE, deviation: 0 };
+    return { state: DEV_JUDGED, deviation: z - target.map[k] };
+  }
+  const b = surf.bounds;
+  // Further from the part's box than the cap is outside it and out of reach.
+  const far = x < b[0] - cap || x > b[3] + cap || y < b[1] - cap || y > b[4] + cap || z < b[2] - cap || z > b[5] + cap;
+  const d = far ? Infinity : nearestWithin(surf, x, y, z, cap);
+  if (d <= onSize) return { state: DEV_JUDGED, deviation: d };
+  const inside = !far && insidePart(target, x, y, z);
+  if (inside) {
+    if (d < Infinity) return { state: DEV_JUDGED, deviation: -d };
+    return { state: DEV_JUDGED, deviation: -cap, beyond: true };
+  }
+  if (d < Infinity) return { state: DEV_JUDGED, deviation: d };
+  if (over) return { state: DEV_JUDGED, deviation: cap, beyond: true };
+  return { state: DEV_OUTSIDE, deviation: 0 };
 }
 
 /**

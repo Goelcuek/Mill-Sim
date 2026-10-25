@@ -83,6 +83,7 @@ export class StockView {
         toolColors: this.toolColors,
       });
       this.surface.uniforms.uShowTools.value = this.showTools === false ? 0 : 1;
+      this.surface.setDeviation(this.deviationState());
       if (this.sectionZ !== undefined) this.surface.setSection(this.sectionZ);
       this.group.add(this.surface.group);
       return;
@@ -567,7 +568,21 @@ export class StockView {
     this.target = target || null;
     this.devTolerance = Math.max(0, Number(tolerance) || 0);
     if (this.uniforms) this.uniforms.uDevTol.value = this.devTolerance;
+    if (this.surface) {
+      this.surface.setDeviation(this.deviationState());
+      return;
+    }
     this.sync(true);
+  }
+
+  /** What a full 3D stock's map is to show, from the settings here. */
+  deviationState() {
+    return {
+      mode: !!this.devMode,
+      target: this.targetFits() ? this.target : null,
+      tolerance: this.devTolerance,
+      range: this.devRange || 0.5,
+    };
   }
 
   /**
@@ -579,6 +594,10 @@ export class StockView {
     const before = [this.devMode, this.devRange];
     this.devMode = !!on;
     if (Number.isFinite(range) && range > 0) this.devRange = range;
+    if (this.surface) {
+      this.surface.setDeviation(this.deviationState());
+      return;
+    }
     // The map is measured out to twice the colour range, so turning it on
     // or widening the range means measuring again.
     if (this.devMode && (before[0] !== this.devMode || before[1] !== this.devRange)) this.sync(true);

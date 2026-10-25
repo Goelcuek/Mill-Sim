@@ -400,6 +400,14 @@ export class PickController {
    * the screen radius, else the raw surface hit.
    */
   findPoint(screen, rect) {
+    // A probe reads the stock exactly where it is pointed at: nothing but
+    // the stock to hit, and no snapping it to a corner nearby.
+    if (this.request && this.request.stockOnly) {
+      const stock = this.ctx.stock();
+      const r = this.workRay;
+      const hit = stock ? stock.raycast([r.origin.x, r.origin.y, r.origin.z], [r.direction.x, r.direction.y, r.direction.z]) : null;
+      return hit ? { point: hit.point, kind: 'surface', label: 'stock', distance: hit.distance } : null;
+    }
     const free = this.freeHit();
     const candidates = this.candidates(free);
 

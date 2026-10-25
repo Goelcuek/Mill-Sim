@@ -161,9 +161,9 @@ It costs more. On the shipped examples a run takes 1.9–3.6 times as long as
 the heightmap at 0.25 mm and 2.1–5.3 times as long at 0.1 mm — the
 five-axis example's whole run is 1.6 s and 8.9 s — and about 3.5 MB per
 100,000 lines: 35 MB for the 120 × 80 bracket at 0.1 mm, 49 MB for the
-five-axis block. The deviation map still reads the top surface. The **Side
-holes in a full 3D stock** example switches it on; any other example puts
-the heightmap back.
+five-axis block. The deviation map judges every face of it in 3D (see
+Gouging, below). The **Side holes in a full 3D stock** example switches it
+on; any other example puts the heightmap back.
 
 **Stock that is not a block.** **Add stock…** offers three shapes, because
 three is what a shop has: a rectangular block (X, Y, Z), a round bar (Ø and
@@ -666,6 +666,26 @@ The Results panel also reports the other half of the comparison — how much
 stock is still standing above the part, and what fraction of the reference
 surface was gouged. The tolerance is adjustable; the default is 0.02 mm.
 
+**View › Inspect › Deviation map** colours the stock by it: green on size,
+blue for stock still to come off, red for a cut past the part, each
+deepening to full colour at a range you set. The distance is the shortest
+one to the part, in any direction, and which side of it a point is on is
+asked of the part itself — a closed model is a solid, and a point is
+inside it when a ray from it crosses its skin an odd number of times; an
+open sheet of faces has only a top. On a **Full 3D** stock every face is
+judged where it is — the walls and floor of a side hole, the roof of an
+undercut, the underside of a ledge — vertex by vertex, and a cut remeasures
+only the blocks it reached. Against a reference whose side hole is Ø10.6,
+the wall of the Ø10 hole that was drilled reads +0.30 all the way round.
+
+**Pick points** (on the map's key, or View › Inspect) pins readings on the
+part: click a spot and it is labelled with how much is left there or how
+deep it is gouged, and listed under the key. A reading is a line of sight,
+not a fixed point: as the program runs and the spot is cut away, it reads
+wherever that line meets the surface now, so a probe on a raw top reads
++0.8 before the facing pass and −0.2 after one that went too deep. The
+same measure gives the reading under the pointer.
+
 ### What the crash model catches
 
 | Reported as | Meaning |
@@ -729,11 +749,12 @@ silently ignored.
   collision-checked, but the material beneath an overhang will not be
   removed. The Tools panel says so when you build one. Set the stock model
   to **Full 3D** for side holes and undercuts.
-- **Full 3D has no deviation map yet.** The material, the cutting, the
-  surface, sections, picking and the STL export are complete; the
-  deviation map against a reference part still reads the top surface, so
-  it says nothing about a side hole. A leaning tool moving along lines at
-  an angle to it is still stamped rather than solved exactly.
+- **On a heightmap stock the deviation map is per column.** Each column's
+  top is measured in 3D, but a heightmap has no faces under its tops, so
+  only Full 3D colours the inside of a hole or an undercut. The gouge check
+  during the run (Results) also still works column by column on both.
+- **Full 3D stamps a leaning tool moving at an angle to the lines** rather
+  than solving it exactly.
 - **A Full 3D surface is as fine as its lattice.** A fin or a slot thinner
   than one cell of the displayed lattice can fall between its points and
   not be drawn, though the lines still hold it and the volumes count it.

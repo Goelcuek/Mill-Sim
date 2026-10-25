@@ -173,6 +173,25 @@ try {
     check(Math.abs(cmp.lateral - 0.25) < 1e-6, `the lateral resolving power should be one column, and reads ${cmp.lateral}`);
     check(/surface normal/.test(said), `the results panel does not say how it measures: ${said.slice(0, 200)}`);
 
+    // A probe on the heightmap stock: down into the 1 mm plunge — a drill,
+    // so off its centre the point of it is shallower than the full 1 mm —
+    // and on the untouched top 5 mm over the plate.
+    const hmProbe = await page.evaluate(() => {
+      const app = window.millsim;
+      app.setDisplay({ deviation: true });
+      app.addProbe(null, [20.3, 0.3, 30], [0, 0, -1]);
+      app.addProbe(null, [-30.3, 20.3, 30], [0, 0, -1]);
+      const out = app.state.devProbes.map((p) => (p.dev ? +p.dev.deviation.toFixed(3) : null));
+      const listed = [...document.querySelectorAll('.dev-probe')].map((n) => n.textContent);
+      app.clearProbes();
+      app.setDisplay({ deviation: false });
+      return { out, listed };
+    });
+    console.log('heightmap probes:', JSON.stringify(hmProbe));
+    check(hmProbe.out[0] !== null && hmProbe.out[0] < -0.7 && hmProbe.out[0] > -1.05, `a probe in the 1 mm plunge should read a gouge of most of a millimetre: ${hmProbe.out[0]}`);
+    check(hmProbe.out[1] !== null && Math.abs(hmProbe.out[1] - 5) < 0.05, `a probe on the top should read +5 over the plate: ${hmProbe.out[1]}`);
+    check(hmProbe.listed.length === 2 && /gouged/.test(hmProbe.listed[0]) && /stock left/.test(hmProbe.listed[1]), `the probes should be listed with what they mean: ${JSON.stringify(hmProbe.listed)}`);
+
     // Put the bench back: later checks expect nothing but the block.
     await page.evaluate((id) => {
       const app = window.millsim;
@@ -433,6 +452,72 @@ try {
       return { cut: side, whole: app.stockView.surface.material.side };
     });
     check(caps.cut === 2 && caps.whole === 0, `a section should draw both sides, and none only the outside: ${JSON.stringify(caps)}`);
+
+    // The deviation map in 3D, and a probe pinned on it. The reference
+    // part has the first side hole at Ø10.6 where the program drills Ø10,
+    // so the wall of the hole that was cut is 0.3 short of the part — stock
+    // left, on a face no top-down map can see.
+    const probe = await page.evaluate(async () => {
+      const app = window.millsim;
+      const { TriDexelStock } = await import('/src/sim/triDexel.js');
+      const { dexelTriangles } = await import('/src/sim/dexelMesh.js');
+      const { buildTool, makeTool } = await import('/src/tools/toolDefs.js');
+      const st = app.stock;
+      const ref = new TriDexelStock({ origin: st.origin.slice(), size: st.size.slice(), resolution: st.cell });
+      const big = buildTool(makeTool({ type: 'flat', diameter: 10.6, fluteLength: 40 })).cutEnvelope;
+      const flat16 = buildTool(makeTool({ type: 'flat', diameter: 16, fluteLength: 40 })).cutEnvelope;
+      // The faced top, then the hole.
+      for (let y = -40; y <= 40; y += 8) ref.carveLinear(flat16, [-70, y, -1], [70, y, -1], [0, 0, 1], 0);
+      ref.carveLinear(big, [70, 0, -15], [45, 0, -15], [1, 0, 0], 1);
+      const model = app.models.add({ name: 'side-hole part', positions: dexelTriangles(ref).positions, role: 'reference' });
+      app.refreshTarget();
+      app.setDisplay({ deviation: true, devRange: 0.5 });
+      // Straight down inside the first hole, onto the bottom of its wall.
+      app.addProbe(null, [58, 0.05, -15], [0, 0, -1]);
+      const p = app.state.devProbes[0];
+      return {
+        id: model.id,
+        closed: app.target ? app.target.closed : null,
+        point: p.point ? p.point.map((v) => +v.toFixed(2)) : null,
+        reading: p.dev ? +p.dev.deviation.toFixed(3) : null,
+        label: document.querySelector('.probe-label') ? document.querySelector('.probe-label').textContent : null,
+        listed: document.querySelectorAll('.dev-probe').length,
+        mapOn: app.stockView.surface.uniforms.uDevMode.value,
+      };
+    });
+    const judged = await page.evaluate(() => {
+      // The map is redone a few blocks a frame; this browser draws a frame
+      // in software, so the rest is done here rather than waited for.
+      const t0 = performance.now();
+      window.millsim.stockView.surface.sync(false, Infinity);
+      const ms = Math.round(performance.now() - t0);
+      let on = 0;
+      let left = 0;
+      for (const m of window.millsim.stockView.surface.blocks) {
+        if (!m) continue;
+        const a = m.geometry.attributes;
+        for (let v = 0; v < m.userData.vCap; v++) {
+          if (!a.aDevOn.array[v]) continue;
+          on++;
+          if (Math.abs(a.aDev.array[v] - 0.3) < 0.05) left++;
+        }
+      }
+      return { on, left, finishMs: ms };
+    });
+    console.log('3D deviation probe:', JSON.stringify({ ...probe, ...judged }));
+    check(probe.closed === true, 'the side-hole reference should be a closed solid');
+    check(probe.point && Math.abs(probe.point[2] + 20) < 0.05, `the probe should land on the bottom of the hole wall: ${JSON.stringify(probe.point)}`);
+    check(probe.reading !== null && Math.abs(probe.reading - 0.3) < 0.04, `the probe should read 0.3 left on the hole wall: ${probe.reading}`);
+    check(probe.label && /P1/.test(probe.label) && probe.listed === 1, `the probe should be labelled and listed: ${probe.label} / ${probe.listed}`);
+    check(probe.mapOn === 1 && judged.on > 1000 && judged.left > 50, `the 3D surface should be coloured by deviation, the hole wall at +0.3: ${JSON.stringify(judged)}`);
+    await page.evaluate((id) => {
+      const app = window.millsim;
+      app.clearProbes();
+      app.setDisplay({ deviation: false });
+      app.models.remove(app.models.models.find((m) => m.id === id));
+      app.refreshTarget();
+    }, probe.id);
+
     await loadExample(page, 0, 'Demo bracket');
     const back = await page.evaluate(() => window.millsim.stock.kind || 'heightmap');
     check(back === 'heightmap', 'the next example kept the Full 3D stock');

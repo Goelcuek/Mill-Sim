@@ -16,6 +16,8 @@ import * as units from '../core/units.js';
 
 const LINE_COLOR = 0x0a84ff;
 const CIRCLE_COLOR = 0xaf52de;
+/** A deviation probe's dot, by what it reads — the map's own colours. */
+const PROBE_COLORS = { gouge: 0xd92e21, ok: 0x40ba4f, left: 0x1f4fbf, off: 0x8e8e93 };
 
 export class MeasureView {
   /**
@@ -59,14 +61,19 @@ export class MeasureView {
     this.labels.clear();
 
     for (const item of this.items) {
-      const colour = item.kind === 'circle' ? CIRCLE_COLOR : LINE_COLOR;
-      const pts = item.kind === 'circle' ? circlePoints(item) : item.points.map((p) => new THREE.Vector3(...p));
-      const geometry = new THREE.BufferGeometry().setFromPoints(pts);
-      const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
-        color: colour, depthTest: false, transparent: true, opacity: 0.95,
-      }));
-      line.renderOrder = 995;
-      this.group.add(line);
+      const probe = item.kind === 'probe';
+      const colour = probe ? PROBE_COLORS[item.tone] || PROBE_COLORS.off
+        : item.kind === 'circle' ? CIRCLE_COLOR : LINE_COLOR;
+      // A probe is one point, with nothing to join.
+      if (!probe) {
+        const pts = item.kind === 'circle' ? circlePoints(item) : item.points.map((p) => new THREE.Vector3(...p));
+        const geometry = new THREE.BufferGeometry().setFromPoints(pts);
+        const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({
+          color: colour, depthTest: false, transparent: true, opacity: 0.95,
+        }));
+        line.renderOrder = 995;
+        this.group.add(line);
+      }
 
       // The ends, so a measurement is readable without the label.
       for (const p of item.points) {
@@ -80,9 +87,11 @@ export class MeasureView {
         this.group.add(dot);
       }
 
-      const label = el('div.measure-label', {}, item.kind === 'circle'
-        ? `Ø${units.lenU(item.value, 3)}`
-        : units.lenU(item.value, 3));
+      const label = probe
+        ? el(`div.measure-label.probe-label.${item.tone || 'off'}`, {}, item.label)
+        : el('div.measure-label', {}, item.kind === 'circle'
+          ? `Ø${units.lenU(item.value, 3)}`
+          : units.lenU(item.value, 3));
       this.overlay.appendChild(label);
       this.labels.set(item.id, label);
     }

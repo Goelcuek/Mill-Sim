@@ -9,6 +9,7 @@
 
 import * as THREE from 'three';
 import { DexelMesher } from '../sim/dexelMesh.js';
+import { pointDeviation, DEV_JUDGED } from '../sim/target.js';
 
 const MAX_TOOL_COLORS = 8;
 /**
@@ -64,7 +65,12 @@ export class DexelSurface {
       uShowTools: { value: 1 },
       uSectionZ: { value: 1e9 },
       uCapColor: { value: colors.capColor || new THREE.Color('#c4705a') },
+      uDevMode: { value: 0 },
+      uDevTol: { value: 0.02 },
+      uDevRange: { value: 0.5 },
     };
+    /** The deviation map: on or off, against what, and how far it looks. */
+    this.dev = { mode: false, target: null, tolerance: 0.02, range: 0.5 };
     this.material = this.buildMaterial();
     this.blocks = new Array(this.mesher.blockCount).fill(null);
     this.dirty = new Uint8Array(this.mesher.blockCount).fill(1);
@@ -87,13 +93,19 @@ export class DexelSurface {
         .replace('#include <common>', `
           #include <common>
           attribute float aWho;
+          attribute float aDev;
+          attribute float aDevOn;
           flat varying float vWho;
+          varying float vDev;
+          flat varying float vDevOn;
           varying float vWorkZ;
           varying vec3 vCapNormal;
         `)
         .replace('#include <begin_vertex>', `
           #include <begin_vertex>
           vWho = aWho;
+          vDev = aDev;
+          vDevOn = aDevOn;
           vWorkZ = position.z;
           // Straight up in the stock's own frame: the section's cut face.
           vCapNormal = normalize( normalMatrix * vec3( 0.0, 0.0, 1.0 ) );
@@ -107,9 +119,24 @@ export class DexelSurface {
           uniform float uShowTools;
           uniform float uSectionZ;
           uniform vec3 uCapColor;
+          uniform float uDevMode;
+          uniform float uDevTol;
+          uniform float uDevRange;
           flat varying float vWho;
+          varying float vDev;
+          flat varying float vDevOn;
           varying float vWorkZ;
           varying vec3 vCapNormal;
+
+          // As on the heightmap: within tolerance green, material left pale
+          // to deep blue, a gouge orange to red, full colour at uDevRange.
+          vec3 deviationColor( float d ) {
+            float a = abs( d );
+            if ( a <= uDevTol ) return vec3( 0.25, 0.73, 0.31 );
+            float t = clamp( ( a - uDevTol ) / max( uDevRange - uDevTol, 1e-6 ), 0.0, 1.0 );
+            if ( d > 0.0 ) return mix( vec3( 0.56, 0.83, 1.0 ), vec3( 0.12, 0.31, 0.75 ), t );
+            return mix( vec3( 1.0, 0.70, 0.28 ), vec3( 0.85, 0.18, 0.13 ), t );
+          }
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
@@ -127,6 +154,12 @@ export class DexelSurface {
             }
             surface = mix( uCutColor, machined, uShowTools );
             tinted = uShowTools;
+          }
+          // Every face judged where it is — walls, the inside of a side
+          // hole, the roof of an undercut — not only the tops of columns.
+          if ( uDevMode > 0.5 && gl_FrontFacing && vDevOn > 0.5 ) {
+            surface = deviationColor( vDev );
+            tinted = 1.0;
           }
           diffuseColor.rgb *= surface;
         `)
@@ -210,6 +243,8 @@ export class DexelSurface {
       g.setAttribute('position', attr(new Float32Array(3 * vCap), 3, false));
       g.setAttribute('normal', attr(new Int8Array(3 * vCap), 3, true));
       g.setAttribute('aWho', attr(new Uint8Array(vCap), 1, false));
+      g.setAttribute('aDev', attr(new Float32Array(vCap), 1, false));
+      g.setAttribute('aDevOn', attr(new Uint8Array(vCap), 1, false));
       // A block holds fewer vertices than a 16-bit index can name.
       g.setIndex(attr(vCap < 65536 ? new Uint16Array(iCap) : new Uint32Array(iCap), 1, false));
       const [lo, hi] = this.mesher.blockBox(k);
@@ -235,12 +270,58 @@ export class DexelSurface {
     who.array.set(out.who.subarray(0, V));
     const idx = g.index;
     idx.array.set(out.index.subarray(0, I));
-    for (const [a, n] of [[pos, 3 * V], [nrm, 3 * V], [who, V], [idx, I]]) {
+    const dev = g.attributes.aDev;
+    const devOn = g.attributes.aDevOn;
+    this.measureBlock(out.positions, V, dev.array, devOn.array);
+    for (const [a, n] of [[pos, 3 * V], [nrm, 3 * V], [who, V], [idx, I], [dev, V], [devOn, V]]) {
       a.clearUpdateRanges();
       a.addUpdateRange(0, n);
       a.needsUpdate = true;
     }
     g.setDrawRange(0, I);
+  }
+
+  /**
+   * Each vertex against the reference part, while the map is on: how far
+   * and which way, or not judged. Off, nothing is measured — the map is
+   * redone in full when it is turned on.
+   */
+  measureBlock(P, V, dev, on) {
+    const d = this.dev;
+    if (!d.mode || !d.target) {
+      on.fill(0, 0, V);
+      return;
+    }
+    const cap = this.devCap();
+    for (let v = 0; v < V; v++) {
+      const r = pointDeviation(d.target, P[3 * v], P[3 * v + 1], P[3 * v + 2], cap, d.tolerance);
+      on[v] = r.state === DEV_JUDGED ? 1 : 0;
+      dev[v] = r.deviation;
+    }
+  }
+
+  /** How far the map looks for the part: twice the colour range, at least 1 mm. */
+  devCap() { return Math.max(1, 2 * (this.dev.range || 0.5)); }
+
+  /**
+   * Switch the deviation map, or change what it measures against. What the
+   * vertices hold is remade, block by block, whenever it would read
+   * differently: turned on, a new reference, a wider range.
+   */
+  setDeviation({ mode, target, tolerance, range }) {
+    const d = this.dev;
+    const before = { ...d, cap: this.devCap() };
+    d.mode = !!mode;
+    d.target = target || null;
+    d.tolerance = tolerance;
+    d.range = range || 0.5;
+    this.uniforms.uDevMode.value = d.mode && d.target ? 1 : 0;
+    this.uniforms.uDevTol.value = d.tolerance;
+    this.uniforms.uDevRange.value = d.range;
+    if (d.mode && d.target && (!before.mode || before.target !== d.target || before.cap !== this.devCap() || before.tolerance !== d.tolerance)) {
+      this.dirty.fill(1);
+      this.pending = true;
+    }
   }
 
   /** Triangles drawn right now, for the readout and the tests. */
