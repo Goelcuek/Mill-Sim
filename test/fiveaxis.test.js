@@ -679,3 +679,71 @@ test('a trunnion swung on its own turns the part: the slides stay, the tool stay
   low.runAll();
   assert.ok(low.collisions.some((c) => /table/.test(c.message) && c.line === 3), 'the table edge swings through a low tool');
 });
+
+// The castings, as MachineView.collisionBodies hands them over: solids in
+// the frame of the axis that carries them. Here the trunnion's right-hand
+// cradle side plate, [245, 290] × [−170, 170] × [−165, 60] on the A axis.
+function cradleSide() {
+  const lo = [245, -170, -165];
+  const hi = [290, 170, 60];
+  const centre = lo.map((v, i) => (v + hi[i]) / 2);
+  const half = lo.map((v, i) => (hi[i] - v) / 2);
+  return [{
+    node: 'a', name: 'A axis (trunnion)', letter: 'A',
+    solids: [{ kind: 'box', name: 'Cradle side', toLocal: m4.fromTranslation(m4.create(), centre.map((v) => -v)), half }],
+  }];
+}
+
+test('the machine castings are checked: a tool fed into the cradle side plate is a crash', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  const run = (code, castings = cradleSide(), machine = DEFAULT_MACHINE) => {
+    const sim = new Simulator();
+    sim.load({ program: interpret(code, { kinematics: kin }), stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine, castings });
+    sim.runAll();
+    return sim.collisions;
+  };
+  // The part zero is 80 over the table face and the plate stands 60 over
+  // it, so at Z−30 a Ø10 cutter meets it once its edge passes X245. At
+  // X260 it is 20 into the plate sideways and 10 under its top: 10 is how
+  // far it would have to move to be clear.
+  const into = run('G90\nG0 X0 Y0 Z150\nG0 Z-30\nG1 X260 F1000\nM30');
+  const hit = into.find((c) => c.type === 'casting');
+  assert.ok(hit, `no machine collision: ${JSON.stringify(into.map((c) => c.message))}`);
+  assert.equal(hit.line, 4);
+  assert.match(hit.message, /Cradle side \(A axis\) by 10\.00 mm/);
+  // Stopping short of it is clean, and so is the same crash with the check off.
+  assert.deepEqual(run('G90\nG0 X0 Y0 Z150\nG0 Z-30\nG1 X235 F1000\nM30').filter((c) => c.type === 'casting'), []);
+  assert.deepEqual(run('G90\nG0 X0 Y0 Z150\nG0 Z-30\nG1 X260 F1000\nM30', cradleSide(), { ...DEFAULT_MACHINE, castingsCheck: false })
+    .filter((c) => c.type === 'casting'), []);
+  // The plate rides on A. Upright it runs Y−170 to Y170, so at Y150 it is
+  // still in the way; swung to A−90 it lies along the pivot with its 225 mm
+  // height running from Y−165 to Y60, and Y150 passes it by. Turning about
+  // X leaves it at X245–290 either way: what a swing moves is where in Y
+  // and Z it stands.
+  const at = (a) => run(`G90\nG0 X0 Y0 Z150\nA${a}\nG0 Y150\nG0 Z-30\nG1 X260 F1000\nM30`)
+    .filter((c) => c.type === 'casting' && c.line === 6).length;
+  assert.equal(at(0), 1, 'upright, the plate is at Y150');
+  assert.equal(at(-90), 0, 'swung down, the plate has left Y150');
+});
+
+test('a casting imported as triangles is checked against its skin', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  // The same plate as twelve triangles.
+  const [lo, hi] = [[245, -170, -165], [290, 170, 60]];
+  const v = (i) => [i & 1 ? hi[0] : lo[0], i & 2 ? hi[1] : lo[1], i & 4 ? hi[2] : lo[2]];
+  const faces = [[0, 1, 3, 2], [4, 6, 7, 5], [0, 4, 5, 1], [2, 3, 7, 6], [0, 2, 6, 4], [1, 5, 7, 3]];
+  const tris = [];
+  for (const [a, b, c, d] of faces) tris.push(...v(a), ...v(b), ...v(c), ...v(a), ...v(c), ...v(d));
+  const castings = [{ node: 'a', name: 'A axis (trunnion)', letter: 'A', solids: [{ kind: 'mesh', name: 'Cradle', tris: Float32Array.from(tris) }] }];
+  const sim = new Simulator();
+  sim.load({ program: interpret('G90\nG0 X0 Y0 Z150\nG0 Z-30\nG1 X260 F1000\nM30', { kinematics: kin }), stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE, castings });
+  sim.runAll();
+  const hit = sim.collisions.find((c) => c.type === 'casting');
+  assert.ok(hit && hit.line === 4 && /Cradle \(A axis\)/.test(hit.message), JSON.stringify(sim.collisions.map((c) => c.message)));
+});

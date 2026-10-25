@@ -6,7 +6,7 @@
 // much work as fits in a frame and returns, so the UI stays responsive on
 // programs with millions of moves.
 
-import { checkFixtures, checkLimits, checkTable } from './collision.js';
+import { checkFixtures, checkLimits, checkTable, checkSolids, meshGrid } from './collision.js';
 import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
 import { gougeDepth } from './target.js';
@@ -16,6 +16,7 @@ export const COLLISION_TYPES = {
   rapid: { label: 'Rapid into material', severity: 'error' },
   fixture: { label: 'Fixture collision', severity: 'error' },
   table: { label: 'Table collision', severity: 'error' },
+  casting: { label: 'Machine collision', severity: 'error' },
   limit: { label: 'Travel limit exceeded', severity: 'error' },
   spindle: { label: 'Cutting with spindle stopped', severity: 'warning' },
   notool: { label: 'No tool assembly loaded', severity: 'warning' },
@@ -27,6 +28,99 @@ export const COLLISION_TYPES = {
 const MAX_COLLISIONS = 400;
 const UP = [0, 0, 1];
 const DEG = Math.PI / 180;
+
+/**
+ * A box round a casting solid, in its axis's frame: the matrix into the
+ * box's own frame and its half sizes. A box is its own; a cylinder is the
+ * box it stands in; a mesh is the box round its triangles.
+ */
+function boundOf(s) {
+  if (s.kind === 'mesh') {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < s.tris.length; i += 3) {
+      for (let a = 0; a < 3; a++) {
+        lo[a] = Math.min(lo[a], s.tris[i + a]);
+        hi[a] = Math.max(hi[a], s.tris[i + a]);
+      }
+    }
+    if (!(lo[0] <= hi[0])) return { toBox: m4.create(), boxHalf: [0, 0, 0] };
+    return {
+      toBox: m4.fromTranslation(m4.create(), lo.map((v, a) => -(v + hi[a]) / 2)),
+      boxHalf: lo.map((v, a) => (hi[a] - v) / 2),
+    };
+  }
+  const r = s.kind === 'cyl' ? Math.max(s.r0, s.r1) : 0;
+  return { toBox: s.toLocal, boxHalf: s.kind === 'box' ? s.half : [r, s.h / 2, r] };
+}
+
+/**
+ * Could anything within `pad` of the segments a0–b0 … a1–b1 (the tool's
+ * axis at two poses, and every place between them) be inside the box
+ * `half`? The four ends' box, grown by the pad, against the box itself:
+ * never a miss, and tight for the long thin castings a sphere is not.
+ */
+function sweepNearBox(m0, m1, a0, b0, a1, b1, pad, half) {
+  const q = [0, 0, 0];
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  const take = (m, p) => {
+    applyRigid(m, p, q);
+    for (let k = 0; k < 3; k++) {
+      if (q[k] < lo[k]) lo[k] = q[k];
+      if (q[k] > hi[k]) hi[k] = q[k];
+    }
+  };
+  take(m0, a0); take(m0, b0); take(m1, a1); take(m1, b1);
+  for (let k = 0; k < 3; k++) if (lo[k] - pad > half[k] || hi[k] + pad < -half[k]) return false;
+  return true;
+}
+
+function applyRigid(m, p, out) {
+  out[0] = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+  out[1] = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+  out[2] = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+  return out;
+}
+
+/** Distance from p to the segment a–b. */
+function pointSegment(p, a, b) {
+  const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+  const ll = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
+  let t = ll > 0 ? ((p[0] - a[0]) * ab[0] + (p[1] - a[1]) * ab[1] + (p[2] - a[2]) * ab[2]) / ll : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - a[0] - ab[0] * t, p[1] - a[1] - ab[1] * t, p[2] - a[2] - ab[2] * t);
+}
+
+/** The least distance between segments p0–p1 and q0–q1, after Ericson. */
+function segmentSegment(p0, p1, q0, q1) {
+  const d1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
+  const d2 = [q1[0] - q0[0], q1[1] - q0[1], q1[2] - q0[2]];
+  const r = [p0[0] - q0[0], p0[1] - q0[1], p0[2] - q0[2]];
+  const dot = (x, y) => x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+  const a = dot(d1, d1);
+  const e = dot(d2, d2);
+  const f = dot(d2, r);
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  let s = 0;
+  let t = 0;
+  if (a <= 1e-12 && e <= 1e-12) return Math.hypot(...r);
+  if (a <= 1e-12) {
+    t = clamp(f / e);
+  } else {
+    const c = dot(d1, r);
+    if (e <= 1e-12) {
+      s = clamp(-c / a);
+    } else {
+      const b = dot(d1, d2);
+      const den = a * e - b * b;
+      s = den > 1e-12 ? clamp((b * f - c * e) / den) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) { t = 0; s = clamp(-c / a); } else if (t > 1) { t = 1; s = clamp((b - c) / a); }
+    }
+  }
+  return Math.hypot(p0[0] + d1[0] * s - q0[0] - d2[0] * t, p0[1] + d1[1] * s - q0[1] - d2[1] * t, p0[2] + d1[2] * s - q0[2] - d2[2] * t);
+}
 
 /** Turn a point about Z, which is what indexing the work amounts to. */
 function spinZ(p, deg) {
@@ -80,6 +174,8 @@ export class Simulator {
     this.stock = null;
     this.machine = null;
     this.fixtures = [];
+    /** The machine's castings as solids on their axes; see setCastings. */
+    this.castings = [];
     this.slots = new Map();     // tool number -> { built, spheres, index }
     this.fallbackSlot = null;
     /** Reference-part surface on the stock grid; cutting below it gouges. */
@@ -118,6 +214,7 @@ export class Simulator {
     if (opts.machine !== undefined) this.machine = opts.machine;
     if (opts.kinematics !== undefined) this.kinematics = opts.kinematics;
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
+    if (opts.castings !== undefined) this.setCastings(opts.castings);
     if (opts.target !== undefined) this.target = opts.target;
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
     if (opts.checks !== undefined) this.checks = opts.checks;
@@ -138,6 +235,7 @@ export class Simulator {
   retune(opts) {
     if (opts.machine !== undefined) this.machine = opts.machine;
     if (opts.fixtures !== undefined) this.fixtures = opts.fixtures || [];
+    if (opts.castings !== undefined) this.setCastings(opts.castings);
     if (opts.gougeTolerance !== undefined) this.gougeTolerance = opts.gougeTolerance;
     if (opts.checks !== undefined) this.checks = opts.checks;
   }
@@ -366,6 +464,152 @@ export class Simulator {
     const k = this.kinematics;
     const drawn = k && this.machine.proxies !== false && k.tableFootprint ? k.tableFootprint() : null;
     return drawn ? { ...t, xMin: -Infinity, xMax: Infinity, yMin: -Infinity, yMax: Infinity, ...drawn } : t;
+  }
+
+  /**
+   * The castings to check the assembly against: per axis, its solids in
+   * that axis's frame (see MachineView.collisionBodies). Meshes get a grid
+   * here, once, so a pose asks only about the triangles near the tool.
+   */
+  setCastings(bodies) {
+    // The chain may have changed with them: nothing worked out on the old
+    // one still holds.
+    this.basisMemo = null;
+    this.castings = (bodies || []).map((b) => ({
+      ...b,
+      solids: b.solids.map((s) => ({ ...s, ...boundOf(s), ...(s.kind === 'mesh' ? { grid: meshGrid(s.tris) } : {}) })),
+    }));
+  }
+
+  /** Is the castings check on, with anything to check? */
+  get castingsOn() {
+    return !!(this.kinematics && this.castings.length && !(this.machine && this.machine.castingsCheck === false));
+  }
+
+  /**
+   * Pose the chain for a tool tip on the part, and give the matrix that
+   * carries the part's frame into each casting body's axis frame — or null
+   * when no axis positions put the tool there.
+   */
+  placeCastings(tip, mv, u, bodies) {
+    const k = this.kinematics;
+    const rot = this.rotaryAt(mv, u);
+    const gauge = this.gaugeLength;
+    // Working out how X, Y and Z move the tip costs four solves of the
+    // chain; for one set of rotaries and one tool it is the same answer.
+    const key = `${gauge}|${Object.keys(rot).sort().map((L) => `${L}${rot[L]}`).join(',')}`;
+    const memo = this.basisMemo && this.basisMemo.kin === k && this.basisMemo.key === key
+      ? this.basisMemo
+      : (this.basisMemo = { kin: k, key, basis: k.linearBasis(rot, gauge) });
+    const lin = k.linearsForTip(this.coordTip({ tip }, mv, u), rot, gauge, memo.basis);
+    if (!lin) return null;
+    k.solve({ ...rot, ...lin });
+    // Part frame to scene: the work node, then up onto the fixture face.
+    const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+    const inv = m4.create();
+    return bodies.map((body) => m4.multiply(m4.create(), m4.invertRigid(inv, k.matrixOf(body.node)), part));
+  }
+
+  /** How far up the chain reaches from the tip, and its widest radius. */
+  reachOf(slot) {
+    if (slot.reach) return slot.reach;
+    let top = 0;
+    let fat = 0;
+    for (let i = 0; i < slot.spheres.length; i += 2) {
+      if (slot.spheres[i] > top) top = slot.spheres[i];
+      if (slot.spheres[i + 1] > fat) fat = slot.spheres[i + 1];
+    }
+    slot.reach = { top, fat };
+    return slot.reach;
+  }
+
+  /**
+   * The castings that could come near the tool anywhere along a chunk of
+   * poses. While the rotaries stand still the tool and every casting move
+   * in straight lines relative to each other, so the closest a body's
+   * bounding sphere comes to the tool's axis is a distance between two
+   * segments, and two placements — at the ends — answer for the lot. Most
+   * chunks are nowhere near the machine and check nothing further; a chunk
+   * that turns a rotary is asked pose by pose.
+   */
+  castingsNear(slot, poses, mv, clearance) {
+    if (!this.castingsOn || !poses.length) return [];
+    const first = poses[0];
+    const last = poses[poses.length - 1];
+    const ra = this.rotaryAt(mv, first[3]);
+    const rb = this.rotaryAt(mv, last[3]);
+    for (const L in { ...ra, ...rb }) if (Math.abs((ra[L] || 0) - (rb[L] || 0)) > 1e-9) return this.castings;
+    const dir = first[1];
+    if (Math.hypot(dir[0] - last[1][0], dir[1] - last[1][1], dir[2] - last[1][2]) > 1e-9) return this.castings;
+    const a = this.placeCastings(first[0], mv, first[3], this.castings);
+    const b = this.placeCastings(last[0], mv, last[3], this.castings);
+    if (!a || !b) return this.castings;
+    const { top, fat } = this.reachOf(slot);
+    // Poses off the chord between the ends, which an arc's would be; the
+    // castings shift against the tool, so the gap between them bows twice as far.
+    const t0 = first[0];
+    const t1 = last[0];
+    let bow = 0;
+    for (const p of poses) bow = Math.max(bow, pointSegment(p[0], t0, t1));
+    const want = Math.max(clearance, 0);
+    const top0 = [t0[0] + dir[0] * top, t0[1] + dir[1] * top, t0[2] + dir[2] * top];
+    const top1 = [t1[0] + dir[0] * top, t1[1] + dir[1] * top, t1[2] + dir[2] * top];
+    const pad = fat + want + 2 * bow + 1e-6;
+    const m0 = m4.create();
+    const m1 = m4.create();
+    const near = [];
+    this.castings.forEach((body, i) => {
+      const solids = body.solids.filter((s) => {
+        m4.multiply(m0, s.toBox, a[i]);
+        m4.multiply(m1, s.toBox, b[i]);
+        return sweepNearBox(m0, m1, t0, top0, t1, top1, pad, s.boxHalf);
+      });
+      if (solids.length) near.push(solids.length === body.solids.length ? body : { ...body, solids });
+    });
+    return near;
+  }
+
+  /**
+   * The assembly against the machine's castings at one pose.
+   *
+   * The pose is a tip and an axis on the part; the axes that put it there
+   * are solved for, the chain is posed with them, and each casting is
+   * carried into the part's frame from wherever its axis has taken it — a
+   * cheek stands still while the cradle swings, the column stays put while
+   * the table runs under the tool.
+   */
+  checkCastings(slot, tip, dir, mv, u, clearance, bodies = this.castings) {
+    if (!this.castingsOn || !bodies.length) return null;
+    const placed = this.placeCastings(tip, mv, u, bodies);
+    if (!placed) return null;
+    const { top, fat } = this.reachOf(slot);
+    const want = Math.max(clearance, 0);
+    const boxes = [];
+    const others = [];
+    const end = [tip[0] + dir[0] * top, tip[1] + dir[1] * top, tip[2] + dir[2] * top];
+    const m = m4.create();
+    bodies.forEach((body, i) => {
+      const toNode = placed[i];
+      for (const s of body.solids) {
+        // Nowhere near: the chain's axis, grown by its widest, clear of
+        // the box round the solid.
+        m4.multiply(m, s.toBox, toNode);
+        if (!sweepNearBox(m, m, tip, end, tip, end, fat + want, s.boxHalf)) continue;
+        if (s.kind === 'box') {
+          boxes.push({ name: s.name, inverse: m4.multiply(m4.create(), s.toLocal, toNode), half: s.half, centre: [0, 0, 0], scale: 1, body });
+        } else if (s.kind === 'cyl') {
+          others.push({ ...s, inverse: m4.multiply(m4.create(), s.toLocal, toNode), body });
+        } else {
+          others.push({ ...s, inverse: toNode, body });
+        }
+      }
+    });
+    const a = boxes.length ? checkFixtures(slot.spheres, tip, boxes, 0, clearance, dir) : null;
+    const b = others.length ? checkSolids(slot.spheres, tip, others, clearance, dir) : null;
+    const hit = !a ? b : !b ? a : (a.gap <= b.gap ? a : b);
+    if (!hit) return null;
+    const solid = hit.fixture || hit.solid;
+    return { ...hit, name: solid.name, axis: solid.body.letter, node: solid.body.node };
   }
 
   /** Gauge length of the assembly currently in the spindle. */
@@ -690,7 +934,8 @@ export class Simulator {
       }
     }
 
-    const hasObstacles = (this.fixtures && this.fixtures.length) || (this.machine && this.machine.table && this.machine.table.enabled);
+    const hasObstacles = (this.fixtures && this.fixtures.length) || (this.machine && this.machine.table && this.machine.table.enabled)
+      || (this.castings.length && !(this.machine && this.machine.castingsCheck === false));
     const limitsOn = this.machine && this.machine.limits && this.machine.limits.enabled;
 
     if (touchesStock) {
@@ -837,6 +1082,9 @@ export class Simulator {
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
 
+    // Which of the machine's castings this chunk could reach at all.
+    const nearCastings = this.castingsNear(slot, poses, mv, clearance);
+
     for (const [tip, dir, point, u] of poses) {
       if (this.fixtures && this.fixtures.length) {
         const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
@@ -875,6 +1123,26 @@ export class Simulator {
             depth: tbl.clearance - tbl.gap,
             gap: tbl.gap,
           });
+        }
+        const hit = nearCastings.length ? this.checkCastings(slot, tip, dir, mv, u, clearance, nearCastings) : null;
+        if (hit) {
+          const what = hit.axis ? `the ${hit.name} (${hit.axis} axis)` : `the ${hit.name}`;
+          if (hit.gap < 0) {
+            this.report('casting', {
+              line: mv.line,
+              message: (d) => `Assembly hits ${what} by ${d.toFixed(2)} mm.`,
+              position: hit.point,
+              depth: hit.depth,
+            });
+          } else {
+            this.report('near', {
+              line: mv.line,
+              message: `Passes within ${hit.gap.toFixed(2)} mm of ${what} — asked for ${hit.clearance.toFixed(2)} mm.`,
+              position: hit.point,
+              depth: hit.clearance - hit.gap,
+              gap: hit.gap,
+            });
+          }
         }
         // The envelope belongs to the machine and is measured from its home
         // switches, so what is reported is the machine coordinate — which is

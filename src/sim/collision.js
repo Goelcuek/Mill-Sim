@@ -321,3 +321,197 @@ export function checkLimits(gauge, limits, home = [0, 0, 0]) {
   }
   return null;
 }
+
+// ---- the machine's own castings -------------------------------------------
+//
+// What the machine draws is what it is checked against: the stand-in
+// castings are boxes and cylinders, and a body the shop imported is its
+// own triangles. Each solid is stated in the frame of the axis that carries
+// it; the caller hands over, for the pose being asked about, the matrix
+// that carries a point on the part into that solid's own frame.
+
+/**
+ * Signed distance from a point to a solid cylinder or cone standing along
+ * its own Y, centred on the origin: `h` long, radius r0 at −h/2 and r1 at
+ * +h/2 — which is how a three.js CylinderGeometry is laid out. Negative
+ * inside.
+ */
+export function pointConeDistance(x, y, z, r0, r1, h) {
+  const rho = Math.hypot(x, z);
+  const hh = h / 2;
+  // The outline in (radius, height): bottom, side and top. The axis side
+  // is inside the solid, and the point is never across it.
+  const d = Math.min(
+    segment2(rho, y, 0, -hh, r0, -hh),
+    segment2(rho, y, r0, -hh, r1, hh),
+    segment2(rho, y, 0, hh, r1, hh),
+  );
+  const inside = Math.abs(y) <= hh && rho <= r0 + ((r1 - r0) * (y + hh)) / (h || 1);
+  return inside ? -d : d;
+}
+
+function segment2(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const ll = dx * dx + dy * dy;
+  let t = ll > 0 ? ((px - ax) * dx + (py - ay) * dy) / ll : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - ax - dx * t, py - ay - dy * t);
+}
+
+/** Squared distance from p to the triangle (a, b, c), after Ericson. */
+export function pointTriangleDistance2(px, py, pz, t, o) {
+  const ax = t[o], ay = t[o + 1], az = t[o + 2];
+  const bx = t[o + 3], by = t[o + 4], bz = t[o + 5];
+  const cx = t[o + 6], cy = t[o + 7], cz = t[o + 8];
+  const abx = bx - ax, aby = by - ay, abz = bz - az;
+  const acx = cx - ax, acy = cy - ay, acz = cz - az;
+  const apx = px - ax, apy = py - ay, apz = pz - az;
+  const d1 = abx * apx + aby * apy + abz * apz;
+  const d2 = acx * apx + acy * apy + acz * apz;
+  const at = (x, y, z) => { const dx = px - x, dy = py - y, dz = pz - z; return dx * dx + dy * dy + dz * dz; };
+  if (d1 <= 0 && d2 <= 0) return at(ax, ay, az);
+  const bpx = px - bx, bpy = py - by, bpz = pz - bz;
+  const d3 = abx * bpx + aby * bpy + abz * bpz;
+  const d4 = acx * bpx + acy * bpy + acz * bpz;
+  if (d3 >= 0 && d4 <= d3) return at(bx, by, bz);
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3);
+    return at(ax + abx * v, ay + aby * v, az + abz * v);
+  }
+  const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+  const d5 = abx * cpx + aby * cpy + abz * cpz;
+  const d6 = acx * cpx + acy * cpy + acz * cpz;
+  if (d6 >= 0 && d5 <= d6) return at(cx, cy, cz);
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6);
+    return at(ax + acx * w, ay + acy * w, az + acz * w);
+  }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    return at(bx + (cx - bx) * w, by + (cy - by) * w, bz + (cz - bz) * w);
+  }
+  const denom = 1 / (va + vb + vc);
+  const v = vb * denom;
+  const w = vc * denom;
+  return at(ax + abx * v + acx * w, ay + aby * v + acy * w, az + abz * v + acz * w);
+}
+
+/**
+ * A grid over a triangle soup, so asking how close a point is looks at the
+ * triangles near it and not at all of them.
+ *
+ * @param {Float32Array} tris  nine numbers a triangle
+ */
+export function meshGrid(tris) {
+  const n = Math.floor(tris.length / 9);
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < n * 9; i += 3) {
+    for (let a = 0; a < 3; a++) {
+      const v = tris[i + a];
+      if (v < lo[a]) lo[a] = v;
+      if (v > hi[a]) hi[a] = v;
+    }
+  }
+  if (!n) return { tris, n: 0, lo, hi, cell: 1, dims: [1, 1, 1], start: new Uint32Array(2), items: new Uint32Array(0), stamp: new Uint32Array(0), query: 0 };
+  const ext = [0, 1, 2].map((a) => Math.max(hi[a] - lo[a], 1e-3));
+  // About two triangles a cell, at most 64 cells a side.
+  const vol = ext[0] * ext[1] * ext[2];
+  let cell = Math.cbrt(vol / Math.max(n / 2, 1));
+  cell = Math.max(cell, Math.max(...ext) / 64, 0.5);
+  const dims = ext.map((e) => Math.max(1, Math.ceil(e / cell)));
+  const idx = (i, j, k) => (k * dims[1] + j) * dims[0] + i;
+  const clampCell = (v, a) => Math.min(dims[a] - 1, Math.max(0, Math.floor((v - lo[a]) / cell)));
+  const total = dims[0] * dims[1] * dims[2];
+  const count = new Uint32Array(total + 1);
+  const range = new Int32Array(6);
+  const span = (t) => {
+    const o = t * 9;
+    for (let a = 0; a < 3; a++) {
+      const v0 = tris[o + a], v1 = tris[o + 3 + a], v2 = tris[o + 6 + a];
+      range[a] = clampCell(Math.min(v0, v1, v2), a);
+      range[a + 3] = clampCell(Math.max(v0, v1, v2), a);
+    }
+  };
+  for (let t = 0; t < n; t++) {
+    span(t);
+    for (let k = range[2]; k <= range[5]; k++) for (let j = range[1]; j <= range[4]; j++) for (let i = range[0]; i <= range[3]; i++) count[idx(i, j, k) + 1]++;
+  }
+  for (let c = 0; c < total; c++) count[c + 1] += count[c];
+  const items = new Uint32Array(count[total]);
+  const fill = count.slice(0, total);
+  for (let t = 0; t < n; t++) {
+    span(t);
+    for (let k = range[2]; k <= range[5]; k++) for (let j = range[1]; j <= range[4]; j++) for (let i = range[0]; i <= range[3]; i++) items[fill[idx(i, j, k)]++] = t;
+  }
+  return { tris, n, lo, hi, cell, dims, start: count, items, stamp: new Uint32Array(n), query: 0 };
+}
+
+/** The closest any triangle of the grid comes to p, looking no further than maxD. */
+export function meshDistance(g, px, py, pz, maxD) {
+  if (!g.n) return Infinity;
+  if (px < g.lo[0] - maxD || px > g.hi[0] + maxD || py < g.lo[1] - maxD || py > g.hi[1] + maxD
+    || pz < g.lo[2] - maxD || pz > g.hi[2] + maxD) return Infinity;
+  const { dims, cell, lo } = g;
+  const c0 = (v, a) => Math.min(dims[a] - 1, Math.max(0, Math.floor((v - maxD - lo[a]) / cell)));
+  const c1 = (v, a) => Math.min(dims[a] - 1, Math.max(0, Math.floor((v + maxD - lo[a]) / cell)));
+  const i0 = c0(px, 0), i1 = c1(px, 0), j0 = c0(py, 1), j1 = c1(py, 1), k0 = c0(pz, 2), k1 = c1(pz, 2);
+  if (++g.query === 0xffffffff) { g.stamp.fill(0); g.query = 1; }
+  const q = g.query;
+  let best = maxD * maxD;
+  for (let k = k0; k <= k1; k++) {
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) {
+        const c = (k * dims[1] + j) * dims[0] + i;
+        for (let s = g.start[c], e = g.start[c + 1]; s < e; s++) {
+          const t = g.items[s];
+          if (g.stamp[t] === q) continue;
+          g.stamp[t] = q;
+          const d2 = pointTriangleDistance2(px, py, pz, g.tris, t * 9);
+          if (d2 < best) best = d2;
+        }
+      }
+    }
+  }
+  return best < maxD * maxD ? Math.sqrt(best) : Infinity;
+}
+
+/**
+ * The sphere chain against cylinders and triangle meshes, each carrying
+ * `inverse`, the matrix from the part into its own frame for this pose.
+ * Boxes go through checkFixtures, which answers a square tool exactly.
+ *
+ * A mesh is measured to its skin: a tool sunk deep inside a body without
+ * having crossed its surface between two poses would not be seen, which
+ * the pose spacing (a millimetre and a half) makes a casting's worth of
+ * metal to pass through unnoticed.
+ *
+ * @returns {null|{solid:object, gap:number, clearance:number, depth:number, point:number[], localZ:number}}
+ */
+export function checkSolids(spheres, tip, solids, clearance = 0, dir = UP) {
+  if (!solids || !solids.length || !spheres.length) return null;
+  const want = Math.max(clearance, 0);
+  const q = [0, 0, 0];
+  let worst = null;
+  for (const s of solids) {
+    for (let i = 0; i < spheres.length; i += 2) {
+      const lz = spheres[i];
+      const r = spheres[i + 1];
+      const cx = tip[0] + dir[0] * lz;
+      const cy = tip[1] + dir[1] * lz;
+      const cz = tip[2] + dir[2] * lz;
+      applyMatrix(s.inverse, cx, cy, cz, q);
+      const d = s.kind === 'cyl'
+        ? pointConeDistance(q[0], q[1], q[2], s.r0, s.r1, s.h)
+        : meshDistance(s.grid, q[0], q[1], q[2], r + want);
+      const gap = d - r;
+      if (gap < want && (!worst || gap < worst.gap)) {
+        worst = { solid: s, gap, clearance: want, depth: Math.max(-gap, 0), point: [cx, cy, cz], localZ: lz };
+      }
+    }
+  }
+  return worst;
+}

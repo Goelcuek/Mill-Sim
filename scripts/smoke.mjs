@@ -1471,6 +1471,36 @@ try {
     check(boxes.bad.length === 0, `boxes that do not follow the unit switch:\n   ${boxes.bad.join('\n   ')}`);
   }
 
+  // ---- the machine's own castings are in the crash model ----------------
+  //
+  // On the trunnion the cradle's side plates stand 60 over the table face,
+  // which is 20 under the part's zero: a cutter at Z-30 fed out to X260 is
+  // in the right-hand one. Reported with the part and the axis it rides
+  // on, and not reported once the check is off.
+  {
+    const crash = async (on) => page.evaluate(async (on) => {
+      const app = window.millsim;
+      app.setMachine({ preset: 'tableTable', castingsCheck: on });
+      await new Promise((r) => setTimeout(r, 300));
+      app.loadProgram('G90 G0 X0 Y0 Z150\nG0 Z-30\nG1 X260 F1000\nG0 Z150\nM30', 'cradle.nc');
+      await new Promise((r) => setTimeout(r, 300));
+      const sim = app.simulator;
+      let n = 0;
+      while (!sim.finished && n++ < 100000) sim.run(Infinity, 50);
+      return {
+        bodies: sim.castings.length,
+        hits: sim.collisions.filter((c) => c.type === 'casting').map((c) => `${c.line}: ${c.message}`),
+      };
+    }, on);
+    const on = await crash(true);
+    const off = await crash(false);
+    console.log('castings:', JSON.stringify({ on, off: off.hits }));
+    check(on.bodies >= 2 && on.hits.some((h) => /^3: .*Cradle side \(A axis\)/.test(h)),
+      `feeding into the cradle side should be a machine collision: ${JSON.stringify(on)}`);
+    check(off.hits.length === 0, `with the check off nothing should be said about the castings: ${off.hits}`);
+    await page.evaluate(() => window.millsim.setMachine({ preset: 'vmc3', castingsCheck: true }));
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you

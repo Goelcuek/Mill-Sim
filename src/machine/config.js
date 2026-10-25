@@ -19,6 +19,7 @@ import { defaultMacros, DEFAULT_PARAMETERS } from './macros.js';
 export const MACHINE_SETTINGS = [
   'home', 'tableSize', 'tableZ', 'spindleDiameter', 'spindleLength',
   'limits', 'table', 'rapidRate', 'rotaryRapid', 'maxFeed', 'proxies', 'accent',
+  'castingsCheck',
 ];
 
 export const DEFAULT_MACHINE = {
@@ -48,6 +49,12 @@ export const DEFAULT_MACHINE = {
    */
   limits: { enabled: true, frame: 'home', min: [-380, -215, -370], max: [380, 215, 80] },
   table: { enabled: true, z: -80, xMin: -450, xMax: 450, yMin: -230, yMax: 230 },
+  /**
+   * Check the tool against the machine's own castings, as drawn: the
+   * stand-ins, or the bodies imported in their place. See
+   * MachineView.collisionBodies.
+   */
+  castingsCheck: true,
   rapidRate: 15000,
   /** How fast the rotaries turn at rapid, °/min — their top speed. */
   rotaryRapid: 7200,

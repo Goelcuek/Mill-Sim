@@ -456,18 +456,27 @@ export class Kinematics {
    *   xMin?:number, xMax?:number, yMin?:number, yMax?:number}}
    */
   tableFootprint() {
-    const node = this.workNode && this.byId.get(this.workNode);
+    const i = this.tableSpecIndex();
+    if (i < 0) return null;
+    const q = this.byId.get(this.workNode).proxy[i];
     const z = this.tableOffset;
-    for (const q of (node && node.proxy) || []) {
-      if (q.part === 'rotaryTable' && q.radius > 0) {
-        const at = q.at || [0, 0, 0];
-        return { round: { cx: at[0] - z[0], cy: at[1] - z[1], r: q.radius } };
-      }
-      if ((q.part === 'slotted' || q.part === 'block') && q.min && q.max) {
-        return { xMin: q.min[0] - z[0], xMax: q.max[0] - z[0], yMin: q.min[1] - z[1], yMax: q.max[1] - z[1] };
-      }
+    if (q.part === 'rotaryTable') {
+      const at = q.at || [0, 0, 0];
+      return { round: { cx: at[0] - z[0], cy: at[1] - z[1], r: q.radius } };
     }
-    return null;
+    return { xMin: q.min[0] - z[0], xMax: q.max[0] - z[0], yMin: q.min[1] - z[1], yMax: q.max[1] - z[1] };
+  }
+
+  /**
+   * Which of the work node's castings is the table — the platter or slab
+   * the table check stands for — or −1. The castings check leaves it to
+   * that one rather than reporting the same plunge twice.
+   */
+  tableSpecIndex() {
+    const node = this.workNode && this.byId.get(this.workNode);
+    const list = (node && node.proxy) || [];
+    return list.findIndex((q) => (q.part === 'rotaryTable' && q.radius > 0)
+      || ((q.part === 'slotted' || q.part === 'block') && q.min && q.max));
   }
 
   /**
@@ -503,7 +512,24 @@ export class Kinematics {
    *
    * @returns {null | {X:number, Y:number, Z:number}}
    */
-  linearsForTip(targetTip, values, gaugeLength = 0) {
+  linearsForTip(targetTip, values, gaugeLength = 0, basis = this.linearBasis(values, gaugeLength)) {
+    if (!basis) return null;
+    const { p0, mat } = basis;
+    const rhs = [targetTip[0] - p0[0], targetTip[1] - p0[1], targetTip[2] - p0[2]];
+    const sol = m4.solve3(mat, rhs);
+    if (!sol) return null;
+    return { X: sol[0], Y: sol[1], Z: sol[2] };
+  }
+
+  /**
+   * With the rotaries where `values` puts them, the tip is an affine map of
+   * X, Y and Z: where it is with all three at zero, and how far a
+   * millimetre of each moves it. That is all linearsForTip needs, and a
+   * caller asking for many tips at one set of rotaries can keep it.
+   *
+   * @returns {null | {p0:number[], mat:number[]}} mat column-major, for solve3
+   */
+  linearBasis(values, gaugeLength = 0) {
     const letters = ['X', 'Y', 'Z'].filter((L) => this.axes().some((n) => n.letter === L));
     if (letters.length < 3) return null;
 
@@ -523,10 +549,7 @@ export class Kinematics {
       cols[1][0], cols[1][1], cols[1][2],
       cols[2][0], cols[2][1], cols[2][2],
     ];
-    const rhs = [targetTip[0] - p0[0], targetTip[1] - p0[1], targetTip[2] - p0[2]];
-    const sol = m4.solve3(mat, rhs);
-    if (!sol) return null;
-    return { X: sol[0], Y: sol[1], Z: sol[2] };
+    return { p0, mat };
   }
 
   /**

@@ -1139,6 +1139,9 @@ export class MachinePanel extends Panel {
       ]),
       section('Table and spindle', [
         checkbox('Check the table surface', m.table.enabled, (v) => app.setMachine({ table: { ...m.table, enabled: v } })),
+        checkbox('Check the castings', m.castingsCheck !== false, (v) => app.setMachine({ castingsCheck: v }), {
+          title: 'The tool against the machine as drawn — cradle, cheeks, column, or the bodies you imported — each moving with its axis',
+        }),
         row([
           field('Table top Z', m.tableZ, {
             step: 5, unit: 'mm',

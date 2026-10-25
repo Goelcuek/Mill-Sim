@@ -185,10 +185,15 @@ are kept.
 
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
-imported fixtures, the table surface and the travel limits. The table
-checked is the one the machine draws, round platter or slotted
-rectangle, and it turns with its axes; the castings that carry it
-(cradle, cheeks, column) are drawn but not yet checked. **Setup ›
+imported fixtures, the table surface, the travel limits and the machine
+itself. The table checked is the one the machine draws, round platter or
+slotted rectangle, and it turns with its axes. The castings are checked
+as drawn — the stand-ins' boxes and cylinders, or the triangles of a body
+you imported — each moving with the axis that carries it, so a cutter fed
+into a trunnion's cradle side, or a long tool swung into a cheek, is a
+**Machine collision** naming the part and its axis. Whatever rides with
+the spindle is left out, since it cannot meet the tool it carries; **Machine
+› Travels › Check the castings** turns the check off. **Setup ›
 Checks** decides what counts: ask for clearance and a pass that clears a
 clamp by 2 mm is reported as the near miss it is, rather than only metal
 in metal. Which parts of the assembly are checked at all is a switch, and
@@ -666,6 +671,7 @@ same measure gives the reading under the pointer.
 | **Holder / shank crash** | The holder or spindle nose is buried in the stock, with the depth. |
 | **Fixture collision** | Any part of the assembly reached into a fixture or clamp. |
 | **Table collision** | The assembly went below the table surface inside its footprint. |
+| **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — with the part's name and the axis it rides on. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
 | **Gouge into the reference part** | The cutter went below the reference surface by more than the tolerance. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
@@ -736,6 +742,12 @@ silently ignored.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
+- **A casting's cylinders and imported meshes are met by spheres.** Boxes
+  are measured exactly against an upright tool, as fixtures are; against a
+  cylinder or a mesh the tool is a chain of spheres, which reaches up to a
+  radius past a flat end and so errs towards a crash. A mesh is measured to
+  its skin, so a tool that jumped wholly inside a body between two poses a
+  millimetre and a half apart would not be seen.
 - **Non-TCP five-axis programs assume the work offset was set with every
   rotary at zero.** Without `G43.4` the programmed X/Y/Z are where the
   linear axes go, and a rotary turns the part under them without moving
@@ -834,7 +846,7 @@ stops.
 ## Testing
 
 ```bash
-npm test           # 104 unit tests: geometry, G-code, kinematics, cutting, I/O
+npm test           # unit tests: geometry, G-code, kinematics, cutting, I/O
 npm run smoke      # optional: boots the app in headless Chromium
 ```
 
@@ -853,7 +865,10 @@ npm run smoke
 
 It boots the app, runs the demo bracket end to end and asserts it comes out
 clean, then runs the deliberately bad example and asserts every mistake in
-it is caught.
+it is caught, and goes on through every shipped example and most of the
+pages. Its browser draws on the CPU, so it opens the app with `?tris=300000`
+— a phone-sized budget for the stock's surface — which keeps a run to a
+couple of minutes. The same parameter works in any browser.
 
 ---
 

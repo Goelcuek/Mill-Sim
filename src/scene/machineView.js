@@ -235,6 +235,8 @@ export class MachineView {
     this.setMode(this.config.mode);
     this.group.visible = this.config.visible;
     this.update(this.lastPose);
+    // Whatever the castings are now, the crash model has to hear of it.
+    if (this.onRebuild) this.onRebuild();
   }
 
   /**
@@ -289,9 +291,14 @@ export class MachineView {
     };
 
     if (Array.isArray(node.proxy) && node.proxy.length) {
-      for (const spec of node.proxy) {
-        for (const mesh of buildCasting(spec, this.tone)) add(mesh);
-      }
+      const table = node.id === kin.workNode ? kin.tableSpecIndex() : -1;
+      node.proxy.forEach((spec, i) => {
+        for (const mesh of buildCasting(spec, this.tone)) {
+          // The table check answers for the table; see collisionBodies.
+          if (i === table) mesh.userData.tableSurface = true;
+          add(mesh);
+        }
+      });
       this.proxies.set(node.id, parts);
       return;
     }
@@ -300,7 +307,10 @@ export class MachineView {
     // joint is and which way it moves.
     const [tw, td] = this.config.tableSize;
     if (node.id === kin.workNode) {
-      for (const mesh of buildCasting({ part: 'table', size: [tw, td, 70], at: [0, 0, -70], slots: 5 }, this.tone)) add(mesh);
+      for (const mesh of buildCasting({ part: 'table', size: [tw, td, 70], at: [0, 0, -70], slots: 5 }, this.tone)) {
+        mesh.userData.tableSurface = true;
+        add(mesh);
+      }
     } else if (node.id === kin.toolNode) {
       // The spindle node's own origin is the gauge line, so the cartridge
       // is drawn upwards from there. It used to be pushed up by the length
@@ -544,6 +554,77 @@ export class MachineView {
     const out = this.bodyMeshes();
     for (const parts of this.proxies.values()) {
       for (const p of parts) if (p.visible && p.isMesh) out.push(p);
+    }
+    return out;
+  }
+
+  /**
+   * The castings as solids to check the tool against, in plain numbers the
+   * simulator can use without three.js: for each axis that does not carry
+   * the tool, its boxes and cylinders as drawn and any body the shop
+   * imported as triangles — each in that axis's own frame. Shown or hidden
+   * makes no difference: part view hides the machine, it does not remove it.
+   *
+   * Left out: everything riding with the spindle, which cannot hit the tool
+   * it carries, and the table itself, which the table check answers for.
+   *
+   * @returns {{node:string, name:string, letter:string|null, solids:object[]}[]}
+   */
+  collisionBodies() {
+    const kin = this.kinematics;
+    const out = [];
+    const rel = new THREE.Matrix4();
+    const inv = new THREE.Matrix4();
+    const v = new THREE.Vector3();
+    for (const node of kin.order) {
+      if (kin.branchOf(node.id) === 'tool') continue;
+      const solids = [];
+      const label = node.name || node.id;
+      const take = (mesh, m) => {
+        const geo = mesh.geometry;
+        if (!geo || mesh.userData.tableSurface) return;
+        const name = mesh.name && mesh.name !== label ? mesh.name : label;
+        const p = geo.parameters || {};
+        if (geo.type === 'BoxGeometry') {
+          inv.copy(m).invert();
+          solids.push({ kind: 'box', name, toLocal: Float64Array.from(inv.elements), half: [p.width / 2, p.height / 2, p.depth / 2] });
+          return;
+        }
+        if (geo.type === 'CylinderGeometry') {
+          inv.copy(m).invert();
+          solids.push({ kind: 'cyl', name, toLocal: Float64Array.from(inv.elements), r0: p.radiusBottom, r1: p.radiusTop, h: p.height });
+          return;
+        }
+        const pos = geo.attributes && geo.attributes.position;
+        if (!pos) return;
+        const index = geo.index;
+        const count = index ? index.count : pos.count;
+        const tris = new Float32Array(count * 3);
+        for (let i = 0; i < count; i++) {
+          v.fromBufferAttribute(pos, index ? index.getX(i) : i).applyMatrix4(m);
+          tris[i * 3] = v.x; tris[i * 3 + 1] = v.y; tris[i * 3 + 2] = v.z;
+        }
+        solids.push({ kind: 'mesh', name, tris });
+      };
+      for (const mesh of this.proxies.get(node.id) || []) {
+        mesh.updateMatrix();
+        take(mesh, rel.copy(mesh.matrix));
+      }
+      for (const obj of this.models.get(node.id) || []) {
+        obj.updateMatrix();
+        obj.traverse((child) => {
+          if (!child.isMesh) return;
+          // The child's place in the body, then the body's on the axis.
+          const m = new THREE.Matrix4();
+          for (let o = child; o && o !== obj; o = o.parent) {
+            o.updateMatrix();
+            m.premultiply(o.matrix);
+          }
+          m.premultiply(obj.matrix);
+          take(child, m);
+        });
+      }
+      if (solids.length) out.push({ node: node.id, name: label, letter: node.letter || null, solids });
     }
     return out;
   }

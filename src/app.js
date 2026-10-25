@@ -323,6 +323,9 @@ export class App {
     this.viewer = new Viewer(this.viewportHost);
     this.machineParts = new MachineParts();
     this.machineView = new MachineView();
+    // Every rebuild of the rig — a preset, a pivot, a body hung on an axis
+    // — is a different set of castings to check the tool against.
+    this.machineView.onRebuild = () => this.simulator.retune({ castings: this.machineView.collisionBodies() });
     this.machineView.setConfig(this.state.machine);
     this.viewer.add(this.machineView.group);
 
