@@ -100,19 +100,26 @@ try {
   check(bracket.removed > 20000, `expected material to be removed, got ${bracket.removed} mm3`);
   check(bracket.collisions === 0, `clean program reported ${bracket.collisions} collisions`);
 
-  // A section square to X on the heightmap: both sides drawn, the plane
-  // at the middle of the 120 wide block.
-  const hmSection = await page.evaluate(() => {
+  // Every stock is held along X, Y and Z now: there is no model to pick.
+  const model = await page.evaluate(() => ({
+    kind: window.millsim.stock.kind,
+    picker: [...document.querySelectorAll('.field-label')].some((l) => /Stock model/.test(l.textContent)),
+  }));
+  check(model.kind === 'tridexel' && !model.picker, `the stock should be tri-dexel with no model picker: ${JSON.stringify(model)}`);
+
+  // A section square to X: both sides drawn, the plane at the middle of
+  // the 120 wide block.
+  const xSection = await page.evaluate(() => {
     const app = window.millsim;
     app.setDisplay({ sectionAxis: 'x', sectionPct: 50 });
-    const u = app.stockView.uniforms;
-    const out = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value, side: app.stockView.mesh.material.side };
+    const u = app.stockView.surface.uniforms;
+    const out = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value, side: app.stockView.surface.material.side };
     app.setDisplay({ sectionAxis: 'z', sectionPct: 100 });
-    out.after = app.stockView.mesh.material.side;
+    out.after = app.stockView.surface.material.side;
     return out;
   });
-  check(hmSection.n[0] === 1 && Math.abs(hmSection.d) < 1e-9 && hmSection.side === 2 && hmSection.after === 0,
-    `an X section of the heightmap should cut at x = 0 and draw both sides: ${JSON.stringify(hmSection)}`);
+  check(xSection.n[0] === 1 && Math.abs(xSection.d) < 1e-9 && xSection.side === 2 && xSection.after === 0,
+    `an X section should cut at x = 0 and draw both sides: ${JSON.stringify(xSection)}`);
 
   // ---- and it measured how hard each tool worked ------------------------
   const loads = await page.evaluate(() => window.millsim.analyzer.summary(window.millsim.state.program)
@@ -187,7 +194,7 @@ try {
     check(Math.abs(cmp.lateral - 0.25) < 1e-6, `the lateral resolving power should be one column, and reads ${cmp.lateral}`);
     check(/surface normal/.test(said), `the results panel does not say how it measures: ${said.slice(0, 200)}`);
 
-    // A probe on the heightmap stock: down into the 1 mm plunge — a drill,
+    // A probe on the bracket: down into the 1 mm plunge — a drill,
     // so off its centre the point of it is shallower than the full 1 mm —
     // and on the untouched top 5 mm over the plate.
     const hmProbe = await page.evaluate(() => {
@@ -201,7 +208,7 @@ try {
       app.setDisplay({ deviation: false });
       return { out, listed };
     });
-    console.log('heightmap probes:', JSON.stringify(hmProbe));
+    console.log('bracket probes:', JSON.stringify(hmProbe));
     check(hmProbe.out[0] !== null && hmProbe.out[0] < -0.7 && hmProbe.out[0] > -1.05, `a probe in the 1 mm plunge should read a gouge of most of a millimetre: ${hmProbe.out[0]}`);
     check(hmProbe.out[1] !== null && Math.abs(hmProbe.out[1] - 5) < 0.05, `a probe on the top should read +5 over the plate: ${hmProbe.out[1]}`);
     check(hmProbe.listed.length === 2 && /gouged/.test(hmProbe.listed[0]) && /stock left/.test(hmProbe.listed[1]), `the probes should be listed with what they mean: ${JSON.stringify(hmProbe.listed)}`);
@@ -420,12 +427,11 @@ try {
   check(fidia.tipped, 'the tool vector did not turn the rotaries');
   check(fidia.tcp, 'RTCP ON did not reach the moves');
 
-  // ---- a full 3D stock holds a hole drilled from the side ---------------
+  // ---- the stock holds a hole drilled from the side ---------------------
   //
   // The example drills two holes into the right face through a tilted
-  // plane and one from the top into the first. A heightmap cannot hold any
-  // of the side holes; the tri-dexel has to, and has to hand the next
-  // example back to the heightmap.
+  // plane and one from the top into the first, and the stock keeps all of
+  // them.
   {
     await loadExample(page, 8, 'Side holes');
     await runToEnd(page);
@@ -449,13 +455,12 @@ try {
       };
     });
     console.log('side holes:', JSON.stringify(side));
-    check(side.kind === 'tridexel', 'the side-hole example did not switch the stock to Full 3D');
     check(side.dialect === 'fanuc', `a Fanuc example after the Fidia one should be read on a Fanuc: ${side.dialect}`);
     check(side.errors === 0 && side.findings === 0, 'the side-hole example should run clean');
     check(side.overHole.length === 2 && Math.abs(side.overHole[0][1] + 20) < 0.05 && Math.abs(side.overHole[1][0] + 10) < 0.05,
       `the Z line over the second side hole should have metal under and over it: ${JSON.stringify(side.overHole)}`);
-    check(side.drawn > 1000, 'the full 3D stock drew nothing');
-    check(!side.pending, 'the full 3D surface was still being made after the run');
+    check(side.drawn > 1000, 'the stock drew nothing');
+    check(!side.pending, 'the stock surface was still being made after the run');
     check(side.pick !== null && Math.abs(side.pick - 45) < 0.05, `a ray down the side hole should stop at its bottom (x 45): ${side.pick}`);
     // A section through the holes draws the inside as the cut face.
     const caps = await page.evaluate(() => {
@@ -546,10 +551,6 @@ try {
       app.models.remove(app.models.models.find((m) => m.id === id));
       app.refreshTarget();
     }, probe.id);
-
-    await loadExample(page, 0, 'Demo bracket');
-    const back = await page.evaluate(() => window.millsim.stock.kind || 'heightmap');
-    check(back === 'heightmap', 'the next example kept the Full 3D stock');
   }
 
   // ---- a program written for another control says so --------------------

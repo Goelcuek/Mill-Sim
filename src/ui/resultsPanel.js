@@ -249,7 +249,7 @@ export class ResultsPanel extends Panel {
   exportSection() {
     const app = this.app;
     return section('Export', [
-      el('div.hint', {}, 'The machined stock is written as a closed solid built from the simulation heightmap.'),
+      el('div.hint', {}, 'The machined stock is written as the closed surface the simulation holds — side holes and undercuts included.'),
       actionRow([
         { label: 'Part as STL', variant: 'primary', onClick: () => app.exportStockStl() },
         { label: 'Part as OBJ', onClick: () => app.exportStockObj() },

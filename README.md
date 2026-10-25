@@ -113,21 +113,17 @@ absolute and incremental, work offsets, tool-length offsets, canned
 drilling cycles, subprogram calls, and reference returns. It reports what
 it could not make sense of instead of quietly doing something else.
 
-**Material removal.** The stock is a heightmap and the cutter is a swept
-envelope, so what you see is the surface the tool actually leaves —
-scallops from a ball nose stepover, the radius a cutter leaves in a square
-corner, the ramp from a helical entry.
-
-**A full 3D stock, for what the heightmap cannot hold.** A heightmap keeps
-the top of each column and takes everything under it to be solid: a hole
-drilled into the side of a part, a groove cut by a lollipop under a ledge,
-a cut a leaning tool makes under standing metal — none of them can be in
-it. **Setup › Stock › Stock model › Full 3D** keeps the material along X,
-Y and Z instead: three grids of lines, each line holding the stretches of
-it that are inside metal (a *tri-dexel* model). A hole from the side is a
-gap in the lines it runs along and in every line it crosses; every face of
-the part is crossed by one of the three families within 54.7° of square,
-so walls are seen as well as floors.
+**Material removal.** The stock keeps its material along X, Y and Z:
+three grids of lines, each line holding the stretches of it that are
+inside metal (a *tri-dexel* model). What you see is the surface the tool
+actually leaves — scallops from a ball nose stepover, the radius a cutter
+leaves in a square corner, the ramp from a helical entry — and also what a
+top-down model cannot hold: a hole drilled into the side of a part, a
+groove cut by a lollipop under a ledge, a cut a leaning tool makes under
+standing metal. A hole from the side is a gap in the lines it runs along
+and in every line it crosses; every face of the part is crossed by one of
+the three families within 54.7° of square, so walls are seen as well as
+floors.
 
 Cutting is solved on each line against the cutter itself — kept as exact
 pieces, with a ball nose a true sphere — rather than a faceted copy:
@@ -137,8 +133,8 @@ angle to it. Against answers worked out by hand: a side hole's volume and
 position, two crossing holes against the Steinmetz solid, a lollipop
 tunnel, wall positions along X and Y to a tenth of a micron, a 20° leaning
 wall, a hole at a compound angle. On a 3-axis job it agrees with the
-heightmap, and where the two differ — the steep flanks of a ball nose —
-it is the closer of the two to the exact surface in every column.
+height-map model it replaced, and where the two differ — the steep flanks
+of a ball nose — it is the closer of the two to the exact surface.
 
 It is drawn as the closed surface of what is left. The lines of the three
 families cross on one lattice and every edge of it lies on a line, so where
@@ -157,27 +153,35 @@ all, as a closed mesh. Past a triangle budget (2.4 million, 600,000 on a
 phone) the display uses every second or third line; the export uses every
 line unless Export detail says otherwise.
 
-It costs more. On the shipped examples a run takes 1.9–3.6 times as long as
-the heightmap at 0.25 mm and 2.1–5.3 times as long at 0.1 mm — the
-five-axis example's whole run is 1.6 s and 8.9 s — and about 3.5 MB per
-100,000 lines: 35 MB for the 120 × 80 bracket at 0.1 mm, 49 MB for the
-five-axis block. The deviation map judges every face of it in 3D (see
-Gouging, below). The **Side holes in a full 3D stock** example switches it
-on; any other example puts the heightmap back.
+It takes about 3.5 MB per 100,000 lines: under 10 MB for any shipped
+example at its own cell, 35 MB for the 120 × 80 bracket at 0.1 mm. The
+lines are capped at twelve million, so on a large block the finest cells
+are coarsened to fit, and the Stock page says so. In the app, the shipped
+examples run to the end in 0.25–1.15 times the time the height map took.
+
+**The height map is retired.** Until v72 the default stock was a height
+map — one top surface per XY column — with the tri-dexel as an option.
+Every stock is the tri-dexel now and there is no model to choose. A
+project saved with `"model3d": "heightmap"` still opens; the field is
+passed over. The height-map class (`src/sim/stock.js`) is kept as the
+tri-dexel's base, for the grid and the top-down heights it keeps current,
+and its own 3-axis kernels stay only for the tests that pin results the
+tri-dexel is checked against.
 
 **Stock that is not a block.** **Add stock…** offers three shapes, because
 three is what a shop has: a rectangular block (X, Y, Z), a round bar (Ø and
 height), and a model — a casting, a forging, a weldment, or the output of
-the last operation, imported as STL. The simulation is a field of vertical
-columns, so a shape is nothing more than the height each column starts at:
+the last operation, imported as STL. A shape is nothing more than the
+height each XY column of the stock starts at, and the lines are filled from it:
 a block answers "the top, everywhere", a bar answers "the top, inside the
 circle", and a model answers with its own upper surface. Everything
-downstream already works column by column, so cutting, collision checking,
+downstream works on the lines that fill it, so cutting, collision checking,
 volume and the picked surface need to know nothing about which of the three
 they are looking at — a facing pass over a Ø50 bar removes the disc, not
 the square, and a cut that reaches the bottom leaves a hole rather than a
-film. Like the rest of this model a shape cannot hold an undercut: what
-hides beneath the top surface is taken to be solid.
+film. The starting shape cannot hold an undercut: what hides beneath the
+top surface of the model is taken to be solid. Undercuts the program cuts
+are kept.
 
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
@@ -295,8 +299,8 @@ asking to be trusted and checked somewhere else. **View › Measure** takes
 two points for a distance, with its three components, or three points
 round a bore for its diameter and centre. Points snap to corners, edges,
 face centres, work origins — and to the rim of whatever has been cut,
-which is what makes a bore measurable at all: its wall is one column wide,
-so the top edge is the only part worth pointing at. A Ø10 hole on a
+which is what makes a bore measurable from above: its top edge is the
+easiest part of it to point at. A Ø10 hole on a
 0.28 mm grid measures Ø10.045.
 
 **Five-axis machines.** A machine is a tree of joints rather than a fixed
@@ -530,8 +534,8 @@ and an edge beats a face:
 | Grey | Anywhere on a surface, unsnapped |
 
 The stock snaps to its 26 box features and to the machined surface itself —
-the floor of a pocket is clickable, because the ray is walked through the
-heightmap rather than against the flat mesh the GPU displaces.
+the floor of a pocket and the bottom of a side hole are clickable, because
+the ray is walked through the stock's lines rather than against the mesh.
 
 Press `X`, `Y` or `Z` mid-move to lock to one axis, which is how you say "up
 40" without hunting for a point that happens to be straight above. Clicking
@@ -548,103 +552,51 @@ points. From that, `src/tools/envelope.js` builds a **lower envelope**
 table: for a point at radial distance `r` from the tool axis, the lowest
 height at which that solid occupies that radius.
 
-That one function answers both questions the simulator needs:
+The cutting itself works from exact pieces (`src/tools/profile.js`): the
+cutter as lines and spheres, a ball nose a true sphere. The envelope table
+is what the collision probes use for the non-cutting body — neck, shank,
+holder, spindle — against the material.
+
+The stock is three grids of lines, one along each axis, on one lattice
+(`src/sim/triDexel.js`). Each line holds the stretches of it that are inside
+metal, `[in, out], [in, out], …`, in single precision against the stock's
+origin. Cutting asks every line the same question — where does it go into
+the swept cutter and where does it come out — and since every cutter here
+is convex, that is one interval:
 
 ```
-cutting     h = min(h, tipZ + LE_flutes(r))     for each stock column
-collision   h >     tipZ + LE_body(r)           for each stock column
+along the tool axis      the lowest and highest the swept tool reaches on the
+                         line: a search over the move on the profile's tables
+square to the tool axis  the line lies in one slice of the tool, a disc;
+                         moving straight it sweeps a capsule — closed form; a
+                         plunge widens it to the widest the tool gets; a ramp
+                         is searched
+at any other angle       the tool at one position, solved exactly against its
+                         pieces; the move is stamped
 ```
 
-The table is indexed by `r²` rather than `r`, so the inner loop never takes
-a square root, and resolution concentrates near the outer edge of the tool
-where the profile curves most. A ball nose reproduces its analytic sphere
-to within a micron.
+Subtracting that interval from the line's stretches is a merge of two sorted
+lists. Lines a move cannot reach are never visited.
 
-The stock is a regular XY grid of columns (a Z-dexel field), each holding
-the height of the remaining material. A 16×16 tile pyramid holds the
-maximum height of each block, so air moves — most of every program — are
-rejected without touching a single column. Rejecting 200,000 air moves
-takes about 15 ms.
+The highest material on each Z line is kept as a top-down grid as well, and
+a 16×16 tile pyramid holds the maximum of each block, so air moves — most of
+every program — are rejected without touching a line. The top-down grid is
+also what snapping, the force model and the reference compare read.
 
 The simulator is time-sliced: `run(dt, budgetMs)` does as much work as fits
 in a frame and returns, so the UI stays responsive whether the program has
 80 moves or 80,000.
 
-### Why it can run at 0.025 mm
-
-Stamping the tool at every sub-step costs O(1/cell³) — four times the
-columns and twice the steps for every halving — which is why a fine grid
-dies. Instead each straight move is carved as a **swept volume**: for a
-column at distance r(t) from the moving axis, the surface the tool can
-reach is z(t) + LE(r(t)²), where r(t)² is a parabola in t. The interval
-where the tool covers the column at all comes out of a quadratic, and since
-LE is non-decreasing and convex in r for every cutter shape here, the sum is
-unimodal and a golden-section search finds the minimum exactly. Every column
-is visited once per move rather than once per sub-step, which is O(1/cell²).
-Flat-bottomed cutters skip the search entirely — a constant envelope is
-lowest at one end of the pass.
-
-Around that: whole 16×16 tiles are rejected against the max-height pyramid
-before any column is touched; a column already below the lowest the tool
-gets is skipped in a few nanoseconds; the holder probe rejects by tile and
-then samples on a fixed physical spacing, because a Ø63 holder covers six
-million columns at 0.025 mm and a crash worth reporting is never a quarter
-of a millimetre across.
-
-The display is decoupled too. A 0.025 mm grid is twelve million columns; the
-view keeps a reduced grid sized to a vertex budget, each display texel taking
-the lowest column in its block so a cut is never averaged away, and only the
-rectangle the cutter actually touched is uploaded each frame.
-
-Measured on the demo bracket (251 moves, four tools including a Ø50 face
-mill), whole program, in Node:
-
-| Cell size | Columns | Simulate |
-| --- | --- | --- |
-| 0.4 mm | 0.06 M | 76 ms |
-| 0.1 mm | 0.96 M | 211 ms |
-| 0.05 mm | 3.8 M | 758 ms |
-| 0.025 mm | 15.4 M | 3.1 s |
-
-Removed volume agrees to 0.01 cm³ across all four.
-
 ### When the tool leans
 
-A leaning tool is a different problem. The swept envelope of an upright
-cutter is just the envelope translated, which is what makes the fast path
-fast; tilt it and that stops being true. So a tilted move is carved by a
-second routine that works from the same lower-envelope table but answers a
-harder question per column.
-
-Along the vertical line through a column, with `u` the height above the tool
-tip's plane, both the distance along the tool axis and the distance from it
-are quadratics in `u`:
-
-```
-s(u)        = k + u·az                     along the axis
-radial²(u)  = A + B·u + C·u²               from the axis,  C = 1 − az²
-```
-
-`C` vanishes when the tool stands upright, which is the upright case falling
-out of the same algebra. The column is inside the cutter where
-`s ≥ LE(radial²)`, and since every cutter here is convex that region is a
-single interval — so the carve brackets where the tool could reach at all,
-finds the deepest penetration by golden-section search, and bisects down to
-the surface the tool leaves.
-
-Two guards matter. The lowest point the whole tilted solid can reach is
-computed once per move, so most columns are rejected on one compare. And a
-tilted tool can sit entirely *below* the surface without having touched it —
-the overhanging side passes under standing material. A heightmap cannot hold
-that undercut, but it must not claim the material was removed either, so a
-column past the tool's upper crossing is left alone.
-
-Tilted moves are stamped rather than swept, at a spacing taken from the
-scallop it leaves (`d²/8r`) and capped so the swing between stamps cannot
-step down a wall. Validated against the analytic shapes: a tilted ball nose
-bottoms out within 3 µm of where the sphere says, at every angle from 0° to
-60°, and a flat end mill leaning 30° leaves an ellipse whose axes match
-`d` and `d/cos 30°` to a tenth of a millimetre.
+A leaning tool moving along the tool axis or square to it is still solved in
+closed form or by a search on each line. Moving at an angle to the lines, it
+is stamped at a spacing taken from the cusp it would leave — a few tenths of
+a micron — and capped so the swing between stamps cannot step down a wall.
+Because the material is kept along all three axes, a tilted tool passing
+under standing metal removes what it passes through and leaves what is over
+it. Validated against shapes worked out by hand: a 20° leaning wall, a hole
+at a compound angle, a lollipop tunnel under the surface.
 
 ### Kinematics
 
@@ -691,7 +643,7 @@ deepening to full colour at a range you set. The distance is the shortest
 one to the part, in any direction, and which side of it a point is on is
 asked of the part itself — a closed model is a solid, and a point is
 inside it when a ray from it crosses its skin an odd number of times; an
-open sheet of faces has only a top. On a **Full 3D** stock every face is
+open sheet of faces has only a top. Every face of the stock is
 judged where it is — the walls and floor of a side hole, the roof of an
 undercut, the underside of a ledge — vertex by vertex, and a cut remeasures
 only the blocks it reached. Against a reference whose side hole is Ø10.6,
@@ -772,30 +724,18 @@ silently ignored.
 
 ## Honest limitations
 
-- **The default stock is a heightmap, so it cannot represent undercuts.**
-  Each column stores one top surface. This is the standard trade-off for
-  interactive 3-axis verification. Undercut tools are drawn and
-  collision-checked, but the material beneath an overhang will not be
-  removed. The Tools panel says so when you build one. Set the stock model
-  to **Full 3D** for side holes and undercuts.
-- **On a heightmap stock the deviation map is per column.** Each column's
-  top is measured in 3D, but a heightmap has no faces under its tops, so
-  only Full 3D colours the inside of a hole or an undercut. The gouge check
-  during the run (Results) also still works column by column on both.
-- **Full 3D stamps a leaning tool moving at an angle to the lines** rather
+- **The gouge check during the run is top-down.** It compares the highest
+  material on each Z line with the reference part's top, so a gouge in the
+  wall of a side hole shows on the deviation map but is not reported while
+  the program runs.
+- **A leaning tool moving at an angle to the lines is stamped** rather
   than solving it exactly.
-- **A Full 3D surface is as fine as its lattice.** A fin or a slot thinner
+- **The surface is as fine as its lattice.** A fin or a slot thinner
   than one cell of the displayed lattice can fall between its points and
   not be drawn, though the lines still hold it and the volumes count it.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
-- **A tilted tool can pass under standing material.** The heightmap holds
-  one surface per column, so an undercut a leaning cutter creates cannot be
-  drawn. The carver refuses to remove a column the tool passes entirely
-  beneath rather than report material gone that is still there, which is the
-  honest failure of the two. On the five-axis example's swarf pass that is
-  about 6 % of the metal; Full 3D removes it.
 - **Non-TCP five-axis programs assume the work offset was set with every
   rotary at zero.** Without `G43.4` the programmed X/Y/Z are where the
   linear axes go, and a rotary turns the part under them without moving
@@ -836,16 +776,17 @@ src/
     lexer.js          tokeniser
     interpreter.js    modal state machine -> flat move list
   sim/
-    stock.js          heightmap, swept and tilted carving, tile pyramid
-    triDexel.js       the full 3D stock: material along X, Y and Z
+    stock.js          the grid, top-down heights and tile pyramid (its own
+                      height-map carving is deprecated, kept for tests)
+    triDexel.js       the stock: material along X, Y and Z
     dexelMesh.js      its closed surface, by dual contouring on the line crossings
     target.js         reference-part rasterisation and gouge comparison
     collision.js      sphere chains vs boxes, table and limits
     simulator.js      the time-sliced run loop
   scene/
     viewer.js         renderer, camera, lighting
-    stockView.js      GPU-displaced heightmap mesh
-    dexelView.js      the full 3D stock's surface, block by block, with section caps
+    stockView.js      the stock as the app sees it: colours, deviation, section
+    dexelView.js      the stock's surface, block by block, with section caps
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
     machineView.js    the chain-driven rig: one group per axis
@@ -856,7 +797,7 @@ src/
     originView.js     work-origin markers
   io/
     stl.js            STL read/write, OBJ write
-    mesh.js           heightmap and lathe triangulation
+    mesh.js           stock, lathe and box triangulation
   ui/
     ribbon.js         tabs and pages — navigation only, no actions
     panel.js          the shape every side panel has: pages, Add bars,
@@ -883,11 +824,10 @@ Node with no browser and no mocks.
 ### Rendering the cut
 
 Rebuilding a million-triangle mesh every frame would not keep up, so the
-heightmap lives in a float texture and the stock mesh is a flat grid that
-the vertex shader lifts to the current surface. Surface normals come from
-the same texture by central difference, so a freshly machined face shades
-correctly the instant it changes. Cutting costs one texture upload per
-frame instead of a geometry rebuild.
+stock's surface is built in blocks of 32 cells and a cut remakes only the
+blocks it reached. While the program plays, a few blocks are remade each
+frame — enough to follow the cutter — and the rest follow when the run
+stops.
 
 ---
 

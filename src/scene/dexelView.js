@@ -2,10 +2,10 @@
 //
 // The mesh comes from the stretches a block at a time (see
 // sim/dexelMesh.js), and a cut remakes only the blocks it went through.
-// It is shaded as the heightmap's surface is — the same steel, the same
-// tool colours — and because it is closed, a section through it shows
-// the inside of the part: the faces seen from behind are drawn as the cut
-// face, flat and level, in their own colour.
+// It is shaded in the stock's steel and the tool colours, and because it
+// is closed, a section through it shows the inside of the part: the faces
+// seen from behind are drawn as the cut face, flat and level, in their
+// own colour.
 
 import * as THREE from 'three';
 import { DexelMesher } from '../sim/dexelMesh.js';
@@ -131,7 +131,7 @@ export class DexelSurface {
           varying vec3 vWorkPos;
           varying vec3 vCapNormal;
 
-          // As on the heightmap: within tolerance green, material left pale
+          // Within tolerance green, material left pale
           // to deep blue, a gouge orange to red, full colour at uDevRange.
           vec3 deviationColor( float d ) {
             float a = abs( d );

@@ -1,7 +1,7 @@
 // The simulation loop.
 //
 // Walks the interpreted move list, sub-steps each move finely enough that
-// the swept tool leaves no gaps in the heightmap, removes material and
+// the swept tool leaves no gaps in the stock, removes material and
 // reports every crash it finds. It is time-sliced: `run(budgetMs)` does as
 // much work as fits in a frame and returns, so the UI stays responsive on
 // programs with millions of moves.

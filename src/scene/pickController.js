@@ -239,7 +239,7 @@ export class PickController {
    *
    * `raycaster` stays in world coordinates because that is what three.js
    * intersection tests expect; `workRay` is the same ray carried into work
-   * coordinates, which is where the stock heightmap lives.
+   * coordinates, which is where the stock lives.
    */
   rayFor(event) {
     const rect = this.dom.getBoundingClientRect();

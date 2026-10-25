@@ -21,7 +21,6 @@ import { MeasureView, circleThrough } from './scene/measureView.js';
 import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
-import { Stock } from './sim/stock.js';
 import { columnFor, stockGrid } from './sim/stockShape.js';
 import { Simulator } from './sim/simulator.js';
 import { silhouetteSpheres, checkLimits } from './sim/collision.js';
@@ -108,13 +107,6 @@ export class App {
          */
         rotation: 0,
         resolution: 0.28,
-        /**
-         * What holds the material. The heightmap keeps the top of each
-         * column — fast, and all a 3-axis job needs. The tri-dexel keeps
-         * the material along X, Y and Z, so a hole from the side or a cut
-         * under an overhang is there to see.
-         */
-        model3d: 'heightmap',
         /** Round bar only. */
         diameter: 80,
         /** A model used as stock: its triangles, kept in memory only. */
@@ -376,7 +368,7 @@ export class App {
       // The frame a ray has to be carried into is the frame the geometry
       // is in — the part's, not the coordinate system's. The two are the
       // same place until the table indexes, and then they are not: a ray
-      // tested in the coordinate frame against a heightmap that has turned
+      // tested in the coordinate frame against a stock that has turned
       // with the table comes back with the point that was under the
       // cursor before it turned.
       workFrame: () => this.machineView.partGroup,
@@ -951,12 +943,11 @@ export class App {
 
   rebuildStock() {
     const s = this.state.stock;
-    // The columns are axis-aligned whatever the billet is doing, so a block
+    // The lines are axis-aligned whatever the billet is doing, so a block
     // clamped at an angle is simulated in a grid big enough for its corners
     // while its own size stays what the shop typed in.
     const grid = stockGrid(s);
-    const Model = s.model3d === 'tridexel' ? TriDexelStock : Stock;
-    this.stock = new Model({
+    this.stock = new TriDexelStock({
       origin: grid.origin,
       size: grid.size,
       resolution: s.resolution,
@@ -964,7 +955,7 @@ export class App {
       // none, so nothing changes for the case that is already right.
       column: columnFor(s),
     });
-    this.stockView.setStock(this.stock, { renderer: this.viewer.renderer });
+    this.stockView.setStock(this.stock);
     this.viewer.setGridExtent(Math.max(s.size[0], s.size[1]));
     this.applyDisplay();
     this.simulator.load({ stock: this.stock });
@@ -2132,9 +2123,7 @@ export class App {
     // The machine comes first: changing the chain reloads the program, and
     // the stock has to be the right size before that runs.
     if (setup.machine) {
-      // An example says which model its stock needs; one that does not
-      // say is a heightmap job, whatever the last example asked for.
-      Object.assign(this.state.stock, setup.stock ? { model3d: 'heightmap', ...setup.stock } : {});
+      Object.assign(this.state.stock, setup.stock || {});
       if (setup.stock) this.rebuildStock();
       this.setMachine(setup.machine);
       this.panels.setup.refresh();
@@ -2142,7 +2131,7 @@ export class App {
       return;
     }
     if (setup.stock) {
-      Object.assign(this.state.stock, { model3d: 'heightmap', ...setup.stock });
+      Object.assign(this.state.stock, setup.stock);
       this.rebuildStock();
       this.panels.setup.refresh();
     }
@@ -2469,7 +2458,7 @@ export class App {
       // The tool has moved, so the picture is stale whatever else happened.
       this.viewer.invalidate();
       this.showAssembly(sim.activeSlot);
-      // A full 3D stock is redrawn a few chunks at a time: playing, enough
+      // The stock is redrawn a few chunks at a time: playing, enough
       // to follow the cutter; running ahead to a point nobody is watching,
       // hardly at all — the rest comes once the run stops.
       this.stockView.sync(false, this.state.seekTarget !== null ? 1 : 4);
@@ -2488,7 +2477,7 @@ export class App {
       }
     }
 
-    // A full 3D stock draws a few chunks a frame; when the run stops, the
+    // The stock draws a few chunks a frame; when the run stops, the
     // rest are still to come, and come without anything else moving.
     if (!worked && this.stockView.pending) {
       // Nothing else wants this frame, so most of it goes on the picture.

@@ -1,4 +1,13 @@
-// Stock model: a Z-heightmap ("dexel field") sampled on a regular XY grid.
+// Stock grid and top-down view: a Z-heightmap sampled on a regular XY grid.
+//
+// DEPRECATED as a stock model. The app holds material in TriDexelStock
+// (sim/triDexel.js), which keeps it along X, Y and Z and extends this
+// class for what is still shared: the grid, the top-down heights it keeps
+// up to date (the reference compare, snapping and the gouge check read
+// them), the air-move tiles, and the shaped-stock fill. The cutting,
+// probing and raycasting below are this class's own and are no longer
+// used by the app; they stay for the tests that pin the 3-axis results
+// the tri-dexel is checked against.
 //
 // Each grid column stores the height of the top surface of the remaining
 // material. Cutting is `h = min(h, tipZ + LE_cut(r))` over the columns the

@@ -241,7 +241,6 @@ export function buildTool(def) {
       cut.push({ r: 0, z: 0 });
       cut.push(...arcPoints(0, r, r, -Math.PI / 2, Math.PI / 2, ARC_STEPS * 2));
       flute = 2 * r;
-      warnings.push('Undercut geometry is drawn and collision-checked, but the heightmap cutting model cannot remove material beneath an overhang.');
       break;
     }
     case 'flat':

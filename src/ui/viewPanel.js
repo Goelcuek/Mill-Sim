@@ -123,7 +123,7 @@ export class ViewPanel extends Panel {
           button('Pick points', () => app.pickDeviationPoints(), { title: 'Click the part to pin readings of how much is left or how deep it is gouged' }),
           app.state.devProbes.length ? button(`Clear ${app.state.devProbes.length} point${app.state.devProbes.length === 1 ? '' : 's'}`, () => { app.clearProbes(); this.render(); }) : null,
         ].filter(Boolean)) : null,
-        el('div.hint', {}, 'Green is on size, within the gouge tolerance set in Results. Blue is stock still to come off, red is a cut past the finished part, deeper as the gap grows. Measured as the shortest distance to the part, so a wall left thick reads its thickness, not the depth of the pocket. On a Full 3D stock every face is judged where it is — the inside of a side hole, the roof of an undercut. Pick points pins readings on the part that follow the cut as the program runs. Needs a model with the role Reference part.'),
+        el('div.hint', {}, 'Green is on size, within the gouge tolerance set in Results. Blue is stock still to come off, red is a cut past the finished part, deeper as the gap grows. Measured as the shortest distance to the part, so a wall left thick reads its thickness, not the depth of the pocket. Every face is judged where it is — the inside of a side hole, the roof of an undercut. Pick points pins readings on the part that follow the cut as the program runs. Needs a model with the role Reference part.'),
       ]),
     ];
   }
