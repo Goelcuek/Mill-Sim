@@ -150,7 +150,7 @@ a bevel the size of a cell — on a plain block every vertex lies on a face,
 and on a slotted one within 0.02 mm of the true part at a 0.25 mm lattice.
 The mesh is built in blocks of 32 cells, about 0.8 ms each, and a cut
 remakes only the blocks it reached. Being closed, a **View › Inspect ›
-Section view** through it shows the inside as a solid cut face. Picking
+Section** through it shows the inside as a solid cut face. Picking
 and measuring land on it — a click down a side hole stops at the bottom of
 the hole — and **Results › Export › Part as STL** writes it, side holes and
 all, as a closed mesh. Past a triangle budget (2.4 million, 600,000 on a
@@ -439,6 +439,18 @@ collapse the page row and give the viewport the space back.
 | **Program** | Main · Programs · Variables · Summary |
 | **Results** | Findings · Compare · Export |
 | **View** | Camera · Show · Inspect · Measure |
+
+The panels say little until asked: a section with more to explain than
+its controls do carries a small **i** beside its title, and the
+explanation opens under it. Status — a file name, a count, a warning —
+is always shown.
+
+**View › Inspect › Section** cuts the part open on a plane square to X, Y
+or Z: the slider moves the plane through the stock, and **Flip** keeps the
+other side. Both stock models are closed solids, so what shows through the
+opening is drawn as the cut face — flat, lit as the plane, in its own
+colour — and a hole or pocket the plane passes through shows as a gap in
+it.
 
 The viewport draws **on demand**. A machining simulator is static most of
 the time — the program is not running, nobody is dragging the view, and the

@@ -140,7 +140,7 @@ export class App {
         // watching one run. Off until asked for, on View.
         grid: false, axes: true, stock: true, tool: true, holder: true,
         toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: false,
-        sectionPct: 100, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
+        sectionPct: 100, sectionAxis: 'z', sectionFlip: false, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
         // Edges on the castings, fixtures, parts and tool — not on the
         // stock, which changes under the cutter every frame.
         edges: true,
@@ -1632,9 +1632,15 @@ export class App {
     if (this.originView) this.originView.setVisible(d.origins);
 
     if (this.stock) {
+      // How much of the part is kept, from the low side up — or from the
+      // high side down, flipped — on whichever axis the cut is square to.
       const pct = clamp(d.sectionPct, 0, 100) / 100;
-      const z = this.stock.base + (this.stock.top - this.stock.base) * pct;
-      this.stockView.setSection(pct >= 1 ? null : z);
+      const axis = { x: 0, y: 1, z: 2 }[d.sectionAxis] ?? 2;
+      const st = this.stock;
+      const lo = axis === 2 ? st.base : st.origin[axis];
+      const hi = axis === 2 ? st.top : st.origin[axis] + st.size[axis];
+      const value = d.sectionFlip ? hi - (hi - lo) * pct : lo + (hi - lo) * pct;
+      this.stockView.setSection(pct >= 1 ? null : { axis, value, flip: !!d.sectionFlip });
     }
     this.viewer.invalidate();
   }

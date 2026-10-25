@@ -65,6 +65,10 @@ export class StockView {
     this.devTolerance = 0.02;
     this.copyBox = new THREE.Box2(new THREE.Vector2(), new THREE.Vector2());
     this.copyPos = new THREE.Vector2();
+    /** The section plane, or null: {axis 0|1|2, value, flip}. */
+    this.section = null;
+    /** What the inside of the part looks like through a section. */
+    this.capColor = new THREE.Color('#c4705a');
   }
 
   /** Attach to a Stock, rebuilding all GPU resources. */
@@ -81,10 +85,11 @@ export class StockView {
         stockColor: new THREE.Color(this.stockHex || '#8e97a6'),
         cutColor: this.cutColor,
         toolColors: this.toolColors,
+        capColor: this.capColor,
       });
       this.surface.uniforms.uShowTools.value = this.showTools === false ? 0 : 1;
       this.surface.setDeviation(this.deviationState());
-      if (this.sectionZ !== undefined) this.surface.setSection(this.sectionZ);
+      this.surface.setSection(this.section);
       this.group.add(this.surface.group);
       return;
     }
@@ -248,7 +253,10 @@ export class StockView {
       uCutColor: { value: this.cutColor },
       uToolColors: { value: this.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
-      uSectionZ: { value: 1e9 },
+      uSectionN: { value: new THREE.Vector3(0, 0, 1) },
+      uSectionD: { value: 1e9 },
+      uCapColor: { value: this.capColor },
+      uOrigin: { value: new THREE.Vector3(stock.origin[0], stock.origin[1], stock.base) },
       uDevMode: { value: this.devMode ? 1 : 0 },
       uDevTol: { value: this.devTolerance },
       uDevRange: { value: this.devRange || 0.5 },
@@ -266,8 +274,11 @@ export class StockView {
           uniform vec2 uStep;
           uniform float uBase;
           uniform float uMinThick;
+          uniform vec3 uOrigin;
+          uniform vec3 uSectionN;
           attribute float aMode;
-          varying float vWorldZ;
+          varying vec3 vWorkPos;
+          varying vec3 vCapNormal;
           varying vec2 vGridUv;
           varying float vSolid;
           varying float vTop;
@@ -304,7 +315,9 @@ export class StockView {
           vSolid = ( hs.r - uBase > uMinThick ) ? 1.0 : 0.0;
           vec3 transformed = vec3( position );
           if ( aMode > 0.5 ) transformed.z = hs.r - uBase;
-          vWorldZ = transformed.z + uBase;
+          vWorkPos = transformed + uOrigin;
+          // The section's cut face, facing out of what is kept.
+          vCapNormal = normalize( normalMatrix * uSectionN );
         `);
 
       shader.fragmentShader = shader.fragmentShader
@@ -319,11 +332,14 @@ export class StockView {
           uniform vec3 uCutColor;
           uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
           uniform float uShowTools;
-          uniform float uSectionZ;
+          uniform vec3 uSectionN;
+          uniform float uSectionD;
+          uniform vec3 uCapColor;
           uniform float uDevMode;
           uniform float uDevTol;
           uniform float uDevRange;
-          varying float vWorldZ;
+          varying vec3 vWorkPos;
+          varying vec3 vCapNormal;
           varying vec2 vGridUv;
           varying float vSolid;
           varying float vTop;
@@ -342,7 +358,7 @@ export class StockView {
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
-          if ( vWorldZ > uSectionZ ) discard;
+          if ( dot( vWorkPos, uSectionN ) > uSectionD ) discard;
           // Which column this pixel stands on, and which tool cut it. Read
           // here rather than at the corners: a cut number interpolated
           // between two columns is a tool that never ran — halfway between
@@ -399,9 +415,17 @@ export class StockView {
             if ( dv.a > 0.75 ) { surface = deviationColor( dv.b ); devTint = 1.0; }
             else if ( dv.a > 0.25 ) { surface = vec3( 0.60, 0.63, 0.67 ); devTint = 1.0; }
           }
+          // Seen from behind is seen through the section: the inside of
+          // the part, drawn as the cut face.
+          if ( !gl_FrontFacing ) surface = uCapColor;
           diffuseColor.rgb *= surface;
           float tinted = ( cutId > 0.5 && vTop > 0.5 ) ? uShowTools : 0.0;
           tinted = max( tinted, devTint );
+          if ( !gl_FrontFacing ) tinted = 0.0;
+        `)
+        .replace('#include <normal_fragment_begin>', `
+          #include <normal_fragment_begin>
+          if ( !gl_FrontFacing ) normal = normalize( vCapNormal );
         `)
         // Steel takes a tint badly: at this metalness most of what the eye
         // gets back is the light source rather than the surface, which is
@@ -412,11 +436,13 @@ export class StockView {
           #include <metalnessmap_fragment>
           metalnessFactor *= mix( 1.0, 0.55, tinted );
           roughnessFactor = mix( roughnessFactor, 0.55, tinted );
+          if ( !gl_FrontFacing ) { metalnessFactor = 0.1; roughnessFactor = 0.8; }
         `);
 
       this.shader = shader;
     };
     material.customProgramCacheKey = () => 'millsim-stock';
+    this.applySection(uniforms, material);
     return material;
   }
 
@@ -607,11 +633,36 @@ export class StockView {
     }
   }
 
-  /** Clip everything above `z`, for looking inside a pocket. */
-  setSection(z) {
-    this.sectionZ = z;
-    if (this.uniforms) this.uniforms.uSectionZ.value = z === null ? 1e9 : z;
-    if (this.surface) this.surface.setSection(z);
+  /**
+   * Cut the stock open on a plane square to X, Y or Z, keeping the side
+   * below it — or above it, flipped. The part is closed, so what shows
+   * through the opening is its own inside, drawn as the cut face.
+   *
+   * @param {null | {axis:0|1|2, value:number, flip?:boolean}} plane
+   */
+  setSection(plane) {
+    this.section = plane || null;
+    if (this.uniforms && this.mesh) this.applySection(this.uniforms, this.mesh.material);
+    if (this.surface) this.surface.setSection(this.section);
+  }
+
+  applySection(uniforms, material) {
+    const p = this.section;
+    const n = [0, 0, 1];
+    let d = 1e9;
+    if (p) {
+      const sign = p.flip ? -1 : 1;
+      n[0] = n[1] = n[2] = 0;
+      n[p.axis] = sign;
+      d = sign * p.value;
+    }
+    uniforms.uSectionN.value.set(n[0], n[1], n[2]);
+    uniforms.uSectionD.value = d;
+    const side = p ? THREE.DoubleSide : THREE.FrontSide;
+    if (material.side !== side) {
+      material.side = side;
+      material.needsUpdate = true;
+    }
   }
 
   setVisible(v) { this.group.visible = v; }

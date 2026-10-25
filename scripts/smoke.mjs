@@ -100,6 +100,20 @@ try {
   check(bracket.removed > 20000, `expected material to be removed, got ${bracket.removed} mm3`);
   check(bracket.collisions === 0, `clean program reported ${bracket.collisions} collisions`);
 
+  // A section square to X on the heightmap: both sides drawn, the plane
+  // at the middle of the 120 wide block.
+  const hmSection = await page.evaluate(() => {
+    const app = window.millsim;
+    app.setDisplay({ sectionAxis: 'x', sectionPct: 50 });
+    const u = app.stockView.uniforms;
+    const out = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value, side: app.stockView.mesh.material.side };
+    app.setDisplay({ sectionAxis: 'z', sectionPct: 100 });
+    out.after = app.stockView.mesh.material.side;
+    return out;
+  });
+  check(hmSection.n[0] === 1 && Math.abs(hmSection.d) < 1e-9 && hmSection.side === 2 && hmSection.after === 0,
+    `an X section of the heightmap should cut at x = 0 and draw both sides: ${JSON.stringify(hmSection)}`);
+
   // ---- and it measured how hard each tool worked ------------------------
   const loads = await page.evaluate(() => window.millsim.analyzer.summary(window.millsim.state.program)
     .map((r) => ({ tool: r.tool, moves: r.moves, force: Math.round(r.force.value), kW: +r.power.value.toFixed(2) })));
@@ -452,6 +466,19 @@ try {
       return { cut: side, whole: app.stockView.surface.material.side };
     });
     check(caps.cut === 2 && caps.whole === 0, `a section should draw both sides, and none only the outside: ${JSON.stringify(caps)}`);
+    // Square to Y through the middle of the 90 deep block, then flipped.
+    const planeY = await page.evaluate(() => {
+      const app = window.millsim;
+      app.setDisplay({ sectionAxis: 'y', sectionPct: 50, sectionFlip: false });
+      const u = app.stockView.surface.uniforms;
+      const a = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value };
+      app.setDisplay({ sectionFlip: true, sectionPct: 25 });
+      const b = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value };
+      app.setDisplay({ sectionAxis: 'z', sectionPct: 100, sectionFlip: false });
+      return { a, b };
+    });
+    check(planeY.a.n[1] === 1 && Math.abs(planeY.a.d) < 1e-9, `a Y section at 50% should be the plane y = 0: ${JSON.stringify(planeY.a)}`);
+    check(planeY.b.n[1] === -1 && Math.abs(planeY.b.d - -22.5) < 1e-9, `flipped at 25% it should keep y ≥ 22.5: ${JSON.stringify(planeY.b)}`);
 
     // The deviation map in 3D, and a probe pinned on it. The reference
     // part has the first side hole at Ø10.6 where the program drills Ø10,

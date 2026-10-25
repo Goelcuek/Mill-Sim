@@ -33,7 +33,7 @@ export class ResultsPanel extends Panel {
     return [compare || section('Compare against a reference part', [
       el('div.empty', {}, [
         el('div.empty-title', {}, 'No reference part loaded'),
-        el('div.hint', {}, 'Import a model on Setup › Fixtures and give it the reference-part role. It is rasterised onto the stock grid, so the comparison costs nothing during the run: cutting past that surface by more than the tolerance is reported as a gouge.'),
+        el('div.hint', {}, 'Import the finished part on Setup › Fixtures with the role Reference part.'),
       ]),
       actionRow([{ label: 'Go to fixtures', variant: 'primary', onClick: () => this.app.setPage('setup', 'fixtures') }]),
     ])];
@@ -66,7 +66,6 @@ export class ResultsPanel extends Panel {
         field('Spindle torque (N·m)', c.spindleNm, { min: 0, step: 1, onChange: (v) => app.setCutting({ spindleNm: Math.max(0, Number(v) || 0) }) }),
       ]),
       field('Deflection limit', c.maxDeflection, { min: 0, step: 0.005, unit: 'mm', onChange: (v) => app.setCutting({ maxDeflection: Math.max(0, Number(v) || 0) }) }),
-      el('div.hint', {}, 'Zero means not known; nothing is judged against a limit that is not set.'),
     ]);
 
     const rows = app.analyzer.summary(app.state.program);
@@ -74,9 +73,9 @@ export class ResultsPanel extends Panel {
       return [settings, section('Loads', [
         el('div.empty', {}, [
           el('div.empty-title', {}, app.state.program ? 'Nothing measured yet' : 'No program loaded'),
-          el('div.hint', {}, 'Loads are measured as the run cuts: press ⏭⏭ in the bar under the viewport to run the program to the end, and every feed move that meets metal is measured.'),
+          el('div.hint', {}, 'Run the program and every cutting move is measured.'),
         ]),
-      ]), this.loadsNotes()];
+      ])];
     }
 
     const toolName = (n) => {
@@ -124,7 +123,7 @@ export class ResultsPanel extends Panel {
       ]);
     });
 
-    return [settings, ...cards, this.loadsNotes()];
+    return [settings, ...cards];
   }
 
   /** Where in the run a move is, so a card can jump to it. */
@@ -135,13 +134,6 @@ export class ResultsPanel extends Panel {
     for (let k = 0; k < i && k < moves.length; k++) t += moves[k].time;
     if (moves[i]) t += moves[i].time * 0.5;
     app.seekTo(t);
-  }
-
-  loadsNotes() {
-    return section('How these are worked out', [
-      el('div.hint', {}, 'For every chunk of a feed move, before it is cut, the stock is read around the leading half of the cutter, slice by slice up the flutes: which angles have metal in them, and how high it stands. That engagement goes into the same force model as Shop-Ref — Kienzle\u2019s law for the material, the chip thickness at each angle, the helix lag, the oblique force ratios — summed over a turn of the cutter for the peak and mean forces, the torque and the power. Deflection is the tool as a stepped cantilever from the holder face.'),
-      el('div.hint', {}, 'Assumed: sharp edges, a rigid machine, no runout. A cutter\u2019s helix and rake are its own where its definition gives them, and otherwise 35° and the usual rake for the material. Plunges are read as drilling, which is an approximation. Tilted 5-axis cuts are not measured yet.'),
-    ]);
   }
 
   statsSection() {

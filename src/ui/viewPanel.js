@@ -206,11 +206,23 @@ export class ViewPanel extends Panel {
   inspectPage() {
     const app = this.app;
     const d = app.state.display;
+    const axisButton = (a) => el(`button.btn${d.sectionAxis === a ? '.active' : ''}`, {
+      type: 'button',
+      onclick: () => { app.setDisplay({ sectionAxis: a }); this.render(); },
+    }, a.toUpperCase());
     const out = [section('Inspect', [
-      this.slider('Section view', d.sectionPct, {
+      el('div.section-row', {}, [
+        el('span.field-label', {}, 'Section'),
+        el('div.btn-group.compact', {}, ['x', 'y', 'z'].map(axisButton)),
+        el(`button.btn.compact${d.sectionFlip ? '.active' : ''}`, {
+          type: 'button',
+          title: 'Keep the other side',
+          onclick: () => { app.setDisplay({ sectionFlip: !d.sectionFlip }); this.render(); },
+        }, 'Flip'),
+      ]),
+      this.slider('Plane', d.sectionPct, {
         min: 0, max: 100, step: 0.5, format: (v) => (v >= 100 ? 'off' : `${v.toFixed(0)}%`),
       }, (v) => app.setDisplay({ sectionPct: v })),
-      el('div.hint', {}, 'Clips the stock above a height so you can see into deep pockets.'),
       this.slider('Tool opacity', d.toolOpacity, {
         min: 0.1, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%`,
       }, (v) => app.setDisplay({ toolOpacity: v })),
@@ -223,14 +235,6 @@ export class ViewPanel extends Panel {
       ]),
     ])];
 
-    const st = app.stock;
-    if (st) {
-      out.push(section('Simulation grid', [
-        el('div.hint', { html: `<b>${st.nx} × ${st.ny}</b> = ${(st.cellCount / 1e6).toFixed(2)} M columns · cell ${units.lenU(st.dx, 3)}` }),
-        el('div.hint', { html: `Display mesh reduced ${app.stockView.renderStep}× to ${app.stockView.gridSize ? app.stockView.gridSize.join(' × ') : '–'} texels.` }),
-        el('div.hint', {}, 'Resolution is set on Setup › Stock, because it is a property of the block rather than of the view.'),
-      ]));
-    }
     return out;
   }
 }

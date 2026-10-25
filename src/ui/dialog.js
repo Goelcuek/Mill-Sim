@@ -6,7 +6,7 @@
 // Enter commits from any single-line field, and focus lands on the first
 // control so the keyboard works without reaching for the mouse.
 
-import { el, clear, button } from './dom.js';
+import { el, clear, button, foldHints } from './dom.js';
 
 let openCount = 0;
 
@@ -40,7 +40,7 @@ export class Dialog {
       style: opts.width ? { width: `${opts.width}px` } : null,
     }, [
       el('header.dialog-head', {}, [
-        el('div.dialog-titles', {}, [
+        this.titles = el('div.dialog-titles', {}, [
           el('div.dialog-title', {}, opts.title),
           opts.subtitle ? el('div.dialog-subtitle', {}, opts.subtitle) : null,
         ]),
@@ -50,6 +50,7 @@ export class Dialog {
       footer,
     ]);
     this.backdrop.appendChild(this.window);
+    this.helpToggle = foldHints(body, this.titles.firstChild);
 
     this.onKey = (e) => {
       if (e.key === 'Escape') {
@@ -106,6 +107,8 @@ export class Dialog {
     const body = this.window.querySelector('.dialog-body');
     clear(body);
     for (const n of Array.isArray(content) ? content : [content]) if (n) body.appendChild(n);
+    if (this.helpToggle) this.helpToggle.remove();
+    this.helpToggle = foldHints(body, this.titles.firstChild);
   }
 
   static get openCount() { return openCount; }

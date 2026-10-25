@@ -161,6 +161,36 @@ export function row(children, cls = '') {
   return el(`div.row${cls ? `.${cls}` : ''}`, {}, children);
 }
 
+/** Hint text longer than this is an explanation, not a status. */
+const FOLD_AT = 80;
+
+/**
+ * Put a container's explanations out of the way: every hint long enough
+ * to be one goes into a single help block, shut, opened by a small "i"
+ * placed in `head`. Short hints — a status, a file name, a count — stay
+ * where they are, as do the words of an empty state and any marked .keep.
+ * Returns the ⓘ button, or null when there was nothing to fold.
+ */
+export function foldHints(body, head) {
+  const prose = [...body.querySelectorAll('.hint')].filter((n) => !n.closest('.keep, .empty, .list, .help')
+    && (n.textContent || '').length > FOLD_AT);
+  if (!prose.length) return null;
+  const help = el('div.help', {}, prose);
+  help.hidden = true;
+  body.insertBefore(help, body.firstChild);
+  const toggle = el('button.help-toggle', {
+    type: 'button',
+    title: 'About this',
+    onclick: (e) => {
+      e.stopPropagation();
+      help.hidden = !help.hidden;
+      toggle.classList.toggle('on', !help.hidden);
+    },
+  }, 'i');
+  head.appendChild(toggle);
+  return toggle;
+}
+
 export function section(title, children, opts = {}) {
   const body = el('div.section-body', {}, children);
   const head = el('div.section-head', {
@@ -168,7 +198,9 @@ export function section(title, children, opts = {}) {
       body.classList.toggle('collapsed');
       head.classList.toggle('collapsed');
     },
-  }, [el('span.caret', {}, '▾'), el('span', {}, title), opts.aside || null]);
+  }, [el('span.caret', {}, '▾'), el('span', {}, title)]);
+  foldHints(body, head);
+  if (opts.aside) head.appendChild(opts.aside);
   if (opts.collapsed) {
     body.classList.add('collapsed');
     head.classList.add('collapsed');

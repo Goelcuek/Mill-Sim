@@ -165,9 +165,10 @@ export class SetupPanel extends Panel {
       if (!st) { info.textContent = ''; return; }
       const asked = app.state.stock.resolution;
       const unit = st.kind === 'tridexel' ? 'line' : 'column';
+      // Only worth saying when it is not what was asked for.
       info.innerHTML = st.cell > asked * 1.05
-        ? `Asked for <b>${units.lenU(asked, 3)}</b> cells; this block needs more ${unit}s than the memory budget allows, so it is simulated at <b>${units.lenU(st.cell, 3)}</b>.`
-        : `Simulated at <b>${units.lenU(st.cell, 3)}</b> per ${unit}.`;
+        ? `Too many ${unit}s for the memory budget: simulated at <b>${units.lenU(st.cell, 3)}</b>.`
+        : '';
     };
     updateInfo();
 

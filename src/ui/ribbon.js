@@ -111,7 +111,7 @@ export class Ribbon {
           title: page.hint || page.label,
           onclick: () => this.go(tab.id, page.id),
         }, [
-          icon(page.icon || 'point', 22),
+          icon(page.icon || 'point', 18),
           el('span.ribbon-page-label', {}, page.label),
           // A count belongs on the page that holds the things it counts, so
           // the ribbon can say how many without offering to change anything.

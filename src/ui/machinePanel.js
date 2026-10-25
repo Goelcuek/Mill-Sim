@@ -147,7 +147,7 @@ export class MachinePanel extends Panel {
       return [section('Jog', [
         el('div.empty', {}, [
           el('div.empty-title', {}, 'No axes to move'),
-          el('div.hint', {}, 'This machine is a base and nothing else. Add axes on the Axes page and they appear here.'),
+          el('div.hint', {}, 'Add axes on the Axes page.'),
         ]),
       ])];
     }
@@ -616,7 +616,7 @@ export class MachinePanel extends Panel {
     if (!app.machineParts.parts.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'Nothing imported yet'),
-        el('div.hint', {}, 'Bring in the machine as STL bodies — a base, a saddle, a table, a head — then put each one on the axis that carries it. A body on the base never moves; a body on X rides the X slide. Until then each axis draws a plain proxy.'),
+        el('div.hint', {}, 'Import the machine as STL bodies, then put each on the axis that carries it.'),
       ]));
     }
     for (const part of app.machineParts.parts) {
@@ -935,7 +935,7 @@ export class MachinePanel extends Panel {
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'Nothing in the machine'),
-        el('div.hint', {}, 'Files that stay on the control between jobs — probing cycles, pallet routines, the builder\u2019s own programs. Any program loaded on this machine can call them with M98, without carrying a copy. Subprograms that belong to one job go on Program \u203a Programs instead.'),
+        el('div.hint', {}, 'Files kept on the control between jobs, callable with M98 from any program.'),
       ]));
     }
 

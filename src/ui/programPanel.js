@@ -236,7 +236,7 @@ export class ProgramPanel extends Panel {
     if (!subs.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'No subprograms'),
-        el('div.hint', {}, 'A post that writes M98 P1000 expects a file called O1000 to sit beside the program; one that writes a name expects a file with that name. Open those files here and the calls resolve. A subprogram that lives in the machine rather than with the job belongs on Machine \u203a Macros instead.'),
+        el('div.hint', {}, 'Open the files the program calls: M98 P1000 finds O1000, a call by name finds that name.'),
       ]));
     }
 
@@ -259,18 +259,15 @@ export class ProgramPanel extends Panel {
       ]));
     }
 
-    const out = [bar, el('div.list-host', {}, [
-      list,
-      el('div.hint', {}, 'Call one by the O word at the top of it — M98 P1000 — or by its name, which is what most controls outside Fanuc read. Rename a file and the calls that use its name follow it.'),
-    ])];
+    const host = el('div.list-host', {}, [list]);
+    const out = [bar, host];
 
     const sub = this.sub;
     if (this.subId === null) {
-      out.push(actionRow([
+      host.appendChild(actionRow([
         { label: 'Open the main program', variant: 'primary', onClick: () => this.app.setPage('program', 'editor') },
         { label: 'Save', onClick: () => this.saveFile() },
       ]));
-      out.push(el('div.hint', {}, 'The main program is edited on its own page, which follows the run: step into a subprogram and that file is what the page shows.'));
     }
     if (sub) {
       if (!this.subEditor) {
@@ -478,7 +475,6 @@ export class ProgramPanel extends Panel {
     const ex = EXAMPLES[index];
     if (!ex) return;
     try {
-      app.notify(`Loading ${ex.name}…`, 'info');
       const code = await loadExample(ex);
       this.setText(code);
       if (ex.setup) app.applyExampleSetup(ex.setup);

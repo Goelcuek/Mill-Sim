@@ -63,7 +63,8 @@ export class DexelSurface {
       uCutColor: { value: colors.cutColor },
       uToolColors: { value: colors.toolColors.slice(0, MAX_TOOL_COLORS) },
       uShowTools: { value: 1 },
-      uSectionZ: { value: 1e9 },
+      uSectionN: { value: new THREE.Vector3(0, 0, 1) },
+      uSectionD: { value: 1e9 },
       uCapColor: { value: colors.capColor || new THREE.Color('#c4705a') },
       uDevMode: { value: 0 },
       uDevTol: { value: 0.02 },
@@ -98,17 +99,18 @@ export class DexelSurface {
           flat varying float vWho;
           varying float vDev;
           flat varying float vDevOn;
-          varying float vWorkZ;
+          varying vec3 vWorkPos;
           varying vec3 vCapNormal;
+          uniform vec3 uSectionN;
         `)
         .replace('#include <begin_vertex>', `
           #include <begin_vertex>
           vWho = aWho;
           vDev = aDev;
           vDevOn = aDevOn;
-          vWorkZ = position.z;
-          // Straight up in the stock's own frame: the section's cut face.
-          vCapNormal = normalize( normalMatrix * vec3( 0.0, 0.0, 1.0 ) );
+          vWorkPos = position;
+          // The section's cut face, facing out of what is kept.
+          vCapNormal = normalize( normalMatrix * uSectionN );
         `);
       shader.fragmentShader = shader.fragmentShader
         .replace('#include <common>', `
@@ -117,7 +119,8 @@ export class DexelSurface {
           uniform vec3 uCutColor;
           uniform vec3 uToolColors[ ${MAX_TOOL_COLORS} ];
           uniform float uShowTools;
-          uniform float uSectionZ;
+          uniform vec3 uSectionN;
+          uniform float uSectionD;
           uniform vec3 uCapColor;
           uniform float uDevMode;
           uniform float uDevTol;
@@ -125,7 +128,7 @@ export class DexelSurface {
           flat varying float vWho;
           varying float vDev;
           flat varying float vDevOn;
-          varying float vWorkZ;
+          varying vec3 vWorkPos;
           varying vec3 vCapNormal;
 
           // As on the heightmap: within tolerance green, material left pale
@@ -140,7 +143,7 @@ export class DexelSurface {
         `)
         .replace('#include <color_fragment>', `
           #include <color_fragment>
-          if ( vWorkZ > uSectionZ ) discard;
+          if ( dot( vWorkPos, uSectionN ) > uSectionD ) discard;
           vec3 surface = uStockColor;
           float tinted = 0.0;
           if ( !gl_FrontFacing ) {
@@ -332,13 +335,23 @@ export class DexelSurface {
   }
 
   /**
-   * Clip everything above `z`. A closed surface cut open shows its own
-   * inside, which is drawn as the cut face — so both sides are drawn while
-   * there is a section, and only the outside when there is not.
+   * Cut the part open on a plane square to an axis: {axis, value, flip},
+   * or null. A closed surface cut open shows its own inside, which is drawn
+   * as the cut face — so both sides are drawn while there is a section, and
+   * only the outside when there is not.
    */
-  setSection(z) {
-    this.uniforms.uSectionZ.value = z === null ? 1e9 : z;
-    const side = z === null ? THREE.FrontSide : THREE.DoubleSide;
+  setSection(plane) {
+    const n = [0, 0, 1];
+    let d = 1e9;
+    if (plane) {
+      const sign = plane.flip ? -1 : 1;
+      n[0] = n[1] = n[2] = 0;
+      n[plane.axis] = sign;
+      d = sign * plane.value;
+    }
+    this.uniforms.uSectionN.value.set(n[0], n[1], n[2]);
+    this.uniforms.uSectionD.value = d;
+    const side = plane ? THREE.DoubleSide : THREE.FrontSide;
     if (this.material.side !== side) {
       this.material.side = side;
       this.material.needsUpdate = true;
