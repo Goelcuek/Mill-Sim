@@ -425,7 +425,13 @@ export class Simulator {
       const dir = this.onPart(axis, index);
       return { tip: this.downTool(this.onPart(point, index), dir, mv, u), dir, index };
     }
-    const r = k.toolInPart({ X: point[0], Y: point[1], Z: point[2], ...rot }, gauge);
+    // Without TCP the linear axes stand where the program sent them,
+    // measured as a control measures them — with a work offset and a tool
+    // length set with every rotary at zero, so the tip is on the programmed
+    // point there. The rotaries then turn the part about their own pivots,
+    // wherever the part sits on the table, and the axes do not follow.
+    const axes = k.linearsForTip(point, {}, gauge) || { X: point[0], Y: point[1], Z: point[2] };
+    const r = k.toolInWork({ ...axes, ...rot }, gauge);
     const spin = chainSpins ? 0 : index;
     const dir = this.onPart(r.axis, spin);
     return { tip: this.downTool(this.onPart(r.tip, spin), dir, mv, u), dir, index };
@@ -495,6 +501,63 @@ export class Simulator {
   }
 
   /**
+   * A tip on the part, back in the frame the chain solves in: undoing an
+   * index the chain does not model, which is the one turn it cannot see.
+   */
+  coordTip(pose, mv, u) {
+    const idx = this.indexer;
+    if (!idx || idx.inChain) return pose.tip;
+    const index = this.indexAt(mv, u);
+    return index ? spinZ(pose.tip, index) : pose.tip;
+  }
+
+  /**
+   * Does this stretch of a move turn the part without TCP? Then the tip
+   * goes round the pivot on an arc, and the poses between its ends have to
+   * be asked for rather than drawn as a straight line — a chord across a
+   * quarter turn of the table cuts through whatever is inside the arc.
+   */
+  swingsWithoutTcp(mv, u0, u1) {
+    if (!this.fiveAxis || mv.tcp) return false;
+    const a = this.rotaryAt(mv, u0);
+    const b = this.rotaryAt(mv, u1);
+    for (const k in b) if (Math.abs((b[k] || 0) - (a[k] || 0)) > 1e-9) return true;
+    return false;
+  }
+
+  /** n poses between two ends of a swing, each where the machine puts it: [tip, dir, point, u]. */
+  posesAlong(mv, from, to, u0, u1, n) {
+    const out = [];
+    for (let i = 1; i <= n; i++) {
+      const t = i / n;
+      const point = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t];
+      const u = u0 + (u1 - u0) * t;
+      const pose = this.poseAt(mv, point, u);
+      out.push([pose.tip, pose.dir, point, u]);
+    }
+    return out;
+  }
+
+  /**
+   * The point the travel envelope is checked at, in the same terms as a
+   * three-axis machine: where the gauge line would be for these linear
+   * axes with every rotary at zero. A rotary turning the part does not
+   * move a linear axis, so it does not move this either — reading the
+   * envelope off the tool on the turned part had a trunnion swing run Y
+   * off its travel without Y moving at all.
+   */
+  envelopePoint(mv, tip, dir, point, u) {
+    const gauge = this.gaugeLength;
+    if (!this.fiveAxis) return this.gaugePoint(tip, dir);
+    if (!mv.tcp && point) return [point[0], point[1], point[2] + gauge];
+    const k = this.kinematics;
+    const axes = k.linearsForTip(this.coordTip({ tip }, mv, u), this.rotaryAt(mv, u), gauge);
+    if (!axes) return this.gaugePoint(tip, dir);
+    const flat = k.toolInWork({ X: axes.X, Y: axes.Y, Z: axes.Z }, gauge).tip;
+    return [flat[0], flat[1], flat[2] + gauge];
+  }
+
+  /**
    * Where the machine is right now: axis positions for the rig, and the
    * tool on the part for the viewport.
    *
@@ -517,12 +580,19 @@ export class Simulator {
     const u = Math.max(0, Math.min(1, this.u || 0));
     const rot = this.rotaryAt(mv, u);
     const pose = this.poseAt(mv, point, u);
+    const k = this.kinematics;
+    const gauge = this.gaugeLength;
     let values = { ...rot, X: point[0], Y: point[1], Z: point[2] };
+    // Where the linear axes really are, from home: what the rig is drawn at.
+    let axes = mv.tcp ? null : k.linearsForTip(point, {}, gauge);
     if (mv.tcp) {
-      const sol = this.kinematics.linearsForTip(pose.tip, rot, this.gaugeLength);
-      if (sol) values = { ...rot, ...sol };
+      axes = k.linearsForTip(this.coordTip(pose, mv, u), rot, gauge);
+      // Read out as the program counts them: from the work offset, so with
+      // the rotaries at zero they are the programmed point.
+      const zero = k.linearsForTip([0, 0, 0], {}, gauge);
+      if (axes && zero) values = { ...rot, X: axes.X - zero.X, Y: axes.Y - zero.Y, Z: axes.Z - zero.Z };
     }
-    return { values, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0 };
+    return { values, axes: axes ? { ...rot, ...axes } : null, gauge, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0 };
   }
 
   /** True when the tool stands close enough to vertical to sweep normally. */
@@ -655,7 +725,7 @@ export class Simulator {
     const poseB = this.poseAt(mv, to, u1);
     const tilted = !this.isUpright(poseA.dir) || !this.isUpright(poseB.dir);
     const [x, y, z] = poseB.tip;
-    const poses = this.probePoses(poseA, poseB);
+    const poses = this.probePoses(poseA, poseB, mv, from, to, u0, u1);
 
     if (stock) {
       const opts = { target: this.target, tolerance: this.gougeTolerance };
@@ -674,7 +744,7 @@ export class Simulator {
         removed = result.volume;
         gouged = result.gouge;
       } else {
-        for (const [tip, dir] of this.stamps(poseA, poseB, slot)) {
+        for (const [tip, dir] of this.stamps(poseA, poseB, slot, mv, from, to, u0, u1)) {
           const result = stock.carveTilted(slot.built.cutEnvelope, tip, dir, slot.built.fluteLength, slot.index, opts);
           removed += result.volume;
           if (result.gouge && (!gouged || result.gouge.depth > gouged.depth)) gouged = result.gouge;
@@ -753,7 +823,7 @@ export class Simulator {
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
 
-    for (const [tip, dir] of poses) {
+    for (const [tip, dir, point, u] of poses) {
       if (this.fixtures && this.fixtures.length) {
         const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
         if (f && f.gap < 0) {
@@ -798,7 +868,7 @@ export class Simulator {
         // is the gauge line, a gauge length up the tool from the tip, which
         // is the same point G53 reads: an envelope is how far the axis goes,
         // and it does not move when a longer tool goes in the spindle.
-        const lim = checkLimits(this.gaugePoint(tip, dir), limitsInScene(this.machine), homeOf(this.machine));
+        const lim = checkLimits(this.envelopePoint(mv, tip, dir, point, u), limitsInScene(this.machine), homeOf(this.machine));
         if (lim) {
           this.report('limit', {
             line: mv.line,
@@ -840,7 +910,7 @@ export class Simulator {
    * The spacing is a fraction of the cutter radius, which is what decides
    * how quickly the footprint moves off itself.
    */
-  stamps(poseA, poseB, slot) {
+  stamps(poseA, poseB, slot, mv = null, from = null, to = null, u0 = 1, u1 = 1) {
     const dx = poseB.tip[0] - poseA.tip[0];
     const dy = poseB.tip[1] - poseA.tip[1];
     const dz = poseB.tip[2] - poseA.tip[2];
@@ -864,6 +934,8 @@ export class Simulator {
     // swings, so the swing gets a say in the count as well.
     const arc = swing * Math.max(slot.built.fluteLength, r);
     const n = Math.max(1, Math.min(4096, Math.ceil(Math.max(len, arc) / spacing)));
+    // Turning the part without TCP: the cut follows the tip round its arc.
+    if (mv && from && to && this.swingsWithoutTcp(mv, u0, u1)) return this.posesAlong(mv, from, to, u0, u1, n);
 
     const out = [];
     for (let i = 1; i <= n; i++) {
@@ -886,16 +958,24 @@ export class Simulator {
    *
    * @returns {Array<[number[], number[]]>} [tip, tool axis] pairs
    */
-  probePoses(poseA, poseB) {
+  probePoses(poseA, poseB, mv = null, from = null, to = null, u0 = 1, u1 = 1) {
     const tips = this.probePoints(poseA.tip, poseB.tip);
-    if (!this.fiveAxis) return tips.map((t) => [t, UP]);
+    const ends = (t) => (from && to ? [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t, from[2] + (to[2] - from[2]) * t] : null);
+    if (!this.fiveAxis) return tips.map((t, i) => [t, UP, ends((i + 1) / tips.length), u0 + (u1 - u0) * ((i + 1) / tips.length)]);
 
     const swing = Math.acos(Math.max(-1, Math.min(1, poseA.dir[0] * poseB.dir[0]
       + poseA.dir[1] * poseB.dir[1] + poseA.dir[2] * poseB.dir[2])));
     // How far the far end of the assembly travels on that swing. The tool
     // is the thing being swung, so its own length is the lever arm.
     const reach = this.activeSlot ? this.activeSlot.built.totalLength : 0;
-    const n = Math.max(tips.length, Math.min(512, Math.ceil((swing * reach) / this.probeSpacing)));
+    let n = Math.max(tips.length, Math.min(512, Math.ceil((swing * reach) / this.probeSpacing)));
+    // Turning the part without TCP takes the tip round an arc as long as
+    // its distance from the pivot; each pose is where the machine puts it.
+    if (mv && from && to && this.swingsWithoutTcp(mv, u0, u1)) {
+      const arc = Math.hypot(poseB.tip[0] - poseA.tip[0], poseB.tip[1] - poseA.tip[1], poseB.tip[2] - poseA.tip[2]) * (swing > 1e-9 ? swing / (2 * Math.sin(swing / 2) || 1) : 1);
+      n = Math.max(n, Math.min(512, Math.ceil(arc / this.probeSpacing)));
+      return this.posesAlong(mv, from, to, u0, u1, n);
+    }
     const out = [];
     for (let i = 1; i <= n; i++) {
       const t = i / n;
@@ -906,6 +986,8 @@ export class Simulator {
           poseA.tip[2] + (poseB.tip[2] - poseA.tip[2]) * t,
         ],
         slerp(poseA.dir, poseB.dir, t),
+        ends(t),
+        u0 + (u1 - u0) * t,
       ]);
     }
     return out;

@@ -477,7 +477,11 @@ export class ProgramPanel extends Panel {
     try {
       const code = await loadExample(ex);
       this.setText(code);
-      if (ex.setup) app.applyExampleSetup(ex.setup);
+      // The new program first: setting up the example's machine re-reads
+      // whatever is loaded, and the last example read on a new control is a
+      // warning about a program nobody is looking at any more.
+      app.state.source = code;
+      app.applyExampleSetup(ex.setup || {});
       app.loadProgram(code, `${ex.name}.nc`);
       app.setPage('program', 'editor');
       app.notify(ex.description, 'ok');

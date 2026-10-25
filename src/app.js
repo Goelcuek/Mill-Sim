@@ -2056,6 +2056,15 @@ export class App {
   }
 
   applyExampleSetup(setup) {
+    // An example is written for one control, and one that does not name it
+    // is a Fanuc program — whatever control the last example asked for. Read
+    // on the Fidia the example before left behind, the five-axis demo was
+    // a page of errors and an offer to switch back.
+    const named = setup.machine && setup.machine.controller;
+    const c = this.state.machine.controller;
+    if (!named && c.flavour !== 'fanuc') {
+      this.setMachine({ controller: { ...c, flavour: 'fanuc', dialect: FLAVOUR_DIALECT.fanuc, syntax: null } });
+    }
     // The machine comes first: changing the chain reloads the program, and
     // the stock has to be the right size before that runs.
     if (setup.machine) {
@@ -2462,7 +2471,11 @@ export class App {
     this.pause();
     const kin = this.machineView.kinematics;
     const pose = this.state.program ? this.simulator.currentPose() : this.parkPose();
-    const from = { ...(pose.rot || {}), ...(pose.values || {}) };
+    // The axes as the machine has them — not the programmed point, which
+    // under a work offset or TCP is a different number.
+    const kin0 = this.machineView.kinematics;
+    const axes = pose.axes || kin0.linearsForTip(pose.tip, pose.rot || {}, this.simulator.gaugeLength || 0);
+    const from = { ...(pose.rot || {}), ...(axes || pose.values || {}) };
     const values = {};
     for (const node of kin.axes()) {
       values[node.letter] = Number((Number(from[node.letter]) || 0).toFixed(4));
@@ -2575,8 +2588,13 @@ export class App {
     const kin = this.machineView.kinematics;
     const gauge = this.simulator.gaugeLength || 0;
     const home = homeOf(this.state.machine);
-    const r = kin.toolInPart(values, this.machineView.assemblyLength);
-    return [0, 1, 2].map((i) => r.tip[i] + r.axis[i] * gauge - home[i]);
+    // The linear axes alone: a rotary turns the part, not the slides, and
+    // the envelope is how far the slides go. Counted the way the run counts
+    // it — see Simulator.envelopePoint — so a jog and a program agree.
+    const lin = {};
+    for (const n of kin.axes()) if (n.kind === 'linear') lin[n.letter] = values[n.letter] || 0;
+    const tip = kin.toolInWork(lin, gauge).tip;
+    return [tip[0] - home[0], tip[1] - home[1], tip[2] + gauge - home[2]];
   }
 
   /**
@@ -2589,10 +2607,11 @@ export class App {
    */
   jogPose() {
     const kin = this.machineView.kinematics;
-    const r = kin.toolInPart(this.jog, this.machineView.assemblyLength);
+    const gauge = this.simulator.gaugeLength || 0;
+    const r = kin.toolInWork(this.jog, gauge);
     const rot = {};
     for (const node of kin.extras()) rot[node.letter] = this.jog[node.letter] || 0;
-    return { values: { ...this.jog }, tip: r.tip, dir: r.axis, rot };
+    return { values: { ...this.jog }, axes: { ...this.jog }, gauge, tip: r.tip, dir: r.axis, rot };
   }
 
   /**

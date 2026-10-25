@@ -623,3 +623,53 @@ test('on a machine whose A and C are its own axes, a turn is counted once', () =
   assert.ok(Math.abs(swing.time - 0.25) < 1e-9, `G0 A30 at 7200°/min: ${swing.time}`);
   assert.ok(Math.abs(feed.time - 3) < 1e-9, `G1 C90 F1800: ${feed.time}`);
 });
+
+import { DEFAULT_MACHINE } from '../src/machine/config.js';
+
+test('a trunnion swung on its own turns the part: the slides stay, the tool stays, nothing is hit', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  const run = (code) => {
+    const p = interpret(code, { kinematics: kin });
+    const sim = new Simulator();
+    sim.load({ program: p, stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE });
+    return { p, sim };
+  };
+  const { p, sim } = run('G90\nG0 X0 Y0 Z150\nA-90\nM30');
+  const g = tool.gaugeLength;
+  // Before and after the swing, and half way: the linear axes are where
+  // they were, and the tip, carried back out of the turned part into the
+  // machine, has not moved — the table went round under it.
+  const world = [];
+  const axes = [];
+  const swing = p.moves.findIndex((m) => m.rotTo.A === -90);
+  const t0 = p.moves.slice(0, swing).reduce((a, m) => a + m.time, 0);
+  for (const f of [0.001, 0.5, 1]) {
+    sim.reset();
+    sim.seek(t0 + p.moves[swing].time * f, 1e9);
+    const pose = sim.currentPose();
+    axes.push(pose.axes);
+    const r = kin.toolInWork({ ...pose.axes }, g);
+    kin.solve({ ...pose.axes });
+    world.push(m4.transformPoint([0, 0, 0], kin.matrixOf(kin.workNode), pose.tip.map((v, i) => v + kin.tableOffset[i])));
+    assert.ok(Math.hypot(r.tip[0] - pose.tip[0], r.tip[1] - pose.tip[1], r.tip[2] - pose.tip[2]) < 1e-9, 'the tip is where the axes put it');
+  }
+  for (const a of axes.slice(1)) {
+    for (const L of ['X', 'Y', 'Z']) assert.ok(Math.abs(a[L] - axes[0][L]) < 1e-9, `${L} moved: ${axes[0][L]} → ${a[L]}`);
+  }
+  for (const w of world.slice(1)) assert.ok(Math.hypot(w[0] - world[0][0], w[1] - world[0][1], w[2] - world[0][2]) < 1e-6, `the tool moved in the machine: ${world[0]} → ${w}`);
+  assert.equal(p.moves[p.moves.length - 1].rotTo.A, -90);
+  sim.reset();
+  sim.runAll();
+  // Nothing on the swing: no travel tripped by a slide that never moved,
+  // no table under a tool the table turned away from.
+  const onSwing = sim.collisions.filter((c) => c.line === p.moves[swing].line);
+  assert.deepEqual(onSwing.map((c) => c.message), [], 'a swing well clear of everything');
+  // Lower the tool until the table's edge, swinging up, really does meet
+  // it: that one is a crash, and it is reported as one.
+  const low = run('G90\nG0 X0 Y0 Z60\nA-90\nM30').sim;
+  low.runAll();
+  assert.ok(low.collisions.some((c) => /table/.test(c.message) && c.line === 3), 'the table edge swings through a low tool');
+});

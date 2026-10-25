@@ -436,6 +436,7 @@ try {
       const st = app.stock;
       return {
         kind: st.kind,
+        dialect: app.state.machine.controller.dialect,
         removed: app.simulator.removedVolume,
         findings: app.simulator.collisions.length,
         errors: app.state.program.warnings.filter((w) => w.severity === 'error').length,
@@ -449,6 +450,7 @@ try {
     });
     console.log('side holes:', JSON.stringify(side));
     check(side.kind === 'tridexel', 'the side-hole example did not switch the stock to Full 3D');
+    check(side.dialect === 'fanuc', `a Fanuc example after the Fidia one should be read on a Fanuc: ${side.dialect}`);
     check(side.errors === 0 && side.findings === 0, 'the side-hole example should run clean');
     check(side.overHole.length === 2 && Math.abs(side.overHole[0][1] + 20) < 0.05 && Math.abs(side.overHole[1][0] + 10) < 0.05,
       `the Z line over the second side hole should have metal under and over it: ${JSON.stringify(side.overHole)}`);

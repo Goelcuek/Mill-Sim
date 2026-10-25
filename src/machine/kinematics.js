@@ -335,7 +335,10 @@ export class Kinematics {
   }
 
   /**
-   * The tool expressed in workpiece coordinates.
+   * The tool expressed in workpiece coordinates: measured from the fixture
+   * face the part sits on, in the frame that turns with it — so a rotary
+   * turns the part about the axis it really turns about, and linearsForTip
+   * is its exact inverse.
    *
    * @param {Record<string, number>} values
    * @param {number} [gaugeLength] tip distance below the spindle gauge line

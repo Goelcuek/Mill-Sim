@@ -253,7 +253,10 @@ export function checkTable(spheres, tip, table, clearance = 0, dir = UP) {
   // tip is: leaned over, the holder can be past the edge of the table
   // while the tip is over it, and the other way about.
   const consider = (x, y, bottom, localZ) => {
-    if (x < xMin || x > xMax || y < yMin || y > yMax) return;
+    // On the edge of the table is beside it, not over it: a tool laid flat
+    // against the table's side face touches it and is not in it.
+    const e = 1e-6;
+    if (x <= xMin + e || x >= xMax - e || y <= yMin + e || y >= yMax - e) return;
     const gap = bottom - z;
     if (gap < want && (!worst || gap < worst.gap)) {
       worst = { gap, clearance: want, depth: Math.max(-gap, 0), z: bottom, localZ, x, y };

@@ -25,6 +25,8 @@ import { DEFAULT_PARAMETERS, defaultMacros } from '../machine/macros.js';
 import { DEFAULT_MACHINE, MACHINE_SETTINGS, limitsInScene } from '../machine/config.js';
 import { resolveDialect } from '../gcode/dialects.js';
 
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+
 export { DEFAULT_MACHINE, MACHINE_SETTINGS };
 
 // Darker than the part and the stock on purpose: the machine is scenery,
@@ -460,9 +462,23 @@ export class MachineView {
     // Z axis has to stand a whole gauge length higher. Solving for the
     // axis positions is what keeps the castings around the tool instead of
     // through it, and it is exact.
+    //
+    // The run hands over the axes it worked the tip out from, and those are
+    // drawn as they are: a rotary swung on its own moves the rotary and
+    // nothing else. A pose with only a tip is solved for with the same tool
+    // length the run uses, turned by any index the chain does not model.
+    // Solving with the assembly's length instead was a constant error with
+    // every rotary at zero and a slide across the table as soon as one
+    // turned, which looked like TCP on a machine that had none.
     const rot = p.rot || {};
-    const lin = kin.linearsForTip(p.tip, rot, this.assemblyLength);
-    kin.solve(lin ? { ...rot, ...lin } : (p.values || {}));
+    if (p.axes) {
+      kin.solve({ ...rot, ...p.axes });
+    } else {
+      const gauge = p.gauge > 0 ? p.gauge : (this.gaugeLength > 0 ? this.gaugeLength : this.assemblyLength);
+      const t = new THREE.Vector3(p.tip[0], p.tip[1], p.tip[2]).applyAxisAngle(Z_AXIS, this.partGroup.rotation.z);
+      const lin = kin.linearsForTip([t.x, t.y, t.z], rot, gauge);
+      kin.solve(lin ? { ...rot, ...lin } : (p.values || {}));
+    }
     const tmp = new THREE.Matrix4();
     for (const node of kin.order) {
       const g = this.nodeGroups.get(node.id);

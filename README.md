@@ -789,13 +789,16 @@ silently ignored.
   beneath rather than report material gone that is still there, which is the
   honest failure of the two. On the five-axis example's swarf pass that is
   about 6 % of the metal; Full 3D removes it.
-- **Non-TCP five-axis programs assume the part zero is at the machine's home
-  tip.** Without `G43.4` the programmed X/Y/Z are axis positions, and turning
-  those into a point on the part needs the work offset and the tool length
-  that the control holds. Mill-Sim ties the two frames together at the
-  machine's home position, where the programmed point and the tool tip
-  coincide by definition. Under `G43.4`/`G43.5` there is nothing to assume:
-  the programmed point is the tip.
+- **Non-TCP five-axis programs assume the work offset was set with every
+  rotary at zero.** Without `G43.4` the programmed X/Y/Z are where the
+  linear axes go, and a rotary turns the part under them without moving
+  them — `A-90` on its own swings the trunnion and nothing else. Mill-Sim
+  measures those axes so that with the rotaries at zero the tip is on the
+  programmed point of the part, where the part is drawn on the table, and
+  the rotaries then turn it about their real pivots. A post that assumed a
+  different part zero relative to the pivot will cut somewhere else here,
+  as it would on the machine. Under `G43.4`/`G43.5` there is nothing to
+  assume: the programmed point is the tip.
 - **Cutter compensation is not applied.** The simulated path is the
   programmed centreline, which is what most posted CAM output already is.
 - **Feed rates are taken from the program**, not from any cutting model.
