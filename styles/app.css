@@ -364,6 +364,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .sidebar {
   width: var(--sidebar-w);
+  max-width: 70vw;
   flex: none;
   display: flex;
   flex-direction: column;
@@ -371,6 +372,30 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-right: 1px solid var(--line);
   min-height: 0;
 }
+
+.sidebar-splitter {
+  flex: none;
+  width: 7px;
+  margin: 0 -4px 0 -3px;
+  position: relative;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.sidebar-splitter:hover::after,
+.sidebar-splitter:focus-visible::after,
+.app.resizing .sidebar-splitter::after { background: var(--accent); }
+.sidebar-splitter:focus-visible { outline: none; }
+/* While dragging, nothing under the pointer may take it or select text. */
+.app.resizing { cursor: col-resize; user-select: none; }
+.app.resizing .main { pointer-events: none; }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
@@ -1364,12 +1389,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
     order: 2;
     display: none;
     width: 100%;
+    max-width: none;
     flex: 0 0 auto;
     height: 46dvh;
     border-right: none;
     border-top: 1px solid var(--line);
   }
   .app.panel-open .sidebar { display: flex; }
+  .sidebar-splitter { display: none; }
 
   /* The buttons on one row; the scrubber, the clock and the speed below. */
   .transport { flex-wrap: wrap; gap: 5px; padding: 5px 8px; }

@@ -448,6 +448,10 @@ its controls do carries a small **i** beside its title, and the
 explanation opens under it. Status — a file name, a count, a warning —
 is always shown.
 
+Drag the side panel's right edge to make it wider or narrower (the arrow
+keys do the same once the edge has focus); double-click the edge to put
+the width back. The width is remembered in the browser.
+
 **View › Inspect › Section** cuts the part open on a plane square to X, Y
 or Z: the slider moves the plane through the stock, and **Flip** keeps the
 other side. Both stock models are closed solids, so what shows through the

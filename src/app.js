@@ -302,6 +302,7 @@ export class App {
     this.root.appendChild(this.ribbon.root);
     this.root.appendChild(el('div.workspace', {}, [
       this.sidebar,
+      this.buildSplitter(),
       el('main.main', {}, [this.viewportHost, this.transport]),
     ]));
     this.root.appendChild(this.toast);
@@ -654,6 +655,69 @@ export class App {
   }
 
   /** A phone-sized screen, where the panel is a sheet rather than a column. */
+  /**
+   * The handle on the panel's right edge: drag it to make the panel wider
+   * or narrower, double-click it to put the width back. Like the units,
+   * the width is the reader's preference and is remembered here.
+   */
+  buildSplitter() {
+    const KEY = 'millsim.sidebarWidth';
+    const MIN = 240;
+    const max = () => Math.max(MIN, Math.min(900, window.innerWidth * 0.7));
+    const apply = (w) => {
+      if (w == null) this.root.style.removeProperty('--sidebar-w');
+      else this.root.style.setProperty('--sidebar-w', `${Math.round(Math.min(max(), Math.max(MIN, w)))}px`);
+    };
+    const save = () => {
+      try {
+        const w = this.root.style.getPropertyValue('--sidebar-w');
+        if (w) localStorage.setItem(KEY, parseInt(w, 10));
+        else localStorage.removeItem(KEY);
+      } catch { /* private window: kept until reload */ }
+    };
+    try {
+      const saved = Number(localStorage.getItem(KEY));
+      if (saved > 0) apply(saved);
+    } catch { /* private window: the default width */ }
+
+    const handle = el('div.sidebar-splitter', {
+      role: 'separator',
+      'aria-orientation': 'vertical',
+      'aria-label': 'Resize panel',
+      tabindex: '0',
+      title: 'Drag to resize · double-click to reset',
+    });
+    handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      handle.setPointerCapture(e.pointerId);
+      const left = this.sidebar.getBoundingClientRect().left;
+      this.root.classList.add('resizing');
+      const move = (ev) => apply(ev.clientX - left);
+      const up = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', up);
+        handle.removeEventListener('pointercancel', up);
+        this.root.classList.remove('resizing');
+        save();
+      };
+      handle.addEventListener('pointermove', move);
+      handle.addEventListener('pointerup', up);
+      handle.addEventListener('pointercancel', up);
+    });
+    handle.addEventListener('dblclick', () => { apply(null); save(); });
+    handle.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 64 : 16;
+      const now = this.sidebar.getBoundingClientRect().width;
+      if (e.key === 'ArrowLeft') apply(now - step);
+      else if (e.key === 'ArrowRight') apply(now + step);
+      else return;
+      e.preventDefault();
+      save();
+    });
+    return handle;
+  }
+
   narrow() {
     return typeof window !== 'undefined' && window.matchMedia
       && window.matchMedia('(max-width: 760px)').matches;
