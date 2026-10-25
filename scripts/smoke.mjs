@@ -66,7 +66,10 @@ const watch = (page) => {
 };
 const open = async () => {
   const page = watch(await browser.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true }));
-  await page.goto(`http://127.0.0.1:${PORT}/index.html`, { waitUntil: 'networkidle' });
+  // The browser here draws on the CPU, and a desktop's two and a half
+  // million triangles a frame is what made a run of this take a quarter of
+  // an hour. A phone's budget draws the same surfaces, a few lines coarser.
+  await page.goto(`http://127.0.0.1:${PORT}/index.html?tris=300000`, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => !!window.millsim, null, { timeout: 20000 });
   await page.waitForTimeout(800);
   return page;

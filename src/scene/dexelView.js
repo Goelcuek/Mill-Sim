@@ -14,9 +14,11 @@ import { pointDeviation, DEV_JUDGED } from '../sim/target.js';
 const MAX_TOOL_COLORS = 8;
 /**
  * Triangles the whole view may hold before the lattice is thinned for
- * display. A phone has a quarter of a desktop's room for them.
+ * display. A phone has a quarter of a desktop's room for them. `?tris=` in
+ * the page address sets it outright — the smoke test asks for a small one,
+ * because its browser draws on the CPU.
  */
-const TRI_BUDGET = coarsePointer() ? 600000 : 2400000;
+const TRI_BUDGET = askedBudget() || (coarsePointer() ? 600000 : 2400000);
 /**
  * Milliseconds a frame may spend remaking blocks while the run plays. The
  * rest wait for the next frame: the picture trails the cut by a frame or
@@ -25,6 +27,15 @@ const TRI_BUDGET = coarsePointer() ? 600000 : 2400000;
 const FRAME_BUDGET = 4;
 /** What a full redraw may take at once; the rest follow on idle frames. */
 const FORCE_BUDGET = 150;
+
+function askedBudget() {
+  try {
+    const n = Number(new URLSearchParams(globalThis.location && globalThis.location.search).get('tris'));
+    return n >= 10000 ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 
 function coarsePointer() {
   try {
