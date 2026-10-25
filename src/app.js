@@ -2261,10 +2261,21 @@ export class App {
       // The tool has moved, so the picture is stale whatever else happened.
       this.viewer.invalidate();
       this.showAssembly(sim.activeSlot);
-      this.stockView.sync();
+      // A full 3D stock is redrawn a few chunks at a time: playing, enough
+      // to follow the cutter; running ahead to a point nobody is watching,
+      // hardly at all — the rest comes once the run stops.
+      this.stockView.sync(false, this.state.seekTarget !== null ? 1 : 4);
       this.updateTransport();
       this._resultTick = (this._resultTick || 0) + 1;
       if (this._resultTick % 20 === 0) this.refreshResults();
+    }
+
+    // A full 3D stock draws a few chunks a frame; when the run stops, the
+    // rest are still to come, and come without anything else moving.
+    if (!worked && this.stockView.pending) {
+      // Nothing else wants this frame, so most of it goes on the picture.
+      this.stockView.sync(false, 14);
+      this.viewer.invalidate();
     }
 
     if (!worked && !redrawing) return;

@@ -424,13 +424,15 @@ export class StockView {
    * Only the dirty rectangle is reduced and uploaded, so the per-frame cost
    * tracks the size of the cut rather than the size of the stock.
    */
-  sync(force = false) {
+  sync(force = false, budget) {
     const stock = this.stock;
     if (this.cloud) {
-      if (!force && stock.version === this.lastVersion) return false;
+      // Chunks still waiting from the last frames are drawn even when
+      // nothing new was cut, so the picture catches up with the run.
+      if (!force && stock.version === this.lastVersion && !this.cloud.pending) return false;
       this.lastVersion = stock.version;
       stock.clearDirty();
-      return this.cloud.sync(force);
+      return this.cloud.sync(force, force ? Infinity : budget);
     }
     if (!stock || !this.data) return false;
     if (!force && stock.version === this.lastVersion) return false;
@@ -592,6 +594,9 @@ export class StockView {
   }
 
   setVisible(v) { this.group.visible = v; }
+
+  /** Is part of the picture still waiting to be drawn? */
+  get pending() { return !!(this.cloud && this.cloud.pending); }
 
   boundingBox() {
     if (!this.stock) return new THREE.Box3();

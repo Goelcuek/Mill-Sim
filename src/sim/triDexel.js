@@ -404,6 +404,21 @@ export class TriDexelStock extends Stock {
     const pool = F.pool;
     const who = F.who;
     if (b <= pool[o] + MIN_CUT || a >= pool[o + 2 * n - 1] - MIN_CUT) return 0;
+    // Nearly every cut takes the top off the highest stretch — a tool
+    // coming down on the material — and that is one number changed in
+    // place, not a list rebuilt.
+    {
+      const k = 2 * (n - 1);
+      const s0 = pool[o + k];
+      const e0 = pool[o + k + 1];
+      if (b >= e0 && a - s0 > SLIVER && (n === 1 || a >= pool[o + k - 1])) {
+        const removed = e0 - a;
+        if (removed <= MIN_CUT) return 0;
+        pool[o + k + 1] = a;
+        who[o + k + 1] = flag;
+        return removed;
+      }
+    }
     let m = 0;
     let removed = 0;
     for (let k = 0; k < n; k++) {
@@ -439,8 +454,12 @@ export class TriDexelStock extends Stock {
       F.off[r] = o;
       F.cap[r] = cap;
     }
-    F.pool.set(SCRATCH.subarray(0, 2 * count), o);
-    F.who.set(SCRATCH_W.subarray(0, 2 * count), o);
+    const P = F.pool;
+    const Wh = F.who;
+    for (let q = 0; q < 2 * count; q++) {
+      P[o + q] = SCRATCH[q];
+      Wh[o + q] = SCRATCH_W[q];
+    }
     F.cnt[r] = count;
     return removed;
   }
@@ -557,11 +576,17 @@ export class TriDexelStock extends Stock {
       if (pa[k] < aMin) aMin = pa[k];
       if (pa[k] > aMax) aMax = pa[k];
     }
+    // The tool is inside the cylinder of radius R round its axis, so along
+    // any direction it reaches past the axis only by R times how far that
+    // direction is from the axis — nothing at all along the axis itself.
+    // An upright cutter's side lines start at its tip, not R below it.
+    const padA = R * Math.sqrt(Math.max(0, 1 - d[a] * d[a]));
+    const padC = R * Math.sqrt(Math.max(0, 1 - d[c] * d[c]));
     // How far along the lines the tool can reach, relative to their start.
-    const reachLo = aMin - R - oa;
-    const reachHi = aMax + R - oa;
-    const j0 = Math.max(0, Math.ceil((cMin - R - oc) / dc - 0.5));
-    const j1 = Math.min(nc - 1, Math.floor((cMax + R - oc) / dc - 0.5));
+    const reachLo = aMin - padA - oa;
+    const reachHi = aMax + padA - oa;
+    const j0 = Math.max(0, Math.ceil((cMin - padC - oc) / dc - 0.5));
+    const j1 = Math.min(nc - 1, Math.floor((cMax + padC - oc) / dc - 0.5));
     if (j0 > j1) return 0;
 
     // Fixed per cut: the tool's frame against these lines.
@@ -603,8 +628,12 @@ export class TriDexelStock extends Stock {
         const n = F.cnt[r];
         if (n === 0) continue;
         const po = F.off[r];
-        // Material on this line and the tool's reach along it do not meet.
-        if (F.pool[po] > reachHi || F.pool[po + 2 * n - 1] < reachLo) continue;
+        // Material on this line and the tool's reach along it do not meet —
+        // which, after the first pass, is most lines a facing cutter crosses
+        // again: the line already ends where the tool reaches. The ends are
+        // single precision, so "where it reaches" has to allow for that or
+        // every one of them goes on to be solved and subtracted for nothing.
+        if (F.pool[po] >= reachHi - MIN_CUT || F.pool[po + 2 * n - 1] <= reachLo + MIN_CUT) continue;
         o[b] = ob + (i + 0.5) * db;
 
         let tIn;
@@ -622,7 +651,24 @@ export class TriDexelStock extends Stock {
           const pc = prof.pieces;
           tIn = Infinity;
           tOut = -Infinity;
-          for (let k = 0; k < pc.length; k += 5) {
+          if (pc.length === 5 && pc[2] === 0) {
+            // An end mill: one cylinder, the commonest cutter there is.
+            let u1 = 0;
+            let u2 = 1;
+            if (c2 > 1e-15) {
+              const disc = c1 * c1 - 4 * c2 * (c0 - R2);
+              if (disc <= 0) continue;
+              const sq = Math.sqrt(disc);
+              u1 = (-c1 - sq) / (2 * c2);
+              u2 = (-c1 + sq) / (2 * c2);
+              if (u1 < 0) u1 = 0;
+              if (u2 > 1) u2 = 1;
+              if (u1 > u2) continue;
+            } else if (c0 > R2) continue;
+            const ta = tipA + Da * u1, tb = tipA + Da * u2;
+            const lo = ta < tb ? ta : tb, hi = ta < tb ? tb : ta;
+            if (sgn > 0) { tIn = lo + pc[0]; tOut = hi + pc[1]; } else { tIn = lo - pc[1]; tOut = hi - pc[0]; }
+          } else for (let k = 0; k < pc.length; k += 5) {
             if (pc[k + 2] === 1) {
               const sc = pc[k + 4];
               BALL0[0] = A[0] + d[0] * sc; BALL0[1] = A[1] + d[1] * sc; BALL0[2] = A[2] + d[2] * sc;
