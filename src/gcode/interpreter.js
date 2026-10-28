@@ -343,7 +343,7 @@ function dist3(a, b) {
  * Flatten an arc into a polyline.
  * Returns points as a flat array [x,y,z, x,y,z, ...] including both ends.
  */
-export function flattenArc(from, to, center, plane, ccw, tolerance) {
+export function flattenArc(from, to, center, plane, ccw, tolerance, turns = 0) {
   // Axis indices for the plane: [a, b, normal]
   const ax = plane === 18 ? [2, 0, 1] : plane === 19 ? [1, 2, 0] : [0, 1, 2];
   const [ia, ib, ic] = ax;
@@ -367,12 +367,15 @@ export function flattenArc(from, to, center, plane, ccw, tolerance) {
   // the plane, so a full turn of a helix, which ends higher than it began,
   // is one too and not a sliver decided by the last bit of rounding.
   if (Math.hypot(ea - sa, eb - sb) < 1e-9) sweep = ccw ? Math.PI * 2 : -Math.PI * 2;
+  // TURN=n on a Siemens: n whole turns more before the arc ends — a helix
+  // winding down a hole, its depth shared over all of them.
+  if (turns > 0) sweep += (ccw ? 1 : -1) * Math.PI * 2 * Math.floor(turns);
 
   const tol = Math.max(tolerance, 1e-4);
   let stepAngle = 2 * Math.acos(Math.max(-1, Math.min(1, 1 - tol / r)));
   if (!Number.isFinite(stepAngle) || stepAngle <= 1e-6) stepAngle = 0.02;
   let n = Math.ceil(Math.abs(sweep) / stepAngle);
-  n = Math.max(2, Math.min(n, 4096));
+  n = Math.max(2, Math.min(n, 4096 * (1 + Math.min(Math.floor(turns), 15))));
 
   const out = new Array((n + 1) * 3);
   const dc = to[ic] - from[ic];
@@ -692,12 +695,12 @@ export function interpret(text, config = {}) {
    *   When a tilted plane is active the arc is a circle only in that plane,
    *   so it is flattened there and the polyline brought out afterwards.
    */
-  const emitArc = (line, target, center, ccw, feed, local = null) => {
+  const emitArc = (line, target, center, ccw, feed, local = null, turns = 0) => {
     const from = st.pos.slice();
     let centre = center;
     let path;
     if (local) {
-      const lp = flattenArc(local.from, local.to, local.center, st.plane, ccw, cfg.arcTolerance);
+      const lp = flattenArc(local.from, local.to, local.center, st.plane, ccw, cfg.arcTolerance, turns);
       path = new Array(lp.length);
       for (let i = 0; i < lp.length; i += 3) {
         const w = planeToWork([lp[i], lp[i + 1], lp[i + 2]]);
@@ -707,7 +710,7 @@ export function interpret(text, config = {}) {
       }
       centre = planeToWork(local.center);
     } else {
-      path = flattenArc(from, target, center, st.plane, ccw, cfg.arcTolerance);
+      path = flattenArc(from, target, center, st.plane, ccw, cfg.arcTolerance, turns);
     }
     let len = 0;
     for (let i = 3; i < path.length; i += 3) {
@@ -1149,7 +1152,17 @@ export function interpret(text, config = {}) {
     }
   };
 
-  while (pc < blocks.length) {
+  // A call written after a move in the same block — G0 X10 Y20
+  // CYCLE81(…) — made once the move is.
+  let afterCall = null;
+
+  while (pc < blocks.length || afterCall) {
+    if (afterCall) {
+      const call = afterCall;
+      afterCall = null;
+      siemensStatement(call, true);
+      continue;
+    }
     // A macro queued by the block just read runs before the next one — and
     // before the program is allowed to end, so an M30 macro can park the
     // machine on its way out.
@@ -1467,7 +1480,7 @@ export function interpret(text, config = {}) {
     const g = [];
     const m = [];
     const axis = {};
-    let f, s, t, h, d, p, q, r, l, iArc, jArc, kArc;
+    let f, s, t, h, d, p, q, r, l, iArc, jArc, kArc, cr, ar, turns;
     // SUPA: this block in machine coordinates, every frame suppressed.
     let machineCoords = !!(b.modes && b.modes.includes('SUPA'));
     let fixedPoint = 1;
@@ -1493,6 +1506,11 @@ export function interpret(text, config = {}) {
         case 'R': r = w.value; break;
         case 'L': l = w.value; break;
         case 'FP': fixedPoint = w.value; break;
+        // A Siemens arc: CR= its radius, AR= the angle it opens, TURN= the
+        // whole turns it makes before it ends.
+        case 'CR': cr = w.value; break;
+        case 'AR': ar = w.value; break;
+        case 'TURN': turns = w.value; break;
         default: break;
       }
     }
@@ -2005,7 +2023,8 @@ export function interpret(text, config = {}) {
     } else if (motion === 2 || motion === 3) {
       const ccw = motion === 3;
       const feed = st.feed > 0 ? st.feed : 100;
-      const words = { i: iArc, j: jArc, k: kArc, r };
+      const am = b.axisModes || {};
+      const words = { i: iArc, j: jArc, k: kArc, r, cr, ar, absolute: { I: am.I === 'AC', J: am.J === 'AC', K: am.K === 'AC' } };
       const tilted = st.xf && !machineCoords;
       const from = tilted ? st.tiltLocalPrev : st.pos;
       const to = tilted ? st.tiltLocal : target;
@@ -2013,9 +2032,9 @@ export function interpret(text, config = {}) {
       if (!center) {
         emitLinear(b.line, 'feed', target, feed);
       } else if (tilted) {
-        emitArc(b.line, target, center, ccw, feed, { from, to, center });
+        emitArc(b.line, target, center, ccw, feed, { from, to, center }, turns || 0);
       } else {
-        emitArc(b.line, target, center, ccw, feed);
+        emitArc(b.line, target, center, ccw, feed, null, turns || 0);
       }
     }
 
@@ -2035,13 +2054,17 @@ export function interpret(text, config = {}) {
     const base = absBase || st.offset();
     const ax = st.plane === 18 ? [2, 0] : st.plane === 19 ? [1, 2] : [0, 1];
     const offs = st.plane === 18 ? [words.k, words.i] : st.plane === 19 ? [words.j, words.k] : [words.i, words.j];
+    // I=AC(…): this one centre word measured from the work zero, whatever
+    // the mode.
+    const abs = words.absolute || {};
+    const absOf = st.plane === 18 ? [abs.K, abs.I] : st.plane === 19 ? [abs.J, abs.K] : [abs.I, abs.J];
     const hasIJK = offs[0] !== undefined || offs[1] !== undefined;
 
     if (hasIJK) {
       const c = p0.slice();
       for (let n = 0; n < 2; n++) {
         const v = offs[n] === undefined ? 0 : toMM(offs[n], st.metric);
-        c[ax[n]] = st.arcAbsolute ? base[ax[n]] + v : p0[ax[n]] + v;
+        c[ax[n]] = st.arcAbsolute || absOf[n] ? base[ax[n]] + v : p0[ax[n]] + v;
       }
       // Sanity check: the two radii should agree.
       const r0 = Math.hypot(p0[ax[0]] - c[ax[0]], p0[ax[1]] - c[ax[1]]);
@@ -2052,15 +2075,30 @@ export function interpret(text, config = {}) {
       return c;
     }
 
-    if (words.r !== undefined) {
-      // Some controls write the radius of a minor arc negative, which is
-      // the opposite of what the sign means here. Flipping it in one place
-      // is what keeps the arc code one piece of arithmetic.
-      const R = toMM(words.r, st.metric) * (dialect.arcRSign || 1);
+    if (words.r !== undefined || words.cr !== undefined || words.ar !== undefined) {
       const a0 = p0[ax[0]], b0 = p0[ax[1]];
       const a1 = target[ax[0]], b1 = target[ax[1]];
       const da = a1 - a0, db = b1 - b0;
       const chord = Math.hypot(da, db);
+      // Some controls write the radius of a minor arc negative, which is
+      // the opposite of what the sign means here. Flipping it in one place
+      // is what keeps the arc code one piece of arithmetic. A Siemens CR
+      // means what the sign means here — negative, the long way round — and
+      // an opening angle AR makes the radius from the chord, the long way
+      // round past 180°.
+      let R;
+      if (words.cr !== undefined) {
+        R = toMM(words.cr, st.metric);
+      } else if (words.ar !== undefined) {
+        const open = Math.abs(words.ar);
+        if (!(open > 1e-9 && open < 360 - 1e-9)) {
+          warnFn(line, `AR=${words.ar}: an arc opens by more than 0° and less than 360°.`, 'error');
+          return null;
+        }
+        R = chord / (2 * Math.sin((open * Math.PI) / 360)) * (open > 180 ? -1 : 1);
+      } else {
+        R = toMM(words.r, st.metric) * (dialect.arcRSign || 1);
+      }
       if (chord < 1e-9) {
         warnFn(line, 'R-format arc with coincident end points is ambiguous; move skipped.', 'error');
         return null;
@@ -2113,7 +2151,7 @@ export function interpret(text, config = {}) {
    * A block that is one Siemens statement: a frame, a call written as a
    * function, MCALL. True when the block has been dealt with whole.
    */
-  function siemensStatement(b) {
+  function siemensStatement(b, now = false) {
     const sw = b.siemens;
     if (sw.op === 'mcall-off') {
       if (st.mcall) events.push({ line: b.line, type: 'cycle', moveIndex: moves.length, text: `MCALL ${st.mcall.name} ended` });
@@ -2129,6 +2167,10 @@ export function interpret(text, config = {}) {
       return true;
     }
     if (sw.op !== 'call') return false;
+    if (sw.after && !now) {
+      afterCall = b;
+      return false;
+    }
     // Settings the control keeps for the machining that follows — high
     // speed, the message line, the blank's outline for its own graphics —
     // none of which moves anything. Their arguments are the control's own

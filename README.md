@@ -783,7 +783,8 @@ comments, `/` block delete
   `CYCLE85` `CYCLE86` `CYCLE87` `CYCLE88` `CYCLE89` with their positional
   parameters (`RTP, RFP, SDIS, DP, DPR, …`, empty slots taking the default),
   at the tool or, after `MCALL CYCLE…(…)`, at every position that follows
-  until `MCALL` alone. Deep-hole strokes shrink by `DAM` and break or clear
+  until `MCALL` alone; a cycle written at the end of a move (`G0 X10 Y20
+  CYCLE81(…)`) runs once the move is made. Deep-hole strokes shrink by `DAM` and break or clear
   the chip by `VARI`; tapping runs at the pitch (`PIT`, or `MPIT`'s metric
   size) times the speed; `CYCLE86` lifts off the wall by `RPA/RPO/RPAP`.
   In a swivelled plane they drill down the plane's own Z.
@@ -799,6 +800,12 @@ comments, `/` block delete
 - *Axis values with a mode* — `C=DC(90)` the shorter way round,
   `ACP`/`ACN` forwards or backwards to the position, `X=AC(…)`/`X=IC(…)`
   absolute or incremental whatever `G90`/`G91` says.
+- *Arcs* — `G2`/`G3` with `CR=` the radius (negative the long way round),
+  `AR=` the angle the arc opens, `TURN=` whole turns more before it ends (a
+  helix down a hole, `Z` shared over all of them), and `I=AC(…)` a centre
+  from the work zero.
+- *Block numbers* — `N415` in front of any of these, as a post-processor
+  writes them, belongs to the block and changes nothing.
 - *Sections* — a label ends in a colon. `REPEAT LABEL P=n` runs the lines
   from the label to `ENDLABEL:` (or, the label being above, down to the
   `REPEAT`), `REPEAT START END` between two labels, `REPEATB` one block,

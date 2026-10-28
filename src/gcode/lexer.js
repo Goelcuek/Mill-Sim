@@ -265,6 +265,26 @@ const FRAMES_RE = /^(ROT|AROT|TRANS|ATRANS|SCALE|ASCALE|MIRROR|AMIRROR)\b/i;
 /** How a single axis value may be qualified: C=DC(90), X=IC(10). */
 const VALUE_MODE_RE = /\b([A-Za-z][A-Za-z0-9]*)\s*=\s*(DC|ACP|ACN|AC|IC)\s*\(/gi;
 
+/**
+ * A call written as a function that ends the block — NAME( … ) with the
+ * bracket closing last — or null. A name starts with two letters or an
+ * underscore, so M00 (CHECK) is an M word, and the functions an expression
+ * uses (SIN, COS) are not calls.
+ */
+function trailingCall(text) {
+  const t = text.trim();
+  const re = /([A-Za-z_][A-Za-z_][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\s*\(/g;
+  let m;
+  while ((m = re.exec(t)) !== null) {
+    const name = m[1].toUpperCase();
+    const prev = m.index > 0 ? t[m.index - 1] : ' ';
+    if (FUNCTION_NAMES.has(name) || /[=A-Za-z0-9_.(+\-*/]/.test(prev)) continue;
+    const open = m.index + m[0].length - 1;
+    if (closing(t, open) === t.length - 1) return { name, at: m.index, args: t.slice(open + 1, t.length - 1) };
+  }
+  return null;
+}
+
 /** Where the bracket opened at `open` closes, or -1. */
 function closing(text, open) {
   let depth = 0;
@@ -309,58 +329,62 @@ export function siemensWords(input, d = DIALECTS.siemens) {
   if (modes.length) extra.modes = modes;
 
   const trimmed = body.trim();
-  // MCALL CYCLE81(...) — called again at every position that follows —
-  // or MCALL alone, which stops that.
-  let rest = trimmed;
-  let modal = false;
-  const mcall = /^MCALL\b\s*/i.exec(rest);
+  // A block number in front — N235 — is the block's own and stays with it;
+  // what the block says is read after it.
+  const num = /^N\d+\s*/i.exec(trimmed);
+  const prefix = num ? num[0].trim() : '';
+  let rest = num ? trimmed.slice(num[0].length) : trimmed;
+  const withPrefix = (tail) => `${prefix} ${tail || ''}`.trim();
+
+  // MCALL alone stops a modal cycle.
+  if (/^MCALL$/i.test(rest)) {
+    extra.siemens = { op: 'mcall-off' };
+    return { body: prefix, extra };
+  }
+  // A call written as a function, ending the block: CYCLE81(10, 0, 2, , -20),
+  // MCALL CYCLE83(...), or G0 X10 Y20 CYCLE81(...) with a move before it,
+  // which the call follows once the move is made.
+  const call = trailingCall(rest);
+  if (call) {
+    let before = rest.slice(0, call.at).trim();
+    let modal = false;
+    const mc = /(^|\s)MCALL$/i.exec(before);
+    if (mc) {
+      modal = true;
+      before = before.slice(0, mc.index).trim();
+    }
+    extra.siemens = { op: 'call', name: call.name, argsText: call.args, modal, after: !!before };
+    return { body: withPrefix(before), extra };
+  }
+  // MCALL and a name with no brackets: a subprogram made modal.
+  const mcall = /^MCALL\s+([A-Za-z_][A-Za-z0-9_]*)$/i.exec(rest);
   if (mcall) {
-    modal = true;
-    rest = rest.slice(mcall[0].length);
-    if (!rest) {
-      extra.siemens = { op: 'mcall-off' };
-      return { body: '', extra };
-    }
-  }
-  // A call written as a function, the whole block: CYCLE81(10, 0, 2, , -20).
-  // A name starts with two letters or an underscore; M00 (CHECK) is an M
-  // word and a bracket, not a call to something called M00.
-  const call = /^([A-Za-z_][A-Za-z_][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\s*\(/.exec(rest);
-  if (call && !FUNCTION_NAMES.has(call[1].toUpperCase())) {
-    const open = call[0].length - 1;
-    const close = closing(rest, open);
-    if (close >= 0 && !rest.slice(close + 1).trim()) {
-      extra.siemens = { op: 'call', name: call[1].toUpperCase(), argsText: rest.slice(open + 1, close), modal };
-      return { body: '', extra };
-    }
-  }
-  if (modal) {
-    extra.siemens = { op: 'call', name: rest.trim().toUpperCase(), argsText: '', modal: true };
-    return { body: '', extra };
+    extra.siemens = { op: 'call', name: mcall[1].toUpperCase(), argsText: '', modal: true };
+    return { body: prefix, extra };
   }
   // ROT Z45, TRANS X10 Y5, ROT: the frame word, its numbers left to be read.
-  const frame = FRAMES_RE.exec(trimmed);
+  const frame = FRAMES_RE.exec(rest);
   if (frame) {
     extra.siemens = { op: 'frame', name: frame[1].toUpperCase() };
-    body = trimmed.slice(frame[0].length);
+    body = withPrefix(rest.slice(frame[0].length));
     return { body, extra };
   }
   // RET: back to whatever called this subprogram, as M17 does.
-  if (/^RET$/i.test(trimmed)) {
+  if (/^RET$/i.test(rest)) {
     extra.siemens = { op: 'ret' };
-    return { body: '', extra };
+    return { body: prefix, extra };
   }
   // A subprogram called by its name and nothing else — L_M54, PART_2,
   // L100 — perhaps with a count, P3 or P=3. Read letter by letter, L_M54 is
   // an M54 word and some junk; a name is a name. One that is a macro
   // keyword (ENDWHILE) or an address with a number (M30) is not one.
-  const bare = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s+P\s*=?\s*(\d+))?$/.exec(trimmed);
+  const bare = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s+P\s*=?\s*(\d+))?$/.exec(rest);
   if (bare) {
     const name = bare[1].toUpperCase();
     const address = /^[A-Za-z]\d+$/.test(name) && name[0] !== 'L';
     if (!address && !hasMacroSyntax(bare[1], d)) {
       extra.siemens = { op: 'call', name, argsText: '', modal: false, bare: true, count: bare[2] ? Number(bare[2]) : 1 };
-      return { body: '', extra };
+      return { body: prefix, extra };
     }
   }
   return { body, extra: Object.keys(extra).length ? extra : null };

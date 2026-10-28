@@ -265,3 +265,75 @@ test('G75 sends the Z slide home even with the head swung over, and leaves X whe
   near(now.X, was.X, 1e-9, 'X slide stays');
   near(now.Z, zHome, 1e-9, 'Z slide at home');
 });
+
+test('block numbers in front of Siemens statements: N415 MCALL CYCLE82, N420 MCALL, N421 CYCLE800( ), N425 L_M54', () => {
+  const p = run([
+    'N1 G17 G54 G90', 'N2 T1 M6', 'N3 S800 M3', 'N4 G0 X0 Y0 Z10', 'N5 F1.2',
+    'N415 MCALL CYCLE82(1,-2.6,0.1,-2.65,,0.225)',
+    'N416 G0 X0 Y-3.875', 'N417 G0 X5 Y-3.875',
+    'N420 MCALL', 'N421 CYCLE800( )', 'N422 G0 X20 Y0',
+    'N423 L_M54', 'N424 ROT Z90', 'N425 G0 X10 Y0', 'N426 ROT', 'N427 M30',
+  ].join('\n'), { subprograms: [{ name: 'L_M54.SPF', text: 'N1 G0 Z50\nN2 RET' }] });
+  assert.deepEqual(errors(p), []);
+  const bottoms = p.moves.filter((m) => m.kind === 'feed').map((m) => m.to.map((v) => +v.toFixed(3)));
+  assert.deepEqual(bottoms, [[0, -3.875, -2.65], [5, -3.875, -2.65]], 'the cycle at both positions and not after MCALL');
+  assert.ok(p.moves.some((m) => Math.abs(m.to[2] - 50) < 1e-6), 'L_M54 ran');
+  const last = p.moves[p.moves.length - 1].to;
+  near(last[0], 0, 1e-6, 'ROT Z90 turned X10 onto Y');
+  near(last[1], 10, 1e-6, 'ROT Z90 turned X10 onto Y');
+});
+
+test('a cycle written after a move in the same block runs at the new position', () => {
+  const p = run('G17 G90 T1 M6\nS1000 M3 F100\nG0 X0 Y0 Z10\nN10 G0 X10 Y20 CYCLE81(5,0,1,-4)\nM30');
+  const feeds = p.moves.filter((m) => m.kind === 'feed');
+  assert.equal(feeds.length, 1);
+  assert.deepEqual(feeds[0].to.map((v) => +v.toFixed(3)), [10, 20, -4]);
+});
+
+test('G2/G3 with CR=: positive the short way, negative the long way', () => {
+  const short = run('G17 G90 F100\nG0 X0 Y0 Z0\nN10 G2 X10 Y0 CR=5\nM30').moves.find((m) => m.kind === 'arc');
+  near(short.center[0], 5, 1e-9, 'centre X');
+  near(short.center[1], 0, 1e-9, 'centre Y');
+  const shortC = run('G17 G90 F100\nG0 X0 Y0 Z0\nG2 X10 Y0 CR=10\nM30').moves.find((m) => m.kind === 'arc');
+  const longC = run('G17 G90 F100\nG0 X0 Y0 Z0\nG2 X10 Y0 CR=-10\nM30').moves.find((m) => m.kind === 'arc');
+  assert.ok(longC.length > 2 * shortC.length, `the long way: ${longC.length} vs ${shortC.length}`);
+  near(Math.hypot(shortC.center[0] - 0, shortC.center[1]), 10, 1e-9, 'radius 10');
+});
+
+test('the user\'s helical lines: CR= with Z, and TURN= adding whole turns', () => {
+  const p = run([
+    'G17 G90 F100', 'G0 X0 Y-8 Z0.1',
+    'N235 G3 X0.0094 Y-8.014 Z0.04 CR=0.0283 F12.',
+    'N238 G3 X-0.0175 Y-8.0889 Z-0.25 CR=0.0566 TURN=19',
+    'M30',
+  ].join('\n'));
+  assert.deepEqual(errors(p), []);
+  const arcs = p.moves.filter((m) => m.kind === 'arc');
+  assert.equal(arcs.length, 2);
+  near(arcs[1].to[2], -0.25, 1e-9, 'ends at its depth');
+  const turn = 2 * Math.PI * 0.0566;
+  assert.ok(arcs[1].length > 18 * turn && arcs[1].length < 21 * turn, `19 turns and a bit: ${arcs[1].length} vs ${turn} a turn`);
+  // Depth spread over the whole helix: never below the end, falling all the way.
+  const zs = [];
+  for (let i = 2; i < arcs[1].path.length; i += 3) zs.push(arcs[1].path[i]);
+  for (let i = 1; i < zs.length; i++) assert.ok(zs[i] <= zs[i - 1] + 1e-12);
+});
+
+test('a full circle with TURN=2 goes round three times', () => {
+  const one = run('G17 G90 F100\nG0 X10 Y0 Z0\nG2 X10 Y0 Z-3 I-10 J0\nM30').moves.find((m) => m.kind === 'arc');
+  const three = run('G17 G90 F100\nG0 X10 Y0 Z0\nG2 X10 Y0 Z-3 I-10 J0 TURN=2\nM30').moves.find((m) => m.kind === 'arc');
+  near(three.length / one.length, 3, 0.01, 'three turns');
+});
+
+test('AR= opens the arc by an angle; I=AC() puts the centre in work coordinates', () => {
+  const ar = run('G17 G90 F100\nG0 X10 Y0 Z0\nG3 X0 Y10 AR=90\nM30').moves.find((m) => m.kind === 'arc');
+  near(ar.center[0], 0, 1e-9, 'AR=90 centre X');
+  near(ar.center[1], 0, 1e-9, 'AR=90 centre Y');
+  const big = run('G17 G90 F100\nG0 X10 Y0 Z0\nG3 X0 Y10 AR=270\nM30').moves.find((m) => m.kind === 'arc');
+  near(big.center[0], 10, 1e-9, 'AR=270 centre X');
+  near(big.center[1], 10, 1e-9, 'AR=270 centre Y');
+  const ac = run('G17 G90 F100\nG0 X20 Y0 Z0\nG2 X30 Y10 I=AC(20) J=AC(10)\nM30');
+  const arc = ac.moves.find((m) => m.kind === 'arc');
+  assert.deepEqual(arc.center.slice(0, 2), [20, 10]);
+  assert.deepEqual(errors(ac), []);
+});
