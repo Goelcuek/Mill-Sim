@@ -871,6 +871,9 @@ comments, `/` block delete
   a rotary turned on its own afterwards (`C30` after `CYCLE800(…C90…)`)
   turns the part under the plane, and the tool still goes where the plane
   says in the machine — under TRAORI the points ride the part instead.
+  Without TRAORI a block that turns a rotary is the axes moving together,
+  each straight to its end, as the control makes it: X, Y and Z stand
+  still while a C on its own turns, rather than following the tip round.
   `CYCLE800()` takes the plane away.
 - *Modes* — `TRAORI`/`TRAFOOF` tool centre point on and off, `DIAMOF`
   (`DIAMON` is noted: diameter programming is for turning), and `SUPA`,

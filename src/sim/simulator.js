@@ -260,6 +260,7 @@ export class Simulator {
     this.moveIndex = 0;
     this.segIndex = 0;
     this.segPos = 0;            // mm travelled into the current segment
+    this._dwelt = 0;            // seconds into a move that does not travel
     this.time = 0;              // simulated seconds
     this.distance = 0;
     /** The machine as placed at the end of the last chunk; see machineNear. */
@@ -430,6 +431,9 @@ export class Simulator {
         // No linear travel, but the rotaries may still be swinging the tool
         // through the part, so the swing is carved before the move retires.
         const take = Math.min(remaining, Math.max(mv.time - (this._dwelt || 0), 0));
+        // It stands at its own point: the last move may have written the
+        // same place another way, with TCP on where this one has it off.
+        if (mv.from) this.pos = mv.from.slice();
         this._dwelt = (this._dwelt || 0) + take;
         // How far through the swing, so the machine is drawn part way
         // round it — a G93 swing takes as long as it says, not no time.

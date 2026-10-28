@@ -469,3 +469,41 @@ test('CYCLE800 _DIR: −1 the lower value of the tilting axis, +1 the higher, 0 
   near(still.B, 0, 1e-9, '0 turns the plane only');
   near(still.C, 0, 1e-9, '0 turns the plane only');
 });
+
+import { Simulator } from '../src/sim/simulator.js';
+import { silhouetteSpheres } from '../src/sim/collision.js';
+import { buildAssembly } from '../src/tools/assembly.js';
+import { defaultHolders } from '../src/tools/holderDefs.js';
+import { makeTool } from '../src/tools/toolDefs.js';
+import { DEFAULT_MACHINE } from '../src/machine/config.js';
+
+test('in a CYCLE800 plane without TRAORI a C move is the axes alone: the slides do not follow the tip round', () => {
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  const program = ['T2', 'M06', 'G54', 'G0 Z100.',
+    'CYCLE800(1, "TABLE", 0, 192, 0, 0, 0, -50, 180,0, 0, 0, 0, -1, 0, 1)',
+    'C90', 'G0 X0 Y20', 'G0 X0 Y20 C0', 'G75 Z1.0', 'M30'].join('\n');
+  for (const reversed of [false, true]) {
+    const kin = buildPreset('tableTable');
+    if (reversed) for (const n of kin.rotaries()) n.invert = !n.invert;
+    const p = run(program, { kinematics: kin, gaugeLength: tool.gaugeLength });
+    assert.deepEqual(errors(p), []);
+    const sim = new Simulator();
+    sim.haltOnCollision = false;
+    sim.load({ program: p, stock: null, slots: new Map([[0, slot], [2, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE });
+    const start = (m) => p.moves.slice(0, m.i).reduce((t, x) => t + x.time, 0);
+    for (const line of [6, 8]) {
+      const mv = p.moves.find((m) => m.line === line && Object.keys(m.rotTo).some((L) => m.rotTo[L] !== m.rotFrom[L]));
+      const seen = [0.01, 0.25, 0.5, 0.75, 0.99].map((f) => {
+        sim.reset();
+        sim.seek(start(mv) + mv.time * f, 1e9);
+        return sim.currentPose().axes;
+      });
+      for (const a of seen) {
+        for (const L of ['X', 'Y', 'Z']) near(a[L], seen[0][L], 1e-6, `${reversed ? 'reversed, ' : ''}line ${line}: ${L} while C turns`);
+      }
+      near(seen[2].C, (mv.rotFrom.C + mv.rotTo.C) / 2, 1e-6, `line ${line}: C half way`);
+    }
+  }
+});

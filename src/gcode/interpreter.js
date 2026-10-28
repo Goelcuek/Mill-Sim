@@ -662,10 +662,43 @@ export function interpret(text, config = {}) {
     };
   };
 
+  /** Does any rotary end somewhere other than it started? */
+  const turnsRotary = (move) => turning.some((L) => Math.abs(
+    (Number((move.rotTo || {})[L]) || 0) - (Number((move.rotFrom || {})[L]) || 0),
+  ) > 1e-9);
+
   const push = (move) => {
     move.i = moves.length;
     if (curSrc) move.source = curSrc;
     if (move.tcp && !st.tcp && st.swivel && st.swivelRot) move.swivelRot = st.swivelRot;
+    // A CYCLE800 plane without TRAORI is a frame, not tool centre point:
+    // a block that turns a rotary is made by the axes together, each going
+    // straight from where it stands to where it ends, and the slides do not
+    // chase the tip round while C turns. Its points are where the slides
+    // go — the plane's points at the angles the cycle swung to, as turnFor
+    // counts them — so it leaves here as a move made without TCP.
+    if (move.swivelRot && turnsRotary(move) && cfg.kinematics) {
+      const kin = cfg.kinematics;
+      const g = cfg.gaugeLength || 0;
+      const zero = {};
+      for (const L of turning) zero[L] = 0;
+      const frozen = { ...zero, ...move.swivelRot };
+      const flat = (p) => {
+        const axes = kin.linearsForTip(p, frozen, g);
+        return axes ? kin.toolInWork({ ...zero, ...axes }, g).tip : p;
+      };
+      move.from = flat(move.from);
+      move.to = flat(move.to);
+      if (move.center) move.center = flat(move.center);
+      if (move.path) {
+        const n = move.path.length / 3;
+        for (let i = 0; i < n; i++) {
+          const q = flat([move.path[i * 3], move.path[i * 3 + 1], move.path[i * 3 + 2]]);
+          move.path[i * 3] = q[0]; move.path[i * 3 + 1] = q[1]; move.path[i * 3 + 2] = q[2];
+        }
+      }
+      move.tcp = 0;
+    }
     const turn = turnFor(move);
     if (turn) {
       move.from = turn(move.from, 0);
