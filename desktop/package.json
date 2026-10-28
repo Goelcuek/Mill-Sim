@@ -1,7 +1,7 @@
 {
   "name": "mill-sim-desktop",
   "productName": "Mill-Sim",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Mill-Sim CNC mill simulator as a desktop program, with its machines kept in a folder on disk.",
   "author": "Mill-Sim",
   "license": "UNLICENSED",
