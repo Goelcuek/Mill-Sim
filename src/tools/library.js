@@ -390,6 +390,11 @@ function builtIn() {
       makeAssembly({ id: 'asm_cham', name: 'T6 \u00b7 90\u00b0 chamfer', toolId: 'tool_cham', holderId: 'hld_er32', stickout: 26, number: 6 }),
       makeAssembly({ id: 'asm_drill', name: 'T7 \u00b7 5 drill', toolId: 'tool_drill5', holderId: 'hld_drill', stickout: 45, number: 7 }),
       makeAssembly({ id: 'asm_taper', name: 'T8 \u00b7 3\u00b0 taper ball', toolId: 'tool_taper', holderId: 'hld_slim', stickout: 30, number: 8 }),
+      // Turning tools are one piece, holder and all.
+      makeAssembly({ id: 'asm_turn_od', name: 'T11 \u00b7 OD turning', toolId: 'tool_turn_od', holderId: '', stickout: 110, number: 11 }),
+      makeAssembly({ id: 'asm_bore_id', name: 'T12 \u00b7 ID boring', toolId: 'tool_bore_id', holderId: '', stickout: 130, number: 12 }),
+      makeAssembly({ id: 'asm_groove3', name: 'T13 \u00b7 grooving 3', toolId: 'tool_groove3', holderId: '', stickout: 110, number: 13 }),
+      makeAssembly({ id: 'asm_thread60', name: 'T14 \u00b7 threading 60\u00b0', toolId: 'tool_thread60', holderId: '', stickout: 110, number: 14 }),
     ],
   };
 }

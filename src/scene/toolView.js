@@ -197,6 +197,35 @@ function mergeGeometries(geoms) {
 
 const _up = new THREE.Vector3();
 const _dir = new THREE.Vector3();
+const _across = new THREE.Vector3();
+const _side = new THREE.Vector3();
+const _basis = new THREE.Matrix4();
+
+/**
+ * A turning tool's parts, in its own frame: x across into the tool body,
+ * z up the tool, y through the insert's thickness. The insert is its
+ * outline made a plate; the bar a block; the spindle on the bar's middle.
+ */
+function turningParts(built) {
+  const o = built.turning;
+  const plate = (poly, thick) => {
+    const shape = new THREE.Shape(poly.map(([u, w]) => new THREE.Vector2(u, w)));
+    const g = new THREE.ExtrudeGeometry(shape, { depth: thick, bevelEnabled: false, curveSegments: 4 });
+    g.rotateX(Math.PI / 2);
+    g.translate(0, thick / 2, 0);
+    return g;
+  };
+  const insert = plate(o.insert, 5);
+  const b = o.bar;
+  const bar = new THREE.BoxGeometry(b.u1 - b.u0, b.thick, b.w1 - b.w0);
+  bar.translate((b.u0 + b.u1) / 2, 0, (b.w0 + b.w1) / 2);
+  let spindle = null;
+  if (built.spindlePoints.length > 1) {
+    spindle = latheFrom(built.spindlePoints, 40);
+    spindle.translate(o.axisU, 0, 0);
+  }
+  return { insert, bar, spindle };
+}
 
 export class ToolView {
   constructor() {
@@ -230,6 +259,13 @@ export class ToolView {
       return mesh;
     };
 
+    if (built.turning) {
+      const t = turningParts(built);
+      addPart(t.insert, this.toolMaterial, 'cutter');
+      addPart(t.bar, this.holderMaterial, 'holder');
+      if (t.spindle) addPart(t.spindle, this.spindleMaterial, 'spindle');
+      return;
+    }
     addPart(latheFrom(built.toolPoints), this.toolMaterial, 'cutter');
     const flutes = fluteGeometry(built);
     if (flutes) addPart(flutes, this.fluteMaterial, 'flutes');
@@ -251,13 +287,26 @@ export class ToolView {
    * @param {number[]} tip
    * @param {number[]} dir unit vector up the tool from the tip
    */
-  setPose(tip, dir) {
+  setPose(tip, dir, across = null) {
     this.group.position.set(tip[0], tip[1], tip[2]);
     if (!dir) return;
     _up.set(0, 0, 1);
     _dir.set(dir[0], dir[1], dir[2]);
     if (_dir.lengthSq() < 1e-12) return;
-    this.group.quaternion.setFromUnitVectors(_up, _dir.normalize());
+    _dir.normalize();
+    // A turning tool is not round: which way across it faces matters, and
+    // that is `across`, into its body.
+    if (across && this.built && this.built.turning) {
+      _across.set(across[0], across[1], across[2]).addScaledVector(_dir, -_dir.dot(_across.set(across[0], across[1], across[2])));
+      if (_across.lengthSq() > 1e-12) {
+        _across.normalize();
+        _side.crossVectors(_dir, _across);
+        _basis.makeBasis(_across, _side, _dir);
+        this.group.quaternion.setFromRotationMatrix(_basis);
+        return;
+      }
+    }
+    this.group.quaternion.setFromUnitVectors(_up, _dir);
   }
 
   setVisible(v) { this.group.visible = v; }
@@ -308,6 +357,12 @@ export class ToolView {
 /** Build a standalone mesh of an assembly, for the tool-library preview. */
 export function assemblyPreviewMesh(built) {
   const group = new THREE.Group();
+  if (built.turning) {
+    const t = turningParts(built);
+    group.add(new THREE.Mesh(t.insert, new THREE.MeshStandardMaterial({ color: built.tool.def.color || '#d6b25e', metalness: 0.7, roughness: 0.35 })));
+    group.add(new THREE.Mesh(t.bar, new THREE.MeshStandardMaterial({ color: '#8d97a8', metalness: 0.75, roughness: 0.4 })));
+    return group;
+  }
   const tool = new THREE.Mesh(latheFrom(built.toolPoints), new THREE.MeshStandardMaterial({ color: built.tool.def.color || '#b9c2cf', metalness: 0.9, roughness: 0.25 }));
   group.add(tool);
   const flutes = fluteGeometry(built);

@@ -8,6 +8,10 @@
 import { arcPoints, buildEnvelope, dedupe } from './envelope.js';
 import { deg2rad, num, uid } from '../core/util.js';
 import { MM_PER_INCH } from '../core/util.js';
+import { turningOutline, INSERT_SHAPES } from './turningDefs.js';
+
+/** The tools that turn — held still while the table spins the part. */
+export const TURNING_TYPES = new Set(['turn', 'groove', 'thread']);
 
 /** Cutter families the parametric editor understands. */
 export const TOOL_TYPES = {
@@ -43,6 +47,21 @@ export const TOOL_TYPES = {
     label: 'Lollipop / undercut',
     fields: ['diameter', 'neckDiameter', 'neckLength', 'fluteCount', 'shankDiameter', 'overallLength'],
   },
+  turn: {
+    label: 'Turning insert (OD/ID)',
+    turning: true,
+    fields: ['side', 'insertShape', 'insertSize', 'noseRadius', 'leadAngle', 'shankWidth', 'overallLength'],
+  },
+  groove: {
+    label: 'Grooving / parting blade',
+    turning: true,
+    fields: ['side', 'grooveWidth', 'grooveDepth', 'cornerRadius', 'shankWidth', 'overallLength'],
+  },
+  thread: {
+    label: 'Threading insert',
+    turning: true,
+    fields: ['side', 'threadAngle', 'insertSize', 'noseRadius', 'shankWidth', 'overallLength'],
+  },
 };
 
 /** Every parameter the editor can show, with metadata for the UI. */
@@ -59,6 +78,19 @@ export const TOOL_FIELDS = {
   neckDiameter: { label: 'Neck diameter', unit: 'mm', min: 0, step: 0.1 },
   neckLength: { label: 'Neck length', unit: 'mm', min: 0, step: 1 },
   overallLength: { label: 'Overall length (OAL)', unit: 'mm', min: 1, step: 1 },
+  side: {
+    label: 'Cuts', options: [{ value: 'OD', label: 'Outside (OD)' }, { value: 'ID', label: 'Inside (ID, boring)' }],
+  },
+  insertShape: {
+    label: 'Insert', options: Object.entries(INSERT_SHAPES).map(([value, s]) => ({ value, label: s.label })),
+  },
+  insertSize: { label: 'Cutting edge length', unit: 'mm', min: 1, step: 0.5 },
+  noseRadius: { label: 'Nose radius', unit: 'mm', min: 0, step: 0.1 },
+  leadAngle: { label: 'Lead angle κr', unit: '°', min: 30, max: 120, step: 1 },
+  shankWidth: { label: 'Bar / shank size', unit: 'mm', min: 2, step: 1 },
+  grooveWidth: { label: 'Blade width', unit: 'mm', min: 0.1, step: 0.1 },
+  grooveDepth: { label: 'Max depth', unit: 'mm', min: 0.5, step: 0.5 },
+  threadAngle: { label: 'Thread angle', unit: '°', min: 10, max: 120, step: 1 },
 };
 
 export const DEFAULT_TOOL = {
@@ -97,6 +129,16 @@ export const DEFAULT_TOOL = {
   color: '#c8ccd4',
   notes: '',
   cutting: { rpm: 6000, feed: 900, plunge: 300, doc: 2, woc: 4 },
+  // Turning tools only; see turningDefs.js.
+  side: 'OD',
+  insertShape: 'C',
+  insertSize: 12,
+  noseRadius: 0.8,
+  leadAngle: 95,
+  shankWidth: 20,
+  grooveWidth: 3,
+  grooveDepth: 10,
+  threadAngle: 60,
 };
 
 /** Convert a tool authored in inches into the internal millimetre model. */
@@ -159,6 +201,7 @@ const ARC_STEPS = 48;
 export function buildTool(def) {
   const t = { ...DEFAULT_TOOL, ...def };
   const warnings = [];
+  if (TURNING_TYPES.has(t.type)) return buildTurningTool(t);
 
   const D = Math.max(num(t.diameter, 6), 0.01);
   const R = D / 2;
@@ -347,6 +390,34 @@ export function buildTool(def) {
   };
 }
 
+/**
+ * A turning tool as the rest of the program sees a tool. What it cuts is
+ * its outline in its own plane (`turning`); for everything that only
+ * knows round cutters it is the bar, a round body as wide as the bar is,
+ * standing on the spindle axis — enough to draw a list entry and to be
+ * left alone by the milling checks, which pass turning tools by.
+ */
+function buildTurningTool(t) {
+  const outline = turningOutline(t);
+  const oal = outline.bar.w1;
+  const r = outline.bar.thick / 2;
+  const cut = [{ r: 0, z: 0 }, { r: 0.01, z: 0 }, { r: 0.01, z: 0.01 }];
+  const body = [{ r: 0.01, z: 0.01 }, { r, z: 0.01 }, { r, z: oal }];
+  return {
+    def: { ...t, fluteLength: 0.01, overallLength: oal, diameter: 0.02 },
+    cuttingPoints: cut,
+    bodyPoints: body,
+    silhouette: dedupe([...cut, ...body]),
+    cutEnvelope: buildEnvelope(cut),
+    bodyEnvelope: buildEnvelope(body),
+    radius: 0.01,
+    fluteLength: 0.01,
+    length: oal,
+    turning: outline,
+    warnings: outline.warnings,
+  };
+}
+
 /** A small starter library so the app is useful on first load. */
 export function defaultTools() {
   return [
@@ -358,5 +429,10 @@ export function defaultTools() {
     makeTool({ id: 'tool_cham', name: '90° chamfer', type: 'chamfer', number: 6, diameter: 12, tipDiameter: 2, tipAngle: 90, fluteCount: 4, shankDiameter: 12, overallLength: 65, fluteLength: 10, color: '#d8c9a8', cutting: { rpm: 8000, feed: 700, plunge: 200, doc: 0.6, woc: 0.6 } }),
     makeTool({ id: 'tool_drill5', name: '5mm drill', type: 'drill', number: 7, diameter: 5, tipAngle: 140, fluteLength: 35, fluteCount: 2, shankDiameter: 5, overallLength: 70, color: '#bfae8e', cutting: { rpm: 4500, feed: 250, plunge: 250, doc: 5, woc: 5 } }),
     makeTool({ id: 'tool_taper', name: '3° taper ball 1mm', type: 'taper', number: 8, tipDiameter: 1, taperAngle: 3, cornerRadius: 0.5, fluteLength: 20, fluteCount: 4, shankDiameter: 6, overallLength: 60, diameter: 3.1, color: '#c9d6c2', cutting: { rpm: 12000, feed: 800, plunge: 200, doc: 0.2, woc: 0.15 } }),
+    // Turning, for a mill-turn table: held still in the spindle.
+    makeTool({ id: 'tool_turn_od', name: 'OD turning C80 R0.8', type: 'turn', number: 11, side: 'OD', insertShape: 'C', insertSize: 12, noseRadius: 0.8, leadAngle: 95, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0.25, plunge: 0.1, doc: 2, woc: 0 } }),
+    makeTool({ id: 'tool_bore_id', name: 'ID boring D55 R0.4', type: 'turn', number: 12, side: 'ID', insertShape: 'D', insertSize: 11, noseRadius: 0.4, leadAngle: 93, shankWidth: 16, overallLength: 130, color: '#d6b25e', cutting: { rpm: 0, feed: 0.15, plunge: 0.08, doc: 1, woc: 0 } }),
+    makeTool({ id: 'tool_groove3', name: 'Grooving 3 mm', type: 'groove', number: 13, side: 'OD', grooveWidth: 3, grooveDepth: 12, cornerRadius: 0.2, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0.06, plunge: 0.06, doc: 0, woc: 0 } }),
+    makeTool({ id: 'tool_thread60', name: 'Threading 60°', type: 'thread', number: 14, side: 'OD', threadAngle: 60, insertSize: 8, noseRadius: 0.1, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0, plunge: 0, doc: 0.1, woc: 0 } }),
   ];
 }

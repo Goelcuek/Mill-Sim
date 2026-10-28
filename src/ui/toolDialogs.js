@@ -53,8 +53,9 @@ export function openToolDialog(app, toolId = null) {
     const built = lib.buildDraft(draft, null, Math.max((draft.fluteLength || 10) * 1.5, 12), app.state.machine);
     preview.show(built);
     clear(stats);
-    stats.appendChild(el('div.stat-value.dim', {},
-      `Max cutting Ø ${units.lenU(built.cutRadius * 2, 3)} · flute ${units.lenU(built.fluteLength, 2)} · OAL ${units.lenU(built.tool.length, 1)}`));
+    stats.appendChild(el('div.stat-value.dim', {}, built.turning
+      ? `${draft.side === 'ID' ? 'Inside' : 'Outside'} turning · tip ${units.lenU(built.turning.axisU, 1)} off the spindle axis · ${units.lenU(built.tool.length, 1)} long`
+      : `Max cutting Ø ${units.lenU(built.cutRadius * 2, 3)} · flute ${units.lenU(built.fluteLength, 2)} · OAL ${units.lenU(built.tool.length, 1)}`));
     for (const w of built.warnings) {
       stats.appendChild(el('div.inline-warning', {}, w));
     }
@@ -76,6 +77,9 @@ export function openToolDialog(app, toolId = null) {
     for (let i = 0; i < spec.fields.length; i += 2) {
       form.appendChild(row(spec.fields.slice(i, i + 2).map((key) => {
         const meta = TOOL_FIELDS[key] || { label: key, unit: 'mm', step: 0.1 };
+        if (meta.options) {
+          return select(meta.label, meta.options, draft[key], (v) => { draft[key] = v; rebuild(); });
+        }
         return field(meta.label, draft[key], {
           min: meta.min, max: meta.max, step: meta.step, unit: meta.unit,
           onChange: (v) => {

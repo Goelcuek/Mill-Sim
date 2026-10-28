@@ -62,6 +62,8 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
   const warnings = [];
   const tool = buildTool(toolDef || {});
   warnings.push(...tool.warnings.map((w) => `Tool: ${w}`));
+  // A turning tool is one piece, bar and all, straight into the spindle.
+  if (tool.turning) holderDef = null;
 
   let stickout = num(asm.stickout, tool.fluteLength * 1.4);
   const minStickout = tool.fluteLength + 0.5;
@@ -163,6 +165,8 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
      * and the length a control would hold as the tool-length offset.
      */
     gaugeLength: holder ? stickout + holder.length : tool.length,
+    /** A turning tool's outline in its own plane; see turningDefs.js. */
+    turning: tool.turning || null,
     warnings,
   };
 }
@@ -170,6 +174,7 @@ export function buildAssembly(asmDef, toolDef, holderDef, machine = {}) {
 /** Human-readable one-line description, used in lists and the HUD. */
 export function describeAssembly(built) {
   const t = built.tool.def;
+  if (built.turning) return `${t.side === 'ID' ? 'ID' : 'OD'} ${t.type === 'turn' ? `${t.insertShape} insert R${t.noseRadius}` : t.type === 'groove' ? `groove ${t.grooveWidth} wide` : `thread ${t.threadAngle}°`}`;
   const dia = (built.cutRadius * 2).toFixed(built.cutRadius * 2 < 10 ? 2 : 1);
   const kind = t.type === 'ball' ? 'ball' : t.type === 'bull' ? `R${t.cornerRadius}` : t.type;
   return `Ø${dia} ${kind} · ${t.fluteCount}F · ${built.stickout.toFixed(0)}mm out`;
