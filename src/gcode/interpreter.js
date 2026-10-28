@@ -1014,6 +1014,11 @@ export function interpret(text, config = {}) {
    * readings — read as 0, said once each.
    */
   vars.dollar = (name, index) => {
+    if (name === '$P_UIFR' && index && index.length >= 2) {
+      const key = frameKey(index[0]);
+      const part = String(index[2] || 'TR').toUpperCase();
+      return key && part === 'TR' ? offsetAxis(key, String(index[1]).toUpperCase()) : 0;
+    }
     if (name === '$P_TOOLNO') return typeof st.tool === 'number' ? st.tool : 0;
     if (name === '$P_TOOL') return st.dNumber || 1;
     const dp = /^\$TC_DP(\d+)$/.exec(name);
@@ -1098,8 +1103,102 @@ export function interpret(text, config = {}) {
       : `${key} is one of the control's own variables, which this simulator does not keep: it reads 0 here, where the machine would give its own value.`);
   };
 
+  // ---- work offsets the program writes ---------------------------------
+  //
+  // A program may set its own offsets: Siemens through $P_UIFR, a Fanuc
+  // through #5221… or G10 L2. They change the run's own copy — the
+  // offsets the run started with stay as Setup › Work offsets has them, as
+  // a control's table does not change until a program changes it.
+  cfg.wcs = Object.fromEntries(Object.entries(cfg.wcs).map(([k, v]) => [k, [...v]]));
+  cfg.wcsRotary = JSON.parse(JSON.stringify(cfg.wcsRotary || {}));
+  /** Siemens settable frame n: 1–4 are G54–G57, 5–99 G505–G599, 0 G500. */
+  const frameKey = (n) => {
+    const k = Math.round(Number(n));
+    if (k === 0) return 'G500';
+    if (k >= 1 && k <= 4) return `G${53 + k}`;
+    if (k >= 5 && k <= 99) return `G${500 + k}`;
+    return null;
+  };
+  const LINEAR = ['X', 'Y', 'Z'];
+  /** One axis of one offset, in program units (degrees for a rotary). */
+  const offsetAxis = (key, L) => {
+    const i = LINEAR.indexOf(L);
+    if (i >= 0) {
+      const mm = (cfg.wcs[key] || [0, 0, 0])[i];
+      return st.metric ? mm : mm / MM_PER_INCH;
+    }
+    return Number((cfg.wcsRotary[key] || {})[L]) || 0;
+  };
+  const setOffsetAxis = (key, L, v) => {
+    const i = LINEAR.indexOf(L);
+    if (i >= 0) {
+      const next = [...(cfg.wcs[key] || [0, 0, 0])];
+      next[i] = toMM(v, st.metric);
+      cfg.wcs[key] = next;
+    } else {
+      cfg.wcsRotary[key] = { ...(cfg.wcsRotary[key] || {}), [L]: Number(v) || 0 };
+    }
+  };
+  const offsetSaid = (line, key) => events.push({ line, type: 'offset', moveIndex: moves.length, text: `${key} set by the program` });
+
+  // A Fanuc keeps its offsets as variables: #5221 G54 X, #5222 Y, #5223 Z,
+  // #5224 and #5225 the 4th and 5th axes, twenty a step to G59's #5321.
+  const fanucAxes = ['X', 'Y', 'Z', ...[...extras].filter(([, k]) => k === 'rotary').map(([L]) => L)];
+  const fanucOffset = (mark, k) => {
+    if (registers.main !== '#' || mark !== '#' || k < 5221 || k > 5340) return null;
+    const n = Math.floor((k - 5201) / 20);
+    const L = fanucAxes[(k - 5201) % 20];
+    return n >= 1 && n <= 6 && L ? { key: `G${53 + n}`, L } : null;
+  };
+  vars.sysRead = (mark, k) => {
+    const o = fanucOffset(mark, k);
+    return o ? offsetAxis(o.key, o.L) : undefined;
+  };
+  vars.sysWrite = (mark, k, value) => {
+    const o = fanucOffset(mark, k);
+    if (!o) return false;
+    setOffsetAxis(o.key, o.L, value);
+    offsetSaid(vars.where.line, o.key);
+    return true;
+  };
+
+  /** $P_UIFR[n] = $P_UIFR[m], and $P_UIFR[n, C, TR] = … */
+  const assignFrame = (a) => {
+    const idx = a.index || [];
+    const key = frameKey(evaluate(idx[0], vars));
+    if (!key) { warn(vars.where.line, `$P_UIFR[${evaluate(idx[0], vars)}]: there is no settable frame of that number.`, 'error'); return; }
+    if (idx.length === 1) {
+      const v = a.value;
+      if (v && v.op === 'named' && /^\$P_UIFR$/i.test(v.name) && v.index && v.index.length === 1) {
+        const from = frameKey(evaluate(v.index[0], vars));
+        if (!from) return;
+        cfg.wcs[key] = [...(cfg.wcs[from] || [0, 0, 0])];
+        cfg.wcsRotary[key] = { ...(cfg.wcsRotary[from] || {}) };
+        offsetSaid(vars.where.line, key);
+        return;
+      }
+      if (!spokenFor.has('$P_UIFR=')) {
+        spokenFor.add('$P_UIFR=');
+        warn(vars.where.line, 'A whole frame is set here only as a copy of another ($P_UIFR[2]=$P_UIFR[1]); CTRANS and the rest are not simulated.');
+      }
+      return;
+    }
+    const L = String((idx[1] && (idx[1].axis || idx[1].name)) || '').toUpperCase();
+    const part = String((idx[2] && (idx[2].axis || idx[2].name)) || 'TR').toUpperCase();
+    if (part !== 'TR') {
+      if (!spokenFor.has(`$P_UIFR ${part}`)) {
+        spokenFor.add(`$P_UIFR ${part}`);
+        warn(vars.where.line, `$P_UIFR[…,${part}]: only the offsets (TR) of a frame are simulated; ${part === 'FI' ? 'fine offsets' : part === 'RT' ? 'rotations' : part === 'SC' ? 'scales' : 'mirrors'} are not.`);
+      }
+      return;
+    }
+    setOffsetAxis(key, L, evaluate(a.value, vars));
+    offsetSaid(vars.where.line, key);
+  };
+
   /** Put a value in a variable, numbered or named. */
   const assign = (a) => {
+    if (a.named && /^\$P_UIFR$/i.test(a.named)) { assignFrame(a); return; }
     const value = evaluate(a.value, vars);
     if (a.named) vars.setNamed(a.named, a.index ? a.index.map((e) => evaluate(e, vars)) : null, value);
     else vars.set(evaluate(a.target, vars), value, a.bank);
@@ -1714,6 +1813,11 @@ export function interpret(text, config = {}) {
     let axesConsumed = false;
 
     for (const code of g) {
+      // A Siemens's further settable frames, G505 to G599.
+      if (code >= 505 && code <= 599 && Number.isInteger(code) && dialect.id === 'siemens') {
+        st.wcs = `G${code}`;
+        continue;
+      }
       switch (code) {
         case 0: case 1: case 2: case 3:
           motionThisBlock = code;
@@ -2027,6 +2131,8 @@ export function interpret(text, config = {}) {
             axis.Y !== undefined ? toMM(axis.Y, st.metric) : cur[1],
             axis.Z !== undefined ? toMM(axis.Z, st.metric) : cur[2],
           ];
+          // And the offset's turn of the rotaries: G10 L2 P2 C60.
+          for (const L of turning) if (axis[L] !== undefined) setOffsetAxis(key, L, axis[L]);
           events.push({ line: b.line, type: 'offset', moveIndex: moves.length, text: `G10 set ${key}` });
         }
       }

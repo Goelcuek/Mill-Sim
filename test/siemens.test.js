@@ -379,3 +379,25 @@ test('system variables in a wear check: $TC_DP wear reads 0, so the check passes
   assert.equal(errors(q).length, 1);
   assert.deepEqual(q.moves.map((m) => m.to[0]), [0, 10]);
 });
+
+test('the program sets its own work offsets: $P_UIFR copies and components, G505 and up', () => {
+  const kin = buildPreset('tableTable');
+  const p = run([
+    '$P_UIFR[2]=$P_UIFR[1] ;G55',
+    '$P_UIFR[5]=$P_UIFR[1] ;G505',
+    '$P_UIFR[2,C,TR]=$P_UIFR[1,C,TR]+60',
+    '$P_UIFR[5,C,TR]=$P_UIFR[1,C,TR]+240',
+    '$P_UIFR[5,X,TR]=$P_UIFR[1,X,TR]+1',
+    'G90 G710 TRAORI',
+    'G54 G0 A0 C0', 'G1 X50 Y0 Z0 F500',
+    'G55 G0 C0', 'G1 X50 Y0 Z0',
+    'G505 G0 C0', 'G1 X50 Y0 Z0',
+    'M30',
+  ].join('\n'), { kinematics: kin, wcs: { G54: [10, 0, 5] }, wcsRotary: { G54: { C: 12.5 } } });
+  assert.deepEqual(errors(p), []);
+  const cuts = p.moves.filter((m) => m.kind === 'feed');
+  assert.deepEqual(cuts.map((m) => `${m.wcs} C${m.rotTo.C}`), ['G54 C12.5', 'G55 C72.5', 'G505 C252.5']);
+  // G505 is G54 copied, one further in X: the same point on the slides, one along.
+  const lin = (m) => kin.linearsForTip(m.to, m.rotTo, 0);
+  assert.ok(Math.abs(lin(cuts[2]).X - lin(cuts[0]).X - 1) < 1e-6, `${lin(cuts[0]).X} → ${lin(cuts[2]).X}`);
+});

@@ -858,6 +858,14 @@ comments, `/` block delete
 - *Conditions and jumps* — `IF … ELSE … ENDIF` as a block, `IF cond
   GOTOF/GOTOB/GOTO label`, `GOTO` looking forward and then back, `GOTOC`
   the same and quiet when the label is not there.
+- *Work offsets from the program* — `$P_UIFR[2]=$P_UIFR[1]` copies a
+  frame, X Y Z and the rotaries; `$P_UIFR[2,C,TR]=$P_UIFR[1,C,TR]+60` reads
+  and sets one axis of one (frames 1–4 are G54–G57, 5–99 G505–G599, which
+  can be selected). Only the offsets (TR) are applied; fine offsets,
+  rotations, scales and mirrors are named once. On a Fanuc, `#5221`… (G54
+  X Y Z, then the 4th and 5th axes; twenty a step to G59) and `G10 L2 Pn`,
+  rotaries included, do the same. The program changes the run's own copy:
+  Setup › Work offsets keeps the values the run starts from.
 - *System variables* — `$P_TOOLNO` is the tool in the spindle, `$P_TOOL`
   its D number, and the wear values `$TC_DP12`…`$TC_DP20` are 0, since
   nothing here has measured any: a wear-tolerance check passes and the

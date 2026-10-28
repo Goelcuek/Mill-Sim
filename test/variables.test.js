@@ -366,3 +366,20 @@ test('a Fidia definition is the register, its number and the value: RG 34 .005',
   assert.equal(last(p, 'PT3'), 0.5);
   assert.deepEqual(at(p)[0], [0.005, -0.25, 0.5]);
 });
+
+test('a Fanuc program reads and sets its work offsets: #5221… and G10 L2 with a rotary', () => {
+  const p = interpret([
+    'G90 G21',
+    '#5241 = 10',
+    '#5243 = [#5223 - 2]',
+    'G10 L2 P3 X-5 C30',
+    'G55 G0 X0 Y0 Z0',
+    'G56 G0 X0 Y0 Z0 C0',
+    'M30',
+  ].join('\n'), { wcs: { G54: [0, 0, 7] } });
+  const errsOf = p.warnings.filter((w) => w.severity === 'error');
+  assert.deepEqual(errsOf, []);
+  assert.deepEqual(p.moves[0].to.map((v) => +v.toFixed(6)), [10, 0, 5]);
+  assert.deepEqual(p.moves[1].to.map((v) => +v.toFixed(6)).slice(0, 1), [-5]);
+  assert.equal(p.moves[1].rotTo.C, 30);
+});

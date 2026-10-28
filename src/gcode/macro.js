@@ -481,7 +481,9 @@ export function evaluate(node, vars) {
     case 'num': return node.value;
     case 'str': return node.value;
     case 'named': {
-      const index = node.index ? node.index.map((e) => evaluate(e, vars)) : null;
+      // A system variable indexed by an axis — $P_UIFR[1,C,TR] — keeps the
+      // axis as its name.
+      const index = node.index ? node.index.map((e) => (e.axis ? e.axis : evaluate(e, vars))) : null;
       if (vars && typeof vars.getNamed === 'function') return vars.getNamed(node.name, index);
       throw new Error(`${node.name} is not defined`);
     }
@@ -1003,7 +1005,12 @@ export class Vars {
     }
     const store = k >= 1 && k <= this.locals ? this.local : this.common;
     const v = store.get(k);
-    if (v === undefined) this.system(mark, k, false);
+    if (v === undefined) {
+      // One the interpreter keeps for itself — a work offset, #5221.
+      const kept = this.sysRead ? this.sysRead(mark, k) : undefined;
+      if (kept !== undefined) return kept;
+      this.system(mark, k, false);
+    }
     return v === undefined ? 0 : v;
   }
 
@@ -1017,6 +1024,10 @@ export class Vars {
       return;
     }
     const local = k >= 1 && k <= this.locals;
+    if (!local && this.sysWrite && this.sysWrite(mark, k, value)) {
+      if (this.trace) this.record(`${mark}${k}`, value);
+      return;
+    }
     if (!local) this.system(mark, k, true, value);
     (local ? this.local : this.common).set(k, value);
     if (this.trace) this.record(local ? this.localKey(k) : `${mark}${k}`, value);
