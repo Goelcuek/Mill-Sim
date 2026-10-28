@@ -258,7 +258,7 @@ export class ResultsPanel extends Panel {
         el('div.collision-msg', {}, c.message),
         el('div.collision-meta', {}, [
           c.count > 1 ? `${c.count} occurrences · ` : '',
-          c.position ? `at X${units.len(c.position[0], 2)} Y${units.len(c.position[1], 2)} Z${units.len(c.position[2], 2)}` : '',
+          ((p) => (p ? `at X${units.len(p[0], 2)} Y${units.len(p[1], 2)} Z${units.len(p[2], 2)}` : ''))(c.at || c.position),
         ].join('')),
       ]));
       body.push(el('div.collision-list', {}, items));

@@ -180,6 +180,8 @@ function sameAxis(a, b) {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] > 1 - 1e-12;
 }
 
+const capital = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
 export class Simulator {
   constructor() {
     this.program = null;
@@ -360,6 +362,16 @@ export class Simulator {
     this.u = 0;
   }
 
+  /** Which part of the assembly is `lz` up the tool from the tip. */
+  partAt(built, lz) {
+    if (!built || !(lz > 0)) return 'the cutter';
+    if (lz <= built.fluteLength) return 'the cutter';
+    if (lz <= (built.stickout || built.fluteLength)) return 'the shank';
+    const nose = built.spindlePoints && built.spindlePoints.length ? built.spindlePoints[0].z : Infinity;
+    if (lz < nose) return built.holder && built.holder.def ? `the holder (${built.holder.def.name})` : 'the holder';
+    return 'the spindle nose';
+  }
+
   report(type, data) {
     const meta = COLLISION_TYPES[type] || { label: type, severity: 'error' };
     const key = `${type}:${data.line}`;
@@ -370,6 +382,7 @@ export class Simulator {
       if ((data.depth || 0) > (existing.depth || 0)) {
         existing.depth = data.depth;
         existing.position = data.position || existing.position;
+        existing.at = this.pos.slice();
         if (typeof data.message === 'function') existing.message = data.message(existing.depth);
       }
       if (data.volume) existing.volume = (existing.volume || 0) + data.volume;
@@ -391,6 +404,10 @@ export class Simulator {
       moveIndex: this.moveIndex,
       ...data,
       message: typeof data.message === 'function' ? data.message(data.depth || 0) : data.message,
+      // Where the program had sent the tool, in its own coordinates — the
+      // numbers on the readout. `position` is the point on the part, for
+      // the marker; with a rotary turned the two read nothing alike.
+      at: this.pos.slice(),
     };
     this.collisions.push(entry);
     this.collisionKeys.set(key, entry);
@@ -1519,7 +1536,7 @@ export class Simulator {
         if (tbl && tbl.gap < 0) {
           this.report('table', {
             line: mv.line,
-            message: (d) => `Assembly reaches ${d.toFixed(2)} mm below the table surface.`,
+            message: (d) => `${capital(this.partAt(slot.built, tbl.localZ))} reaches ${d.toFixed(2)} mm into the table.`,
             position: [tbl.x, tbl.y, tbl.z],
             depth: tbl.depth,
           });

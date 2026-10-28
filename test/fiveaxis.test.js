@@ -678,6 +678,11 @@ test('a trunnion swung on its own turns the part: the slides stay, the tool stay
   const low = run('G90\nG0 X0 Y0 Z60\nA-90\nM30').sim;
   low.runAll();
   assert.ok(low.collisions.some((c) => /table/.test(c.message) && c.line === 3), 'the table edge swings through a low tool');
+  // It says which part of the assembly met the table, and where the
+  // program had the tool — not a point on the turned part.
+  const met = low.collisions.find((c) => c.type === 'table');
+  assert.match(met.message, /^The (cutter|shank|holder|spindle nose)\b.* reaches [\d.]+ mm into the table\.$/, met.message);
+  assert.deepEqual(met.at.map((v) => +v.toFixed(6)), [0, 0, 60], 'at the programmed X0 Y0 Z60');
 });
 
 // The castings, as MachineView.collisionBodies hands them over: solids in
