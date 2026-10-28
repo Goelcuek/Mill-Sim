@@ -636,6 +636,39 @@ try {
     check(sw.top.length === 1 && Math.abs(sw.top[0][1] + 20) < 0.05, `CYCLE81 should leave the top hole 20 deep: ${JSON.stringify(sw.top)}`);
   }
 
+  // ---- turning on the table: mill-turn -----------------------------------
+  //
+  // A Ø80 bar on the trunnion, the C table spinning it under CYCLE800
+  // "DREHEN": faced, turned to Ø68 with a chamfer, grooved, threaded. It
+  // runs clean and leaves the diameters the program asked for.
+  {
+    await loadExample(page, 10, 'mill-turn');
+    await runToEnd(page);
+    const mt = await page.evaluate(() => {
+      const app = window.millsim;
+      const st = app.stock;
+      const r = (z) => { const s = st.stretchesAt(0, [0, 0.125, z]); return s.length ? +s[s.length - 1][1].toFixed(2) : null; };
+      return {
+        warnings: app.state.program.warnings.map((w) => w.message),
+        findings: app.simulator.collisions.map((c) => c.message),
+        turning: app.state.program.moves.filter((m) => m.turning).length,
+        faced: st.stretchesAt(0, [0, 0.125, -0.125]).length,
+        thread: r(-6.125),
+        groove: r(-16.125),
+        diameter: r(-20.125),
+        bar: r(-40.125),
+      };
+    });
+    console.log('mill-turn:', JSON.stringify(mt));
+    check(mt.warnings.length === 0 && mt.findings.length === 0, `the mill-turn example should run clean: ${JSON.stringify(mt)}`);
+    check(mt.turning > 20, `its moves should be turning moves: ${mt.turning}`);
+    check(mt.faced === 0, 'the top millimetre should be faced off');
+    check(Math.abs(mt.thread - 33.1) < 0.05, `thread core Ø66.2: r ${mt.thread}`);
+    check(Math.abs(mt.groove - 30) < 0.05, `groove Ø60: r ${mt.groove}`);
+    check(Math.abs(mt.diameter - 34) < 0.05, `finished Ø68: r ${mt.diameter}`);
+    check(Math.abs(mt.bar - 40) < 0.05, `the bar below untouched, Ø80: r ${mt.bar}`);
+  }
+
   // ---- a program written for another control says so --------------------
   //
   // Read against the wrong one, a Fidia program is a page of errors and no

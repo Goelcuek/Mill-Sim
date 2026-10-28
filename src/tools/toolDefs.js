@@ -432,7 +432,7 @@ export function defaultTools() {
     // Turning, for a mill-turn table: held still in the spindle.
     makeTool({ id: 'tool_turn_od', name: 'OD turning C80 R0.8', type: 'turn', number: 11, side: 'OD', insertShape: 'C', insertSize: 12, noseRadius: 0.8, leadAngle: 95, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0.25, plunge: 0.1, doc: 2, woc: 0 } }),
     makeTool({ id: 'tool_bore_id', name: 'ID boring D55 R0.4', type: 'turn', number: 12, side: 'ID', insertShape: 'D', insertSize: 11, noseRadius: 0.4, leadAngle: 93, shankWidth: 16, overallLength: 130, color: '#d6b25e', cutting: { rpm: 0, feed: 0.15, plunge: 0.08, doc: 1, woc: 0 } }),
-    makeTool({ id: 'tool_groove3', name: 'Grooving 3 mm', type: 'groove', number: 13, side: 'OD', grooveWidth: 3, grooveDepth: 12, cornerRadius: 0.2, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0.06, plunge: 0.06, doc: 0, woc: 0 } }),
+    makeTool({ id: 'tool_groove3', name: '3mm grooving blade', type: 'groove', number: 13, side: 'OD', grooveWidth: 3, grooveDepth: 12, cornerRadius: 0.2, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0.06, plunge: 0.06, doc: 0, woc: 0 } }),
     makeTool({ id: 'tool_thread60', name: 'Threading 60°', type: 'thread', number: 14, side: 'OD', threadAngle: 60, insertSize: 8, noseRadius: 0.1, shankWidth: 25, overallLength: 110, color: '#d6b25e', cutting: { rpm: 0, feed: 0, plunge: 0, doc: 0.1, woc: 0 } }),
   ];
 }
