@@ -5,10 +5,20 @@
 // are the part of the machine model most worth testing, and tests should
 // not need a browser.
 
-export const create = () => new Float64Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+/**
+ * A new identity matrix. Made in place rather than from a list: the
+ * collision checks make tens of thousands of these a second, and building
+ * an array first to copy it in was the dearest line of the whole run.
+ */
+export const create = () => {
+  const m = new Float64Array(16);
+  m[0] = 1; m[5] = 1; m[10] = 1; m[15] = 1;
+  return m;
+};
 
 export function identity(out) {
-  out.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  out.fill(0);
+  out[0] = 1; out[5] = 1; out[10] = 1; out[15] = 1;
   return out;
 }
 

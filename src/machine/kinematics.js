@@ -128,6 +128,7 @@ export class Kinematics {
     this._indexZero = null;
     this._indexZeroId = null;
     this._refGauge = null;
+    this._bases = new Map();
     this.toolSet = new Set(this.toolPath.map((n) => n.id));
     this.workSet = new Set(this.workPath.map((n) => n.id));
   }
@@ -530,6 +531,21 @@ export class Kinematics {
    * @returns {null | {p0:number[], mat:number[]}} mat column-major, for solve3
    */
   linearBasis(values, gaugeLength = 0) {
+    // One set of rotaries and one tool give one basis, and a run asks for
+    // the same few thousands of times a second — the travel check, the
+    // castings, the readout. Kept until the chain changes shape.
+    let key = String(gaugeLength);
+    for (const L in values) if (L !== 'X' && L !== 'Y' && L !== 'Z') key += `|${L}${values[L]}`;
+    if (!this._bases) this._bases = new Map();
+    const kept = this._bases.get(key);
+    if (kept !== undefined) return kept;
+    const made = this.makeLinearBasis(values, gaugeLength);
+    if (this._bases.size > 512) this._bases.clear();
+    this._bases.set(key, made);
+    return made;
+  }
+
+  makeLinearBasis(values, gaugeLength = 0) {
     const letters = ['X', 'Y', 'Z'].filter((L) => this.axes().some((n) => n.letter === L));
     if (letters.length < 3) return null;
 

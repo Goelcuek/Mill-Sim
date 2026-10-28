@@ -262,6 +262,8 @@ export class Simulator {
     this.segPos = 0;            // mm travelled into the current segment
     this.time = 0;              // simulated seconds
     this.distance = 0;
+    /** The machine as placed at the end of the last chunk; see machineNear. */
+    this.machineEnd = null;
     /** The finding the run stopped at, while it waits; see haltOnCollision. */
     this.halted = null;
     this.finished = !this.program || !this.program.moves.length;
@@ -550,6 +552,7 @@ export class Simulator {
    * here, once, so a pose asks only about the triangles near the tool.
    */
   setCastings(bodies) {
+    this.machineEnd = null;
     // The chain may have changed with them: nothing worked out on the old
     // one still holds.
     this.basisMemo = null;
@@ -631,15 +634,25 @@ export class Simulator {
     const last = poses[poses.length - 1];
     const ra = this.rotaryAt(mv, first[3]);
     const rb = this.rotaryAt(mv, last[3]);
-    for (const L in { ...ra, ...rb }) if (Math.abs((ra[L] || 0) - (rb[L] || 0)) > 1e-9) return all();
+    for (const L in { ...ra, ...rb }) {
+      if (Math.abs((ra[L] || 0) - (rb[L] || 0)) > 1e-9) { this.machineEnd = null; return all(); }
+    }
     const ends = [];
-    for (const p of [first, last]) {
-      if (!this.placeCastings(p[0], mv, p[3], [])) return all();
+    // The chunk before ended where this one starts: its machine, placed
+    // there, stands for this chunk's start — placing the whole machine
+    // twice for every chunk was most of what checking it cost.
+    const prev = this.machineEnd;
+    const turnedSince = prev && Object.keys({ ...prev.rot, ...ra }).some((L) => Math.abs((prev.rot[L] || 0) - (ra[L] || 0)) > 1e-9);
+    if (prev && prev.move === mv && prev.u <= first[3] + 1e-12 && !turnedSince) ends.push(prev.placed);
+    for (const p of ends.length ? [last] : [first, last]) {
+      if (!this.placeCastings(p[0], mv, p[3], [])) { this.machineEnd = null; return all(); }
       const placed = this.placeMachine();
       placed.stock = this.stock ? this.stockBox(this.kinematics) : null;
       placed.ref = this.referenceOn() ? this.partBox(this.kinematics, this.target.surface.bounds) : null;
+      placed.toPart = this.referenceOn() ? this.sceneToPart() : null;
       ends.push(placed);
     }
+    this.machineEnd = { move: mv, u: last[3], rot: rb, placed: ends[ends.length - 1] };
     const join = (a, b) => ({
       lo: a.lo.map((v, k) => Math.min(v, b.lo[k])),
       hi: a.hi.map((v, k) => Math.max(v, b.hi[k])),
@@ -653,8 +666,40 @@ export class Simulator {
     const stockBox = ends[0].stock && join(ends[0].stock, ends[1].stock);
     const stock = stockBox ? head.map((P, i) => (boxesMeet(P, stockBox, 0) ? i : -1)).filter((i) => i >= 0) : [];
     const refBox = ends[0].ref && join(ends[0].ref, ends[1].ref);
-    const ref = refBox ? head.map((P, i) => (boxesMeet(P, refBox, 0) ? i : -1)).filter((i) => i >= 0) : [];
+    const toPart = ends[ends.length - 1].toPart;
+    const ref = refBox
+      ? head.map((P, i) => (boxesMeet(P, refBox, 0) && this.overPart(P, toPart, pad) ? i : -1)).filter((i) => i >= 0)
+      : [];
     return { pairs, stock, ref };
+  }
+
+  /** The matrix from the scene into the part's frame, for the chain as posed now. */
+  sceneToPart() {
+    const k = this.kinematics;
+    const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+    return m4.invertRigid(m4.create(), part);
+  }
+
+  /**
+   * Could a casting's box reach down to the reference part? Its lowest
+   * point, on the part, against the highest the part stands under it —
+   * the skyline's one look, where measuring the casting against the part
+   * point by point is what made the machine check five times dearer.
+   */
+  overPart(box, toPart, pad = 0) {
+    const sky = toPart && referenceSkyline(this.target);
+    if (!sky) return true;
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const q = [0, 0, 0];
+    for (let c = 0; c < 8; c++) {
+      m4.transformPoint(q, toPart, [c & 1 ? box.hi[0] : box.lo[0], c & 2 ? box.hi[1] : box.lo[1], c & 4 ? box.hi[2] : box.lo[2]]);
+      for (let a = 0; a < 3; a++) {
+        if (q[a] < lo[a]) lo[a] = q[a];
+        if (q[a] > hi[a]) hi[a] = q[a];
+      }
+    }
+    return lo[2] <= skylineOver(sky, lo[0] - pad, lo[1] - pad, hi[0] + pad, hi[1] + pad) + pad + 0.05;
   }
 
   /** A box on the part — [x0, y0, z0, x1, y1, z1] — in the scene, for the chain as posed now. */
@@ -727,7 +772,11 @@ export class Simulator {
       const fromScene = m4.invertRigid(m4.create(), part);
       const inside = insideColumns(this.target);
       for (const i of near.ref) {
-        const c = solidIntoReference(placeHead(i), this.target.surface, inside, fromScene, part);
+        const P = placeHead(i);
+        // A chunk that turns a rotary asks pose by pose; the skyline says
+        // at once when this casting is nowhere near the part.
+        if (!this.overPart(P, fromScene, pad)) continue;
+        const c = solidIntoReference(P, this.target.surface, inside, fromScene, part);
         if (c && (!worst || -c.depth < worst.gap)) worst = { gap: -c.depth, point: c.point, partFrame: true, head: this.headSolids[i], other: null, reference: true };
       }
     }

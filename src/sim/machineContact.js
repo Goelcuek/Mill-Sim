@@ -48,6 +48,21 @@ function apply(m, x, y, z, out) {
  * @param {ArrayLike<number>} world  its axis's matrix in the scene
  */
 export function placeSolid(s, world) {
+  // The same axis matrix as last time — a casting on an axis that has not
+  // moved, which during a straight move is every casting the table
+  // carries — is the same placement.
+  const kept = s._placed;
+  if (kept) {
+    let same = true;
+    for (let i = 0; i < 16; i++) if (kept.world[i] !== world[i]) { same = false; break; }
+    if (same) return kept.at;
+  }
+  const at = placeSolidAt(s, world);
+  s._placed = { world: Float64Array.from(world), at };
+  return at;
+}
+
+function placeSolidAt(s, world) {
   const fromNode = m4.invertRigid(m4.create(), world);
   // Into the frame its distance is measured in, and into its box's.
   const toQuery = s.kind === 'mesh' ? fromNode : m4.multiply(m4.create(), s.toLocal, fromNode);

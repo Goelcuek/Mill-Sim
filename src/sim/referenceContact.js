@@ -40,9 +40,16 @@ export function insideColumns(target) {
   if (target.columns) return target.columns;
   const index = target.surface;
   const b = index.bounds;
+  const sky = referenceSkyline(target);
   let cache = new Map();
   const fn = (x, y, z) => {
     if (x < b[0] || y < b[1] || z < b[2] || x > b[3] || y > b[4] || z > b[5]) return false;
+    // Above the highest the part stands here: outside, without a column.
+    if (sky) {
+      const si = Math.floor((x - sky.ox) / sky.size[0]);
+      const sj = Math.floor((y - sky.oy) / sky.size[1]);
+      if (si >= 0 && sj >= 0 && si < sky.bx && sj < sky.by && z > sky.max[sj * sky.bx + si] + 1e-6) return false;
+    }
     const i = Math.floor((x - b[0]) / COLUMN);
     const j = Math.floor((y - b[1]) / COLUMN);
     const key = j * 4194304 + i;
