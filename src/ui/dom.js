@@ -229,6 +229,10 @@ export function pickFile(accept, multiple = false) {
       resolve([...input.files]);
       input.remove();
     });
+    input.addEventListener('cancel', () => {
+      resolve([]);
+      input.remove();
+    });
     document.body.appendChild(input);
     input.click();
   });

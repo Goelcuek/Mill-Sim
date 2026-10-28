@@ -1628,6 +1628,63 @@ try {
     check(tv.back, 'leaving Travels should put the tool back');
   }
 
+  // ---- every Add… button opens its window --------------------------------
+  //
+  // A window that throws while it is being built never appears, and nothing
+  // else says so: Add fixture… did exactly that while dropping a file on
+  // the same page worked.
+  {
+    const pages = [
+      ['setup', 'stock'], ['setup', 'fixtures'],
+      ['machine', 'layout'], ['machine', 'axes'], ['machine', 'assembly'], ['machine', 'macros'],
+      ['tools', 'assemblies'], ['tools', 'tools'], ['tools', 'holders'],
+    ];
+    // Buttons that go straight to the file explorer or need a body chosen.
+    const skip = /Open files|Mate by two points/;
+    const silent = [];
+    let opened = 0;
+    for (const [tab, id] of pages) {
+      await page.click(`.ribbon-tab[data-tab="${tab}"]`);
+      await page.click(`.ribbon-page[data-page="${id}"]`);
+      await page.waitForTimeout(200);
+      const labels = await page.$$eval('.panel .add-bar .add-btn:not([disabled])', (bs) => bs.map((b) => b.textContent.trim()));
+      for (const label of labels) {
+        if (skip.test(label)) continue;
+        const before = errors.length;
+        await page.click(`.panel .add-bar .add-btn:has-text("${label}")`);
+        const shown = await page.waitForSelector('.dialog', { timeout: 1500 }).then(() => true, () => false);
+        if (!shown || errors.length > before) silent.push(`${tab}/${id} ${label}`);
+        else opened++;
+        if (shown) {
+          await page.keyboard.press('Escape');
+          const gone = await page.waitForSelector('.dialog', { state: 'detached', timeout: 1500 }).then(() => true, () => false);
+          // A window whose editor keeps Escape for itself closes by its ✕.
+          if (!gone) await page.click('.dialog .dialog-close');
+        }
+      }
+    }
+    console.log('add windows:', JSON.stringify({ opened, silent }));
+    check(!silent.length, `these Add buttons opened no window: ${silent.join(', ')}`);
+    check(opened >= 9, `only ${opened} Add windows were tried`);
+
+    // And the fixture window adds a fixture.
+    await page.click('.ribbon-tab[data-tab="setup"]');
+    await page.click('.ribbon-page[data-page="fixtures"]');
+    const count = () => page.evaluate(() => window.millsim.models.models.length);
+    const was = await count();
+    await page.click('.panel .add-bar .add-btn:has-text("Add fixture")');
+    await page.waitForSelector('.dialog');
+    await page.click('.dialog .dialog-footer .btn-primary');
+    await page.waitForTimeout(300);
+    const now = await count();
+    check(now === was + 2, `Add fixture… with Vice jaws chosen should add two jaws: ${was} → ${now}`);
+    await page.evaluate((n) => {
+      const app = window.millsim;
+      for (const m of app.models.models.slice(n)) app.models.remove(m);
+      app.refreshFixtures();
+    }, was);
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you

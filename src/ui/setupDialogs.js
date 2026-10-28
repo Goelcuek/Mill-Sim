@@ -27,17 +27,21 @@ const KINDS = [
 export function openFixtureDialog(app, panel) {
   const state = { kind: 'vice', units: 'mm', role: 'fixture', recentre: true, files: [] };
 
+  // Made before the blocks that hold them: a control used before its line
+  // is a ReferenceError, and the window never opened.
+  const place = checkbox('Sit it on Z0 and centre it in XY', state.recentre, (v) => { state.recentre = v; sync(); });
+  const placeHint = el('div.hint');
+  const kindHint = el('div.hint');
+
   const fileLabel = el('div.hint', {}, 'No file chosen.');
-  const pick = el('button.btn', {
-    type: 'button',
-    onclick: async () => {
-      state.files = await pickFile('.stl', true);
-      fileLabel.textContent = state.files.length
-        ? state.files.map((f) => f.name).join(', ')
-        : 'No file chosen.';
-      sync();
-    },
-  }, 'Choose STL…');
+  const choose = async () => {
+    state.files = await pickFile('.stl', true);
+    fileLabel.textContent = state.files.length
+      ? state.files.map((f) => f.name).join(', ')
+      : 'No file chosen.';
+    sync();
+  };
+  const pick = el('button.btn', { type: 'button', onclick: choose }, 'Choose STL…');
 
   const stlBlock = el('div.dialog-form', {}, [
     row([pick]),
@@ -62,10 +66,6 @@ export function openFixtureDialog(app, panel) {
     placeHint,
   ]);
 
-  const place = checkbox('Sit it on Z0 and centre it in XY', state.recentre, (v) => { state.recentre = v; sync(); });
-  const placeHint = el('div.hint');
-  const kindHint = el('div.hint');
-
   const sync = () => {
     stlBlock.hidden = state.kind !== 'stl';
     place.input.checked = state.recentre;
@@ -80,6 +80,8 @@ export function openFixtureDialog(app, panel) {
     select('What to add', KINDS.map((k) => ({ value: k.value, label: k.label })), state.kind, (v) => {
       state.kind = v;
       sync();
+      // Choosing a file to add is choosing the file: the explorer opens.
+      if (v === 'stl' && !state.files.length) choose();
     }),
     kindHint,
     stlBlock,
