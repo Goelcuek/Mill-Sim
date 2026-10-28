@@ -507,3 +507,56 @@ test('in a CYCLE800 plane without TRAORI a C move is the axes alone: the slides 
     }
   }
 });
+
+test('A3/B3/C3 under TRAORI point the tool; ORIVECT sweeps it round the great circle, ORIAXES moves the axes', () => {
+  const block = (ori) => [
+    '%_N_DEMO_5AX_MPF',
+    'N10 G90 G40 G17 G54',
+    'N50 G0 X0 Y0 Z50.0',
+    'N60 TRAORI(1)',
+    ori ? `N70 ${ori}` : '',
+    'N80 G01 Z10.0 F1000',
+    'N90 X10.0 Y10.0 Z0. A3=0.2 B3=0.2 C3=0.9195 F500',
+    'N100 G01 X20.0 Y10.0 A3=0.1 B3=0.3 C3=0.9434 F800',
+    'N145 G00 Z50.0',
+    'N150 TRAFOOF',
+    'M30',
+  ].join('\n');
+  const unit = (v) => { const l = Math.hypot(...v); return v.map((x) => x / l); };
+  for (const preset of ['tableTable', 'headTable']) {
+    const kin = buildPreset(preset);
+    const p = run(block('ORIVECT'), { kinematics: kin });
+    assert.deepEqual(said(p).filter((w) => !/No M06/.test(w)), [], `${preset}: read without a word`);
+    const dir = (rot) => kin.toolAxis(rot, 0);
+    for (const [line, want] of [[7, [0.2, 0.2, 0.9195]], [8, [0.1, 0.3, 0.9434]]]) {
+      const parts = p.moves.filter((m) => m.line === line);
+      assert.ok(parts.length > 5, `${preset} line ${line}: swept in steps, ${parts.length}`);
+      const v0 = dir(parts[0].rotFrom);
+      const v1 = dir(parts[parts.length - 1].rotTo);
+      const w = unit(want);
+      for (let i = 0; i < 3; i++) near(v1[i], w[i], 1e-6, `${preset} line ${line}: the tool ends along the vector`);
+      // Every step's direction is in the plane of the two ends: the great circle.
+      const n = unit([v0[1] * v1[2] - v0[2] * v1[1], v0[2] * v1[0] - v0[0] * v1[2], v0[0] * v1[1] - v0[1] * v1[0]]);
+      for (const m of parts) {
+        const d = dir(m.rotTo);
+        near(d[0] * n[0] + d[1] * n[1] + d[2] * n[2], 0, 1e-6, `${preset} line ${line}: on the great circle`);
+      }
+      // The tip still goes straight.
+      const a = parts[0].from;
+      const b = parts[parts.length - 1].to;
+      for (const m of parts) {
+        const t = Math.hypot(...m.to.map((x, i) => x - a[i])) / Math.hypot(...b.map((x, i) => x - a[i]));
+        for (let i = 0; i < 3; i++) near(m.to[i], a[i] + (b[i] - a[i]) * t, 1e-6, `${preset} line ${line}: straight`);
+      }
+    }
+    // ORIAXES: one move a block, the rotaries straight to the same ends.
+    const ax = run(block('ORIAXES'), { kinematics: kin });
+    assert.equal(ax.moves.filter((m) => m.line === 7).length, 1, `${preset}: ORIAXES is one move`);
+    const end = ax.moves.filter((m) => m.line === 8).pop().rotTo;
+    const w = unit([0.1, 0.3, 0.9434]);
+    dir(end).forEach((x, i) => near(x, w[i], 1e-6, `${preset}: ORIAXES ends along the vector too`));
+  }
+  // Without TRAORI there is nothing for a vector to mean.
+  const off = run('G0 X0 Y0 Z50\nG1 X10 A3=0.2 B3=0 C3=1 F500\nM30', { kinematics: buildPreset('tableTable') });
+  assert.ok(errors(off).some((e) => /under TRAORI/.test(e)), errors(off).join('\n'));
+});

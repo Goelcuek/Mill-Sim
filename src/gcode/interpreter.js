@@ -209,6 +209,14 @@ class State {
     this.g92 = [0, 0, 0];
     /** Tool-vector mode: the block says where the tool points, not the angles. */
     this.vector = false;
+    /**
+     * How a Siemens turns the tool between two orientations under TRAORI:
+     * 'axes' (ORIAXES) each rotary straight to its end, 'vector' (ORIVECT,
+     * ORIPLANE) the tool swept round the great circle from one direction to
+     * the other. Null until a program says: then a block that gives the
+     * tool's direction sweeps it, and one that gives angles moves the axes.
+     */
+    this.ori = null;
   }
 
   offset() {
@@ -2360,25 +2368,36 @@ export function interpret(text, config = {}) {
 
     if (hasRotaryWord) applyExtraAxes(axis, b.axisModes, machineCoords);
 
+    // A3= B3= C3=: the Siemens way to say it, under TRAORI.
+    let sweep = st.ori === 'vector' && (hasRotaryWord || turnedByVector);
+    if (b.orient && orientTool(b)) {
+      turnedByVector = true;
+      sweep = st.ori !== 'axes';
+    }
+
     if (motion === 80 || (!hasAxisWord && !hasRotaryWord && !turnedByVector)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');
       continue;
     }
 
+    // Under ORIVECT the tool turns round the great circle; anywhere else,
+    // and on an arc, the rotaries go straight to their ends.
+    const straight = sweep && st.tcp ? emitSwept : emitLinear;
+
     if (!hasAxisWord && (hasRotaryWord || turnedByVector)) {
       // A rotary-only block still moves the machine, and on a table machine
       // it moves the tool relative to the part.
-      emitLinear(b.line, motion === 0 ? 'rapid' : 'feed', st.pos.slice(), st.feed > 0 ? st.feed : 100);
+      straight(b.line, motion === 0 ? 'rapid' : 'feed', st.pos.slice(), st.feed > 0 ? st.feed : 100);
       continue;
     }
 
     const target = resolveLinear(axis, st.metric, machineCoords, b.axisModes);
 
     if (motion === 0) {
-      emitLinear(b.line, 'rapid', target, cfg.rapidRate);
+      straight(b.line, 'rapid', target, cfg.rapidRate);
     } else if (motion === 1) {
       if (!(st.feed > 0)) warn(b.line, 'Feed move with no active F word; assuming 100 mm/min.', 'error');
-      emitLinear(b.line, 'feed', target, st.feed > 0 ? st.feed : 100);
+      straight(b.line, 'feed', target, st.feed > 0 ? st.feed : 100);
     } else if (motion === 2 || motion === 3) {
       const ccw = motion === 3;
       const feed = st.feed > 0 ? st.feed : 100;
@@ -2486,6 +2505,117 @@ export function interpret(text, config = {}) {
 
   // ---- Siemens ---------------------------------------------------------------
 
+  /** The rotaries as TCP counts them: the work offset's turn of each left out. */
+  function programmedRot(rot) {
+    const r = {};
+    for (const L of turning) r[L] = (Number(rot[L]) || 0) - rotaryOffset(L);
+    return r;
+  }
+
+  /**
+   * The rotaries that point the tool along `dir`, a direction on the part,
+   * nearest those in `from`; null when the machine cannot.
+   */
+  function rotariesFor(dir, from) {
+    const kin = cfg.kinematics;
+    const sol = kin.rotariesForToolAxis(dir, programmedRot(from), cfg.gaugeLength || 0);
+    if (!sol) return null;
+    const out = { ...from };
+    for (const L of Object.keys(sol)) out[L] = sol[L] + rotaryOffset(L);
+    return out;
+  }
+
+  /** Which way the tool points on the part with these rotaries. */
+  function toolDirection(rot) {
+    return cfg.kinematics.toolAxis(programmedRot(rot), cfg.gaugeLength || 0);
+  }
+
+  /**
+   * A3= B3= C3=: the tool's direction, given as a vector in the workpiece
+   * frame, and the rotaries set to point it there. A component left out
+   * is 0. Under a frame (ROT, CYCLE800) the vector turns with the frame,
+   * as the points do. True when the rotaries were set.
+   */
+  function orientTool(b) {
+    const values = {};
+    for (const [key, text] of Object.entries(b.orient)) {
+      try {
+        const [expr] = parseArgs(text, dialect);
+        values[key] = expr === null ? 0 : Number(evaluate(expr, vars));
+      } catch (err) {
+        warn(b.line, `${key}=${text}: ${err.message}.`, 'error');
+        return false;
+      }
+    }
+    const others = Object.keys(values).filter((k) => !/^[ABC]3$/.test(k));
+    if (others.length && !spokenFor.has('orient words')) {
+      spokenFor.add('orient words');
+      warn(b.line, `${others.join(', ')}: only the tool vector A3/B3/C3 is read; orientation angles and normal vectors are not.`, 'error');
+    }
+    if (!['A3', 'B3', 'C3'].some((k) => k in values)) return false;
+    const kin = cfg.kinematics;
+    if (!st.tcp) {
+      warn(b.line, 'A3/B3/C3 give the tool direction under TRAORI; without it they were ignored.', 'error');
+      return false;
+    }
+    if (!kin || !kin.rotaries().length) {
+      warn(b.line, 'A tool vector needs a machine with rotary axes; load one on the Machine tab.', 'error');
+      return false;
+    }
+    let v = [values.A3 || 0, values.B3 || 0, values.C3 || 0];
+    const len = Math.hypot(v[0], v[1], v[2]);
+    if (!(len > 1e-9)) {
+      warn(b.line, 'Tool vector of zero length; the direction was ignored.', 'error');
+      return false;
+    }
+    v = v.map((x) => x / len);
+    if (st.xf) v = m4.normalize(m4.transformDir([0, 0, 0], st.xf, v));
+    const sol = rotariesFor(v, st.rot);
+    if (!sol) {
+      warn(b.line, `No rotary position reaches a tool vector of ${v.map((x) => x.toFixed(3)).join(', ')} within the machine's travel.`, 'error');
+      return false;
+    }
+    st.rotPrev = { ...st.rot };
+    Object.assign(st.rot, sol);
+    return true;
+  }
+
+  /**
+   * A straight move whose tool turns round the great circle from where it
+   * pointed to where it ends, as ORIVECT has it, rather than each rotary
+   * straight to its end. The tip still goes in a straight line. Made as
+   * short moves a degree of turn apart, each with its own angles, so the
+   * rotaries follow the circle however the machine is wound.
+   */
+  function emitSwept(line, kind, target, feed) {
+    const startRot = { ...st.rotPrev };
+    const endRot = { ...st.rot };
+    const v0 = toolDirection(startRot);
+    const v1 = toolDirection(endRot);
+    const angle = Math.acos(Math.max(-1, Math.min(1, m4.dot(v0, v1))));
+    const steps = Math.ceil((angle * 180) / Math.PI);
+    if (steps < 2 || Math.PI - angle < 1e-6) return emitLinear(line, kind, target, feed);
+    const start = st.pos.slice();
+    const sin = Math.sin(angle);
+    let rot = startRot;
+    let last = null;
+    for (let k = 1; k <= steps; k++) {
+      const u = k / steps;
+      if (k < steps) {
+        // Slerp: the direction u of the way round the circle.
+        const a = Math.sin((1 - u) * angle) / sin;
+        const c = Math.sin(u * angle) / sin;
+        const dir = [0, 1, 2].map((i) => v0[i] * a + v1[i] * c);
+        rot = rotariesFor(dir, rot) || rot;
+      } else {
+        rot = endRot;
+      }
+      st.rot = { ...rot };
+      last = emitLinear(line, kind, start.map((x, i) => x + (target[i] - x) * u), feed);
+    }
+    return last;
+  }
+
   /** Modes a Siemens writes as words: TRAORI, TRAFOOF, DIAMON and the rest. */
   function siemensModes(b) {
     for (const mode of b.modes) {
@@ -2495,6 +2625,17 @@ export function interpret(text, config = {}) {
           events.push({ line: b.line, type: 'tcp', moveIndex: moves.length, text: on ? 'Tool centre point control on (TRAORI)' : 'Tool centre point control off (TRAFOOF)' });
         }
         setTcpMode(() => { st.tcp = on ? 4 : 0; });
+      } else if (mode === 'ORIAXES') {
+        st.ori = 'axes';
+      } else if (mode === 'ORIVECT' || mode === 'ORIPLANE' || mode === 'ORICONCW' || mode === 'ORICONCCW') {
+        st.ori = 'vector';
+        if (mode.startsWith('ORICON') && !spokenFor.has('ORICON')) {
+          spokenFor.add('ORICON');
+          warn(b.line, `${mode} turns the tool round a cone; it is swept round the great circle between the two directions here.`);
+        }
+      } else if (mode === 'ORIMKS' && !spokenFor.has(mode)) {
+        spokenFor.add(mode);
+        warn(b.line, 'ORIMKS gives the tool direction in machine coordinates; it is read in the workpiece frame here, as ORIWKS.');
       } else if ((mode === 'DIAMON' || mode === 'DIAM90') && !spokenFor.has(mode)) {
         // Diameter programming is a lathe's: X read as a diameter. A mill
         // has no use for it, and this reader keeps X a position.

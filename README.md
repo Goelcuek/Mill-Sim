@@ -879,6 +879,16 @@ comments, `/` block delete
   (`DIAMON` is noted: diameter programming is for turning), and `SUPA`,
   `G153`, `G500`, `G70`/`G71`, the smoothing modes and `CYCLE832` read and
   passed over.
+- *Tool orientation* — under `TRAORI`, `A3= B3= C3=` give the tool's
+  direction as a vector in the workpiece frame (turned with any frame or
+  CYCLE800 plane), and the machine's rotaries are solved for it. `ORIVECT`
+  (and `ORIPLANE`) sweeps the tool round the great circle between the two
+  directions while the tip goes straight, made as steps a degree of turn
+  apart; `ORIAXES` moves each rotary straight to its end. With neither
+  written, a block that gives a vector sweeps and one that gives angles
+  moves the axes. `ORICONCW`/`ORICONCCW` are swept as great circles, and
+  the orientation angles (`A2=`) and normal vectors (`A4=`…) are reported,
+  not read. The `%_N_NAME_MPF` header line is accepted.
 - *Drilling cycles* — `CYCLE81` `CYCLE82` `CYCLE83` `CYCLE84` `CYCLE840`
   `CYCLE85` `CYCLE86` `CYCLE87` `CYCLE88` `CYCLE89` with their positional
   parameters (`RTP, RFP, SDIS, DP, DPR, …`, empty slots taking the default),

@@ -157,7 +157,8 @@ export function lex(text, dialect) {
     }
 
     // Program start/end markers and O-numbers carry no motion.
-    if (body === '%') {
+    // %_N_PART_MPF: the name a Siemens file carries on its first line.
+    if (body === '%' || (d.siemensWords && /^%_N_\w+$/i.test(body))) {
       pushBlock({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
       continue;
     }
@@ -308,6 +309,25 @@ export function siemensWords(input, d = DIALECTS.siemens) {
     extra.toolName = name.trim();
     return ' ';
   });
+  // A3=0.2 B3=0.2 C3=0.9195: the tool's direction under TRAORI, and the
+  // other orientation words spelled the same way (A2 angles, A4 normals).
+  // Each value is whatever stands after the = — a number, a name, or a
+  // bracket — and is worked out by the interpreter.
+  const ORIENT_RE = /\b([ABC])([2-7])\s*=\s*/gi;
+  let o;
+  while ((o = ORIENT_RE.exec(body)) !== null) {
+    let end = o.index + o[0].length;
+    if (body[end] === '(') {
+      const close = closing(body, end);
+      end = close < 0 ? body.length : close + 1;
+    } else {
+      while (end < body.length && !/\s/.test(body[end])) end++;
+    }
+    extra.orient = extra.orient || {};
+    extra.orient[`${o[1].toUpperCase()}${o[2]}`] = body.slice(o.index + o[0].length, end);
+    body = `${body.slice(0, o.index)} ${body.slice(end)}`;
+    ORIENT_RE.lastIndex = o.index;
+  }
   // C=DC(90): the value in brackets, with how the axis is to get there.
   let m;
   VALUE_MODE_RE.lastIndex = 0;
