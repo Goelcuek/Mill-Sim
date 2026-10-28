@@ -73,6 +73,15 @@ export class MachineView {
      */
     this.partGroup = new THREE.Group();
     this.partGroup.name = 'part';
+    /**
+     * Where a move made without TCP is drawn: the work frame as it would
+     * be with every rotary at zero. Its X Y Z are the slides, so its path
+     * stays put in the machine while the table turns under it — the path
+     * of a TRAORI or CYCLE800 move, a path on the part, rides partGroup.
+     */
+    this.fixedGroup = new THREE.Group();
+    this.fixedGroup.name = 'slides';
+    this.fixedGroup.matrixAutoUpdate = false;
     /** The spindle end of the chain; the tool assembly rides here. */
     this.toolGroup = new THREE.Group();
     this.toolGroup.name = 'spindle';
@@ -217,6 +226,7 @@ export class MachineView {
     work.add(this.partGroup);
     const coord = this.nodeGroups.get(this.coordNode()) || work;
     coord.add(this.workGroup);
+    this.group.add(this.fixedGroup);
     const tool = this.nodeGroups.get(kin.toolNode) || this.group;
     tool.add(this.toolGroup);
     // Both sit on the fixture face: the table offset is the stack the job
@@ -480,6 +490,8 @@ export class MachineView {
       this.workGroup.position.set(0, 0, 0);
       this.partGroup.position.set(0, 0, 0);
       this.toolGroup.position.set(0, 0, 0);
+      this.fixedGroup.matrix.identity();
+      this.fixedGroup.matrixWorldNeedsUpdate = true;
       // The tool is given on the part, and in part view the part frame is
       // the scene — except for the index, which is the one thing that
       // still separates the two.
@@ -532,6 +544,17 @@ export class MachineView {
       g.matrix.copy(tmp);
       g.matrixWorldNeedsUpdate = true;
     }
+    // The frame the slides alone place: the same pose with every rotary
+    // at zero. The chain is solved again for the pose afterwards, as
+    // everything after this expects it to be.
+    const solved = { ...(kin.lastValues || {}) };
+    const still = { ...solved };
+    for (const n of kin.rotaries()) if (n.letter) still[n.letter] = 0;
+    kin.solve(still);
+    toThree(tmp, kin.matrixOf(kin.workNode));
+    this.fixedGroup.matrix.copy(tmp).multiply(new THREE.Matrix4().makeTranslation(...kin.tableOffset));
+    this.fixedGroup.matrixWorldNeedsUpdate = true;
+    kin.solve(solved);
     this.group.updateMatrixWorld(true);
 
     // The tool is drawn where the part says it is, so it lands on the cut

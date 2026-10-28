@@ -299,6 +299,8 @@ export class Kinematics {
    * @param {Record<string, number>} rawValues axis letter -> value (mm or degrees)
    */
   solve(rawValues) {
+    /** What the chain was last posed with, as given; see MachineView.update. */
+    this.lastValues = rawValues || {};
     const values = this.resolve(rawValues || {});
     const t = this.scratch.a;
     const j = this.scratch.b;

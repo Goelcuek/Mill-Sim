@@ -368,7 +368,9 @@ export class App {
     // coordinate system it is measured in does not. See MachineView.
     this.machineView.partGroup.add(this.stockView.group);
     this.machineView.partGroup.add(this.models.group);
-    this.machineView.workGroup.add(this.toolpathView.group);
+    // Moves without TCP stay put in the machine; moves with it ride the part.
+    this.machineView.fixedGroup.add(this.toolpathView.group);
+    this.machineView.partGroup.add(this.toolpathView.followGroup);
 
     this.originView = new OriginView();
     this.machineView.workGroup.add(this.originView.group);
@@ -2636,7 +2638,8 @@ export class App {
       // In machine terms, like the path it is marking: the backplot is
       // drawn where the tool was sent, and that is not where the part had
       // turned to underneath it.
-      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.min(Math.max(r * 0.35, 0.6), 3));
+      const under = this.state.program.moves[sim.moveIndex];
+      this.toolpathView.setMarker(sim.pos[0], sim.pos[1], sim.pos[2], Math.min(Math.max(r * 0.35, 0.6), 3), !!(under && under.tcp));
     } else {
       this.toolpathView.hideMarker();
     }

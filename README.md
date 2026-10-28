@@ -491,6 +491,11 @@ opening is drawn as the cut face — flat, lit as the plane, in its own
 colour — and a hole or pocket the plane passes through shows as a gap in
 it.
 
+The **tool path** is drawn in the frame each move was programmed in. A move
+without TCP is where the slides send the tool, so its path stays put in the
+machine while a rotary turns the part under it; a move under TRAORI or in a
+CYCLE800 plane is a path on the part, and turns with it.
+
 The viewport has **no perspective**: parallel edges stay parallel, a wall
 seen edge on stays a line, and a length on screen is the same length near
 and far. The wheel zooms towards the pointer, and nothing is ever cut away
