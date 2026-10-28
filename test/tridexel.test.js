@@ -316,3 +316,21 @@ test('a line running just inside a wall is not a deep gouge', () => {
   assert.ok(r.gouge3, 'a gouge');
   assert.ok(r.gouge3.depth < 0.3, `reported as ${r.gouge3.depth}, not the length of the line`);
 });
+
+test('a body lying flat is not a chain of spheres bulging back past its own faces', () => {
+  // A Ø10 shank with a Ø110 nose 100 up it, lying along +Y 30 over the top
+  // of the stock (Y−20 to Y20), the nose's face 10 past its far edge. A
+  // sphere standing at that face would reach 55 back towards the tip and
+  // 25 into the stock; the nose itself is clear of it.
+  const td = block(0.25);
+  const chain = Float32Array.from([0, 5, 50, 5, 100, 5, 100, 55, 130, 55, 160, 55]);
+  const flat = td.probeChain(chain, [0, -70, 30], [0, 1, 0]);
+  assert.equal(flat, null, JSON.stringify(flat));
+  // Five further on, the nose is over the stock, 25 into it.
+  const sunk = td.probeChain(chain, [0, -85, 30], [0, 1, 0]);
+  assert.ok(sunk && Math.abs(sunk.depth - 25) < 0.5, JSON.stringify(sunk));
+  // Pointing down along −Z from under the block — the tool upside down —
+  // the band is taken from above: the nose's face is 100 below the tip.
+  const up = td.probeChain(chain, [0, 0, -40], [0, 0, -1]);
+  assert.equal(up, null);
+});

@@ -207,7 +207,7 @@ export const EXAMPLES = [
     "setup": {
       "stock": {
         "size": [120, 90, 40],
-        "origin": [-60, -45, -40],
+        "origin": [40, -45, -40],
         "resolution": 0.25
       },
       "machine": {
@@ -215,7 +215,7 @@ export const EXAMPLES = [
       }
     },
     "file": "examples/side-holes-full-3d-stock.nc",
-    "lines": 58
+    "lines": 61
   }
 ];
 

@@ -1120,7 +1120,6 @@ export class TriDexelStock extends Stock {
       const j1 = Math.min(this.ny - 1, Math.ceil((cy + r - this.origin[1]) / this.dy - 0.5));
       if (i0 > i1 || j0 > j1) continue;
       const r2 = r * r;
-      const cut = Math.abs(az) > 1e-6;
       for (let j = j0; j <= j1; j += stride) {
         const wy = this.cy(j);
         const py = wy - cy;
@@ -1135,12 +1134,26 @@ export class TriDexelStock extends Stock {
           const k = j * this.nx + i;
           const half = Math.sqrt(r2 - d2);
           let zb = cz - half;
-          if (cut) {
-            const face = tip[2] + (bandLo - ((wx - tip[0]) * ax + qy)) / az;
+          let zt = cz + half;
+          // Only the slice of this sphere from its band upwards along the
+          // tool: below that is the slice before it, and a sphere standing
+          // at a flat face — the spindle nose — would otherwise bulge a
+          // whole radius past it. Which side of the band a point on this
+          // vertical line is on depends on which way the tool leans: from
+          // below when it points up, from above when it points down, and
+          // not along the line at all when it lies flat.
+          const along = (wx - tip[0]) * ax + qy;
+          if (az > 1e-9) {
+            const face = tip[2] + (bandLo - along) / az;
             if (face > zb) zb = face;
+          } else if (az < -1e-9) {
+            const face = tip[2] + (bandLo - along) / az;
+            if (face < zt) zt = face;
+          } else if (along < bandLo) {
+            continue;
           }
-          if (this.height[k] <= zb) continue;
-          const m = this.materialBetween(k, zb, cz + half);
+          if (!(zt > zb) || this.height[k] <= zb) continue;
+          const m = this.materialBetween(k, zb, zt);
           const depth = m - zb;
           if (depth > 0 && (!worst || depth > worst.depth)) worst = { x: wx, y: wy, z: zb, depth };
         }

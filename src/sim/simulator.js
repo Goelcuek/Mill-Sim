@@ -10,6 +10,7 @@ import { checkFixtures, checkLimits, checkTable, checkSolids, meshGrid } from '.
 import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
 import { gougeDepth } from './target.js';
+import { placeSolid, boxesMeet, solidContact, solidIntoStock } from './machineContact.js';
 
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
@@ -17,6 +18,7 @@ export const COLLISION_TYPES = {
   fixture: { label: 'Fixture collision', severity: 'error' },
   table: { label: 'Table collision', severity: 'error' },
   casting: { label: 'Machine collision', severity: 'error' },
+  machine: { label: 'Machine collision', severity: 'error' },
   limit: { label: 'Travel limit exceeded', severity: 'error' },
   spindle: { label: 'Cutting with spindle stopped', severity: 'warning' },
   notool: { label: 'No tool assembly loaded', severity: 'warning' },
@@ -475,10 +477,160 @@ export class Simulator {
     // The chain may have changed with them: nothing worked out on the old
     // one still holds.
     this.basisMemo = null;
-    this.castings = (bodies || []).map((b) => ({
+    this.mates = null;
+    const all = (bodies || []).map((b) => ({
       ...b,
       solids: b.solids.map((s) => ({ ...s, ...boundOf(s), ...(s.kind === 'mesh' ? { grid: meshGrid(s.tris) } : {}) })),
     }));
+    // What the tool is checked against: everything not riding with it,
+    // less the table, which the table check answers for.
+    this.castings = all
+      .filter((b) => b.side !== 'tool')
+      .map((b) => ({ ...b, solids: b.solids.filter((s) => !s.table) }))
+      .filter((b) => b.solids.length);
+    // The machine against itself: what rides with the spindle, against
+    // everything else, the table included.
+    const flat = (side) => all.filter((b) => (side === 'tool') === (b.side === 'tool'))
+      .flatMap((b) => b.solids.map((s) => ({ s, body: b })));
+    this.headSolids = flat('tool');
+    this.workSolids = flat('work');
+  }
+
+  /** Is the machine-against-itself check on, with anything to check? */
+  get machineOn() {
+    return !!(this.kinematics && this.headSolids && this.headSolids.length
+      && !(this.machine && this.machine.castingsCheck === false));
+  }
+
+  /**
+   * Pairs that touch with every axis at zero are how the machine is built
+   * — a bridge sitting on its walls, a slide on its ways — and are never
+   * reported. Worked out once per chain.
+   */
+  matePairs() {
+    if (this.mates) return this.mates;
+    const k = this.kinematics;
+    k.solve({});
+    const head = this.headSolids.map(({ s, body }) => placeSolid(s, k.matrixOf(body.node)));
+    const work = this.workSolids.map(({ s, body }) => placeSolid(s, k.matrixOf(body.node)));
+    this.mates = new Set();
+    head.forEach((P, i) => work.forEach((Q, j) => {
+      const c = solidContact(P, Q, 0.05);
+      if (c) this.mates.add(i * 65536 + j);
+    }));
+    return this.mates;
+  }
+
+  /**
+   * Every head solid and every other solid, placed for the chain as posed
+   * now (see placeCastings), with the part's frame and the scene's.
+   */
+  placeMachine() {
+    const k = this.kinematics;
+    return {
+      head: this.headSolids.map(({ s, body }) => placeSolid(s, k.matrixOf(body.node))),
+      work: this.workSolids.map(({ s, body }) => placeSolid(s, k.matrixOf(body.node))),
+    };
+  }
+
+  /**
+   * Which head-and-other pairs, and which head solids against the stock,
+   * could meet anywhere along a chunk. While the rotaries stand still
+   * every solid only slides, so the boxes at the two ends, joined, hold
+   * all of its sweep. A chunk that turns a rotary is asked pose by pose.
+   */
+  machineNear(poses, mv, clearance) {
+    if (!this.machineOn || !poses.length) return null;
+    const mates = this.matePairs();
+    const pad = Math.max(clearance, 0) + 1e-6;
+    const all = () => {
+      const pairs = [];
+      for (let i = 0; i < this.headSolids.length; i++) {
+        for (let j = 0; j < this.workSolids.length; j++) if (!mates.has(i * 65536 + j)) pairs.push([i, j]);
+      }
+      return { pairs, stock: this.headSolids.map((_, i) => i) };
+    };
+    const first = poses[0];
+    const last = poses[poses.length - 1];
+    const ra = this.rotaryAt(mv, first[3]);
+    const rb = this.rotaryAt(mv, last[3]);
+    for (const L in { ...ra, ...rb }) if (Math.abs((ra[L] || 0) - (rb[L] || 0)) > 1e-9) return all();
+    const ends = [];
+    for (const p of [first, last]) {
+      if (!this.placeCastings(p[0], mv, p[3], [])) return all();
+      const placed = this.placeMachine();
+      placed.stock = this.stock ? this.stockBox(this.kinematics) : null;
+      ends.push(placed);
+    }
+    const join = (a, b) => ({
+      lo: a.lo.map((v, k) => Math.min(v, b.lo[k])),
+      hi: a.hi.map((v, k) => Math.max(v, b.hi[k])),
+    });
+    const head = ends[0].head.map((P, i) => join(P, ends[1].head[i]));
+    const work = ends[0].work.map((Q, j) => join(Q, ends[1].work[j]));
+    const pairs = [];
+    head.forEach((P, i) => work.forEach((Q, j) => {
+      if (!mates.has(i * 65536 + j) && boxesMeet(P, Q, pad)) pairs.push([i, j]);
+    }));
+    const stockBox = ends[0].stock && join(ends[0].stock, ends[1].stock);
+    const stock = stockBox ? head.map((P, i) => (boxesMeet(P, stockBox, 0) ? i : -1)).filter((i) => i >= 0) : [];
+    return { pairs, stock };
+  }
+
+  /** The stock's box in the scene, for the chain as posed now. */
+  stockBox(k) {
+    const st = this.stock;
+    const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const q = [0, 0, 0];
+    for (let c = 0; c < 8; c++) {
+      m4.transformPoint(q, part, [
+        c & 1 ? st.origin[0] + st.size[0] : st.origin[0],
+        c & 2 ? st.origin[1] + st.size[1] : st.origin[1],
+        c & 4 ? st.top : st.base,
+      ]);
+      for (let a = 0; a < 3; a++) {
+        if (q[a] < lo[a]) lo[a] = q[a];
+        if (q[a] > hi[a]) hi[a] = q[a];
+      }
+    }
+    return { lo, hi };
+  }
+
+  /**
+   * The machine against itself, and against the part, at one pose: the
+   * worst of the pairs a chunk left to ask about.
+   */
+  checkMachine(tip, mv, u, clearance, near) {
+    if (!near || (!near.pairs.length && !near.stock.length)) return null;
+    if (!this.placeCastings(tip, mv, u, [])) return null;
+    const k = this.kinematics;
+    const head = new Map();
+    const work = new Map();
+    const placeHead = (i) => head.get(i) || head.set(i, placeSolid(this.headSolids[i].s, k.matrixOf(this.headSolids[i].body.node))).get(i);
+    const placeWork = (j) => work.get(j) || work.set(j, placeSolid(this.workSolids[j].s, k.matrixOf(this.workSolids[j].body.node))).get(j);
+    const pad = Math.max(clearance, 0);
+    let worst = null;
+    for (const [i, j] of near.pairs) {
+      const c = solidContact(placeHead(i), placeWork(j), pad);
+      if (c && (!worst || c.gap < worst.gap)) worst = { ...c, head: this.headSolids[i], other: this.workSolids[j] };
+    }
+    if (this.stock && this.stock.stretchesAt && near.stock.length) {
+      const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+      const fromScene = m4.invertRigid(m4.create(), part);
+      for (const i of near.stock) {
+        const c = solidIntoStock(placeHead(i), this.stock, fromScene, part);
+        if (c && (!worst || -c.depth < worst.gap)) worst = { gap: -c.depth, point: c.point, partFrame: true, head: this.headSolids[i], other: null };
+      }
+    }
+    if (!worst) return null;
+    // Positions are reported on the part, where everything else is.
+    if (!worst.partFrame) {
+      const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+      worst.point = m4.transformPoint([0, 0, 0], m4.invertRigid(m4.create(), part), worst.point);
+    }
+    return worst;
   }
 
   /** Is the castings check on, with anything to check? */
@@ -935,7 +1087,7 @@ export class Simulator {
     }
 
     const hasObstacles = (this.fixtures && this.fixtures.length) || (this.machine && this.machine.table && this.machine.table.enabled)
-      || (this.castings.length && !(this.machine && this.machine.castingsCheck === false));
+      || this.castingsOn || this.machineOn;
     const limitsOn = this.machine && this.machine.limits && this.machine.limits.enabled;
 
     if (touchesStock) {
@@ -1090,8 +1242,10 @@ export class Simulator {
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
 
-    // Which of the machine's castings this chunk could reach at all.
+    // Which of the machine's castings this chunk could reach at all, and
+    // which parts of the machine could meet each other or the stock.
     const nearCastings = this.castingsNear(slot, poses, mv, clearance);
+    const nearMachine = this.machineNear(poses, mv, clearance);
 
     for (const [tip, dir, point, u] of poses) {
       if (this.fixtures && this.fixtures.length) {
@@ -1149,6 +1303,28 @@ export class Simulator {
               position: hit.point,
               depth: hit.clearance - hit.gap,
               gap: hit.gap,
+            });
+          }
+        }
+        const clash = nearMachine ? this.checkMachine(tip, mv, u, clearance, nearMachine) : null;
+        if (clash) {
+          const say = (b) => (b.body.letter ? `the ${b.s.name} (${b.body.letter} axis)` : `the ${b.s.name}`);
+          const what = clash.other ? say(clash.other) : 'the stock';
+          const who = say(clash.head);
+          if (clash.gap < 0) {
+            this.report('machine', {
+              line: mv.line,
+              message: (d) => `${who[0].toUpperCase()}${who.slice(1)} hits ${what} by ${d.toFixed(2)} mm.`,
+              position: clash.point,
+              depth: -clash.gap,
+            });
+          } else {
+            this.report('near', {
+              line: mv.line,
+              message: `${who[0].toUpperCase()}${who.slice(1)} passes within ${clash.gap.toFixed(2)} mm of ${what}.`,
+              position: clash.point,
+              depth: Math.max(clearance, 0) - clash.gap,
+              gap: clash.gap,
             });
           }
         }

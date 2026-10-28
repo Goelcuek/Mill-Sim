@@ -191,9 +191,14 @@ slotted rectangle, and it turns with its axes. The castings are checked
 as drawn — the stand-ins' boxes and cylinders, or the triangles of a body
 you imported — each moving with the axis that carries it, so a cutter fed
 into a trunnion's cradle side, or a long tool swung into a cheek, is a
-**Machine collision** naming the part and its axis. Whatever rides with
-the spindle is left out, since it cannot meet the tool it carries; **Machine
-› Travels › Check the castings** turns the check off. **Setup ›
+**Machine collision** naming the part and its axis. And the machine is
+checked against itself: whatever rides with the spindle — ram, head,
+fork, the spindle housing — against everything else, the platter and the
+stock included, so a head brought down beside a trunnion swung to A90 is
+reported in the table face. Pairs that already touch with every axis at
+zero are how the machine is built (a bridge on its walls, a slide on its
+ways) and are never reported. **Machine › Travels › Check the castings**
+turns both off. **Setup ›
 Checks** decides what counts: ask for clearance and a pass that clears a
 clamp by 2 mm is reported as the near miss it is, rather than only metal
 in metal. Which parts of the assembly are checked at all is a switch, and
@@ -682,7 +687,7 @@ same measure gives the reading under the pointer.
 | **Holder / shank crash** | The holder or spindle nose is buried in the stock, with the depth. |
 | **Fixture collision** | Any part of the assembly reached into a fixture or clamp. |
 | **Table collision** | The assembly went below the table surface inside its footprint. |
-| **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — with the part's name and the axis it rides on. |
+| **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — or a casting riding with the spindle met the table, another casting or the stock. Both parts are named, with the axes they ride on. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
 | **Gouge into the reference part** | The cutter went into the reference part by more than the tolerance — measured to the part's nearest face, so a gouge in a wall or the side of a hole is as deep as it really is. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
@@ -754,6 +759,14 @@ silently ignored.
 - **Fixture collision uses each model's oriented bounding box.** A complex
   clamp will read as a slightly bigger block than it is. Import an awkward
   fixture as a few simple pieces for a tighter fit.
+- **The machine against itself is sampled.** Where two castings could
+  touch, the surface of each inside the other's box is sampled — two dozen
+  points across the overlap, never finer than half a millimetre — and each
+  sample measured exactly against the other, so a glancing touch thinner
+  than the sampling can be missed. Castings that do not ride with the
+  spindle are not checked against each other (a cradle swung into a cheek
+  is not reported), and two imported meshes only know they touch, not by
+  how much.
 - **A casting's cylinders and imported meshes are met by spheres.** Boxes
   are measured exactly against an upright tool, as fixtures are; against a
   cylinder or a mesh the tool is a chain of spheres, which reaches up to a

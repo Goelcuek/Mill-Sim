@@ -565,10 +565,13 @@ export class MachineView {
    * imported as triangles — each in that axis's own frame. Shown or hidden
    * makes no difference: part view hides the machine, it does not remove it.
    *
-   * Left out: everything riding with the spindle, which cannot hit the tool
-   * it carries, and the table itself, which the table check answers for.
+   * Each body says which side of the machine it is on: `tool` for what
+   * rides with the spindle — checked against everything else, the part
+   * included, but never against the tool it carries — and `work` for the
+   * rest. The table's solids say `table`, because the tool against the
+   * table is the table check's question; the head against it is not.
    *
-   * @returns {{node:string, name:string, letter:string|null, solids:object[]}[]}
+   * @returns {{node:string, name:string, letter:string|null, side:'tool'|'work', solids:object[]}[]}
    */
   collisionBodies() {
     const kin = this.kinematics;
@@ -577,22 +580,23 @@ export class MachineView {
     const inv = new THREE.Matrix4();
     const v = new THREE.Vector3();
     for (const node of kin.order) {
-      if (kin.branchOf(node.id) === 'tool') continue;
+      const side = kin.branchOf(node.id) === 'tool' ? 'tool' : 'work';
       const solids = [];
       const label = node.name || node.id;
       const take = (mesh, m) => {
         const geo = mesh.geometry;
-        if (!geo || mesh.userData.tableSurface) return;
+        if (!geo) return;
         const name = mesh.name && mesh.name !== label ? mesh.name : label;
+        const table = !!mesh.userData.tableSurface;
         const p = geo.parameters || {};
         if (geo.type === 'BoxGeometry') {
           inv.copy(m).invert();
-          solids.push({ kind: 'box', name, toLocal: Float64Array.from(inv.elements), half: [p.width / 2, p.height / 2, p.depth / 2] });
+          solids.push({ kind: 'box', name, table, toLocal: Float64Array.from(inv.elements), half: [p.width / 2, p.height / 2, p.depth / 2] });
           return;
         }
         if (geo.type === 'CylinderGeometry') {
           inv.copy(m).invert();
-          solids.push({ kind: 'cyl', name, toLocal: Float64Array.from(inv.elements), r0: p.radiusBottom, r1: p.radiusTop, h: p.height });
+          solids.push({ kind: 'cyl', name, table, toLocal: Float64Array.from(inv.elements), r0: p.radiusBottom, r1: p.radiusTop, h: p.height });
           return;
         }
         const pos = geo.attributes && geo.attributes.position;
@@ -604,7 +608,7 @@ export class MachineView {
           v.fromBufferAttribute(pos, index ? index.getX(i) : i).applyMatrix4(m);
           tris[i * 3] = v.x; tris[i * 3 + 1] = v.y; tris[i * 3 + 2] = v.z;
         }
-        solids.push({ kind: 'mesh', name, tris });
+        solids.push({ kind: 'mesh', name, table, tris });
       };
       for (const mesh of this.proxies.get(node.id) || []) {
         mesh.updateMatrix();
@@ -624,7 +628,7 @@ export class MachineView {
           take(child, m);
         });
       }
-      if (solids.length) out.push({ node: node.id, name: label, letter: node.letter || null, solids });
+      if (solids.length) out.push({ node: node.id, name: label, letter: node.letter || null, side, solids });
     }
     return out;
   }

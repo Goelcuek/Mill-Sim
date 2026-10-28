@@ -747,3 +747,62 @@ test('a casting imported as triangles is checked against its skin', () => {
   const hit = sim.collisions.find((c) => c.type === 'casting');
   assert.ok(hit && hit.line === 4 && /Cradle \(A axis\)/.test(hit.message), JSON.stringify(sim.collisions.map((c) => c.message)));
 });
+
+// ---- the machine against itself --------------------------------------------
+
+import { placeSolid, solidContact } from '../src/sim/machineContact.js';
+
+/** A block between two corners, on an axis, as collisionBodies gives it. */
+function blockSolid(name, lo, hi, extra = {}) {
+  const c = lo.map((v, i) => (v + hi[i]) / 2);
+  return { kind: 'box', name, toLocal: m4.fromTranslation(m4.create(), c.map((v) => -v)), half: lo.map((v, i) => (hi[i] - v) / 2), ...extra };
+}
+
+test('two solids: apart is null, touching is about 0, overlapping is negative by how far', () => {
+  const box = (lo, hi) => {
+    const s = blockSolid('b', lo, hi);
+    return { ...s, toBox: s.toLocal, boxHalf: s.half };
+  };
+  const at = (s) => placeSolid(s, m4.create());
+  assert.equal(solidContact(at(box([0, 0, 0], [10, 10, 10])), at(box([12, 0, 0], [20, 10, 10])), 0), null);
+  const touch = solidContact(at(box([0, 0, 0], [10, 10, 10])), at(box([10, 2, 2], [20, 8, 8])), 0.5);
+  assert.ok(touch && Math.abs(touch.gap) < 0.05, JSON.stringify(touch));
+  const deep = solidContact(at(box([0, 0, 0], [10, 10, 10])), at(box([7, 2, 2], [20, 8, 8])), 0);
+  assert.ok(deep && Math.abs(deep.gap + 3) < 0.05, JSON.stringify(deep));
+  // A cylinder standing on its own Y, sunk 2 into a box's top face.
+  const r = m4.fromTranslation(m4.create(), [5, 15, 5]);
+  const cyl = { kind: 'cyl', name: 'c', toLocal: m4.invertRigid(m4.create(), r), r0: 4, r1: 4, h: 14 };
+  const c = solidContact(at({ ...cyl, toBox: cyl.toLocal, boxHalf: [4, 7, 4] }), at(box([0, 0, 0], [10, 10, 10])), 0);
+  assert.ok(c && Math.abs(c.gap + 2) < 0.1, JSON.stringify(c));
+});
+
+test('the head is checked against the machine: the trunnion ram swung into its table face', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  // The preset's own ram, on Z; the platter on the table node, flagged as
+  // the table (which the tool's own table check answers for, but the ram's
+  // does not); and the bridge's rail sitting on the base — touching at
+  // home, as it is built, and never reported.
+  const platterAt = m4.multiply(m4.create(), m4.fromTranslation(m4.create(), [0, 0, -22.5]), m4.fromRotation(m4.create(), [1, 0, 0], Math.PI / 2));
+  const castings = [
+    { node: 'z', name: 'Z axis (ram)', letter: 'Z', side: 'tool', solids: [blockSolid('Ram', [-120, -120, 90], [120, 120, 910])] },
+    { node: 'y', name: 'Y axis', letter: 'Y', side: 'tool', solids: [blockSolid('Bridge', [-600, -60, 600], [600, 60, 700])] },
+    { node: 'base', name: 'Base', letter: null, side: 'work', solids: [blockSolid('Wall', [-600, -60, 500], [-500, 60, 600])] },
+    { node: 'table', name: 'Table face', letter: null, side: 'work', solids: [{ kind: 'cyl', name: 'Table face', table: true, toLocal: m4.invertRigid(m4.create(), platterAt), r0: 165, r1: 165, h: 45 }] },
+  ];
+  const run = (code) => {
+    const sim = new Simulator();
+    sim.load({ program: interpret(code, { kinematics: kin }), stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE, castings });
+    sim.runAll();
+    return sim.collisions.filter((c) => c.type === 'machine');
+  };
+  // The move from the report — A past its stop and the head brought down —
+  // 50 lower, for this assembly's 145 gauge length against the report's 100.
+  const hits = run('G90 G0 X0 Y0 Z150\nA90 Y-110 Z-160\nM30');
+  assert.ok(hits.some((c) => /^The Ram \(Z axis\) hits the Table face/.test(c.message)), JSON.stringify(hits.map((c) => c.message)));
+  assert.ok(!hits.some((c) => /Bridge|Wall/.test(c.message)), 'a pair touching at home is how the machine is built');
+  // Upright and high, nothing.
+  assert.deepEqual(run('G90 G0 X0 Y0 Z150\nX100 Y50\nM30').map((c) => c.message), []);
+});

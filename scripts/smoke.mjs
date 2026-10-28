@@ -449,12 +449,12 @@ try {
         removed: app.simulator.removedVolume,
         findings: app.simulator.collisions.length,
         errors: app.state.program.warnings.filter((w) => w.severity === 'error').length,
-        overHole: st.stretchesAt(2, [52.1, 20.1, 0]).map((r) => r.map((v) => +v.toFixed(2))),
+        overHole: st.stretchesAt(2, [152.1, 20.1, 0]).map((r) => r.map((v) => +v.toFixed(2))),
         drawn: app.stockView.surface ? app.stockView.surface.triangleCount() : 0,
         pending: app.stockView.pending,
         // Pointing at the right face, level with the first hole: the ray
         // goes down it and stops at its bottom, 15 in from the face.
-        pick: (() => { const h = st.raycast([120, 0.05, -15.05], [-1, 0, 0]); return h ? +h.point[0].toFixed(2) : null; })(),
+        pick: (() => { const h = st.raycast([220, 0.05, -15.05], [-1, 0, 0]); return h ? +h.point[0].toFixed(2) : null; })(),
       };
     });
     console.log('side holes:', JSON.stringify(side));
@@ -464,7 +464,7 @@ try {
       `the Z line over the second side hole should have metal under and over it: ${JSON.stringify(side.overHole)}`);
     check(side.drawn > 1000, 'the stock drew nothing');
     check(!side.pending, 'the stock surface was still being made after the run');
-    check(side.pick !== null && Math.abs(side.pick - 45) < 0.05, `a ray down the side hole should stop at its bottom (x 45): ${side.pick}`);
+    check(side.pick !== null && Math.abs(side.pick - 145) < 0.05, `a ray down the side hole should stop at its bottom (x 145): ${side.pick}`);
     // A section through the holes draws the inside as the cut face.
     const caps = await page.evaluate(() => {
       const app = window.millsim;
@@ -504,13 +504,13 @@ try {
       const big = buildTool(makeTool({ type: 'flat', diameter: 10.6, fluteLength: 40 })).cutEnvelope;
       const flat16 = buildTool(makeTool({ type: 'flat', diameter: 16, fluteLength: 40 })).cutEnvelope;
       // The faced top, then the hole.
-      for (let y = -40; y <= 40; y += 8) ref.carveLinear(flat16, [-70, y, -1], [70, y, -1], [0, 0, 1], 0);
-      ref.carveLinear(big, [70, 0, -15], [45, 0, -15], [1, 0, 0], 1);
+      for (let y = -40; y <= 40; y += 8) ref.carveLinear(flat16, [30, y, -1], [170, y, -1], [0, 0, 1], 0);
+      ref.carveLinear(big, [170, 0, -15], [145, 0, -15], [1, 0, 0], 1);
       const model = app.models.add({ name: 'side-hole part', positions: dexelTriangles(ref).positions, role: 'reference' });
       app.refreshTarget();
       app.setDisplay({ deviation: true, devRange: 0.5 });
       // Straight down inside the first hole, onto the bottom of its wall.
-      app.addProbe(null, [58, 0.05, -15], [0, 0, -1]);
+      app.addProbe(null, [158, 0.05, -15], [0, 0, -1]);
       const p = app.state.devProbes[0];
       return {
         id: model.id,
@@ -567,10 +567,10 @@ try {
       const st = app.stock;
       const ref = new TriDexelStock({ origin: st.origin.slice(), size: st.size.slice(), resolution: st.cell });
       const env = (d) => buildTool(makeTool({ type: 'flat', diameter: d, fluteLength: 40 })).cutEnvelope;
-      for (let y = -40; y <= 40; y += 8) ref.carveLinear(env(16), [-70, y, -1], [70, y, -1], [0, 0, 1], 0);
-      ref.carveLinear(env(9.4), [70, 0, -15], [45, 0, -15], [1, 0, 0], 1);
-      ref.carveLinear(env(10), [70, 20, -15], [45, 20, -15], [1, 0, 0], 1);
-      ref.carveLinear(env(10), [50, 0, 5], [50, 0, -20], [0, 0, 1], 1);
+      for (let y = -40; y <= 40; y += 8) ref.carveLinear(env(16), [30, y, -1], [170, y, -1], [0, 0, 1], 0);
+      ref.carveLinear(env(9.4), [170, 0, -15], [145, 0, -15], [1, 0, 0], 1);
+      ref.carveLinear(env(10), [170, 20, -15], [145, 20, -15], [1, 0, 0], 1);
+      ref.carveLinear(env(10), [150, 0, 5], [150, 0, -20], [0, 0, 1], 1);
       const model = app.models.add({ name: 'tight side hole', positions: dexelTriangles(ref).positions, role: 'reference' });
       app.refreshTarget();
       // The reference is itself on the lattice, so a looser tolerance than
@@ -1535,6 +1535,27 @@ try {
     check(on.bodies >= 2 && on.hits.some((h) => /^3: .*Cradle side \(A axis\)/.test(h)),
       `feeding into the cradle side should be a machine collision: ${JSON.stringify(on)}`);
     check(off.hits.length === 0, `with the check off nothing should be said about the castings: ${off.hits}`);
+    // The head against the table. Swung to A90 with the head brought
+    // down, the head is in the table face — which nothing reported, since
+    // only the tool assembly was ever checked against the machine.
+    const clash = await page.evaluate(async () => {
+      const app = window.millsim;
+      app.setMachine({ preset: 'tableTable', castingsCheck: true });
+      await new Promise((r) => setTimeout(r, 300));
+      app.loadProgram('A90 Y-110 Z-110', 'ram.nc');
+      await new Promise((r) => setTimeout(r, 300));
+      const sim = app.simulator;
+      let n = 0;
+      while (!sim.finished && n++ < 100000) sim.run(Infinity, 50);
+      return sim.collisions.map((c) => ({ type: c.type, depth: +(c.depth || 0).toFixed(2), message: c.message }));
+    });
+    console.log('machine against itself:', JSON.stringify(clash.filter((c) => c.type === 'machine' || c.type === 'holder')));
+    // Which casting gets there first depends on the tool and the work
+    // offset an earlier step left; that the head is reported in the table
+    // face is what matters. The sphere bulge is pinned exactly in
+    // test/tridexel.test.js.
+    check(clash.some((c) => c.type === 'machine' && /hits the Table face/.test(c.message)),
+      `the head should be reported in the table face: ${JSON.stringify(clash)}`);
     await page.evaluate(() => window.millsim.setMachine({ preset: 'vmc3', castingsCheck: true }));
   }
 
