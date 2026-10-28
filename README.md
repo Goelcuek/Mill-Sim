@@ -824,8 +824,13 @@ comments, `/` block delete
   then turning with them, C included. Any argument may be arithmetic —
   `(30+R20)`, `(TILT*2)` — worked out when the cycle runs; shifts before
   and after the turn; `_ST 1` adds to the plane
-  already there; `_FR` retracts Z (and X, Y) first; `_DIR 0` turns the
-  plane without swinging. The retract and the swing are made with the
+  already there; `_FR` retracts Z (and X, Y) first. `_DIR` picks between
+  the two poses that make most planes: −1 (the default) the lower value of
+  the tilting axis (A on a trunnion, B on a head), +1 the higher, and 0
+  turns the plane without swinging. The machine swings to the whole plane,
+  not only the tool's direction: a rotary that spins about the tool, as a
+  C table does under a vertical tool, goes where the plane's X says, so a
+  plane with nothing turned puts it back to C0. The retract and the swing are made with the
   slides, as the cycle does, and inside the swivelled plane the tip is
   what is programmed. The plane is made at the angles the cycle swings to:
   a rotary turned on its own afterwards (`C30` after `CYCLE800(…C90…)`)

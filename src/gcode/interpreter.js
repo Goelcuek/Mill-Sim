@@ -108,6 +108,22 @@ function swivelAxes(kin) {
   return [...head, ...table];
 }
 
+/**
+ * The rotary CYCLE800's _DIR is read against: the first, in Siemens'
+ * order, that tips the tool rather than spinning about it — A on a
+ * trunnion, B on a head and table or a fork head. The control has it in
+ * the swivel data, and the tilting axis is what that is nearly always set
+ * to.
+ */
+function directionAxis(kin, gaugeLength) {
+  const home = kin.toolInWork({}, gaugeLength).axis;
+  for (const n of swivelAxes(kin)) {
+    const tipped = kin.toolInWork({ [n.letter]: 30 }, gaugeLength).axis;
+    if (1 - m4.dot(home, tipped) > 1e-6) return n.letter;
+  }
+  return null;
+}
+
 /** The Siemens drilling cycles this reader turns into moves. */
 const IGNORED_CALLS = new Set(['CYCLE832', 'MSG', 'WORKPIECE', 'SETMS', 'G_SETTINGS', 'CYCLE800_RESET']);
 const DRILL_CYCLES = new Set(['CYCLE81', 'CYCLE82', 'CYCLE83', 'CYCLE84', 'CYCLE840', 'CYCLE85', 'CYCLE86', 'CYCLE87', 'CYCLE88', 'CYCLE89']);
@@ -2595,8 +2611,12 @@ export function interpret(text, config = {}) {
    * is X then Y then Z), as a solid angle, or as the rotary positions
    * themselves. Each turn is about the axes the last one left. _X0.._Z0
    * shift the origin before turning, _X1.._Z1 after. _ST 1 adds to the
-   * plane already there. _FR retracts first (1 in Z, 2 in Z then X and Y),
-   * and a _DIR of 0 turns the plane without swinging the machine.
+   * plane already there. _FR retracts first (1 in Z, 2 in Z then X and Y).
+   * _DIR picks which of the two poses that make most planes the machine
+   * swings to: −1 (the default) the lower value of the tilting axis, +1
+   * the higher, and 0 turns the plane without swinging at all. A rotary
+   * that spins about the tool goes where the plane's X says, so a plane
+   * with nothing turned puts it back to 0.
    *
    * CYCLE800() with nothing in it takes the plane away again.
    */
@@ -2698,7 +2718,8 @@ export function interpret(text, config = {}) {
         return;
       }
       const normal = m4.normalize(m4.transformDir([0, 0, 0], st.tilt, [0, 0, 1]));
-      sol = kin.rotariesForToolAxis(normal, st.rot, cfg.gaugeLength || 0);
+      const g = cfg.gaugeLength || 0;
+      sol = kin.rotariesForFrame(st.tilt, st.rot, g, { ref: directionAxis(kin, g), dir: Math.sign(dir) });
       if (!sol) {
         warn(line, `CYCLE800 cannot reach a tool axis of ${normal.map((x) => x.toFixed(3)).join(', ')} within the machine's travel.`, 'error');
         swivelOn();

@@ -34,7 +34,9 @@ S6000 M3
 G0 X190 Y0
 ; Axis by axis, X then Y then Z (57): 90 about Y, the plane's origin on the
 ; face at the holes' height. Retract in Z first, and swing the head.
-CYCLE800(1, "", 0, 57, 160, 0, -15, 0, 90, 0, 0, 0, 0, -1, 100, 1)
+; _DIR +1 takes the higher B, B90 with the table at C0; -1 would be B-90
+; with the table turned half round, the face then on the far side.
+CYCLE800(1, "", 0, 57, 160, 0, -15, 0, 90, 0, 0, 0, 0, 1, 100, 1)
 G0 X0 Y0 Z20
 F300
 MCALL CYCLE83(10, 0, 2, -15, , -6, , 2, 0, 0, 1, 0)

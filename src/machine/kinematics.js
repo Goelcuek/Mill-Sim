@@ -586,9 +586,12 @@ export class Kinematics {
    * flipped the table half a turn between neighbouring points of a vector
    * toolpath, and paid for a 5,000-pose sweep on every block to do it.
    *
-   * @returns {null | Record<string, number>} values for the rotary letters
+   * @param {{all?:boolean}} [opts] `all` returns every pose found instead
+   *   of the nearest, for a caller with its own way to choose
+   * @returns {null | Record<string, number> | Record<string, number>[]}
+   *   values for the rotary letters
    */
-  rotariesForToolAxis(direction, values, gaugeLength = 0) {
+  rotariesForToolAxis(direction, values, gaugeLength = 0, { all = false } = {}) {
     const rot = this.rotaries();
     if (rot.length < 1) return null;
     const target = m4.normalize(direction);
@@ -662,7 +665,7 @@ export class Kinematics {
     const here = {};
     for (const { L, lo, hi } of span) here[L] = Math.min(hi, Math.max(lo, now(L)));
     const local = refine(here, 5);
-    if (ok(local)) return settle(local.guess);
+    if (ok(local) && !all) return settle(local.guess);
 
     // Nowhere downhill from here: sweep the travel on a 10° grid, keep the
     // best few poses that are not just neighbours of each other, finish
@@ -682,14 +685,88 @@ export class Kinematics {
       if (seeds.some((s) => span.every(({ L }) => Math.abs(s.guess[L] - g.guess[L]) <= 2 * step))) continue;
       seeds.push(g);
     }
-    let best = null;
+    const found = ok(local) ? [settle(local.guess)] : [];
     for (const seed of seeds) {
       const r = refine(seed.guess, step / 2);
-      if (!ok(r)) continue;
-      const g = settle(r.guess);
-      if (!best || distance(g) < distance(best)) best = g;
+      if (ok(r)) found.push(settle(r.guess));
     }
+    if (all) return found;
+    let best = null;
+    for (const g of found) if (!best || distance(g) < distance(best)) best = g;
     return best;
+  }
+
+  /**
+   * Rotary values that put the tool's whole frame where a swivelled plane
+   * has it, the way a control swings for CYCLE800, rather than only its
+   * direction.
+   *
+   * The tool axis pins the rotaries everywhere but one place: when a rotary
+   * turns about the tool itself, as a C table does under a vertical tool,
+   * the direction says nothing about it, and the search leaves it wherever
+   * it stopped. The control reads the plane's X there, and so does this:
+   * that rotary goes to whatever lines the tool's X up with the plane's,
+   * which is C0 for a plane with nothing turned.
+   *
+   * Of the poses left (A−30 C0 or A+30 C180), `dir` chooses by the `ref`
+   * axis as _DIR does: −1 the lower value, +1 the higher. With no `dir`,
+   * or both poses at the same value, the nearest wins.
+   *
+   * @param {Float64Array} frame the plane in work coordinates; its
+   *   translation is ignored
+   * @param {{ref?:string|null, dir?:number}} [opts]
+   * @returns {null | Record<string, number>}
+   */
+  rotariesForFrame(frame, values, gaugeLength = 0, { ref = null, dir = 0 } = {}) {
+    const zT = m4.normalize(m4.transformDir([0, 0, 0], frame, [0, 0, 1]));
+    const xT = m4.transformDir([0, 0, 0], frame, [1, 0, 0]);
+    const found = this.rotariesForToolAxis(zT, values, gaugeLength, { all: true });
+    if (!found || !found.length) return null;
+    const now = (L) => Number((values || {})[L]) || 0;
+    const rot = this.rotaries().slice(0, 2);
+    const wrap = (d) => ((((d + 180) % 360) + 360) % 360) - 180;
+    const pose = (guess) => this.toolInWork({ ...values, ...guess }, gaugeLength);
+    // The turn about the tool, in degrees, from the tool's X to the plane's.
+    const residual = (guess) => {
+      const m = pose(guess).matrix;
+      const x = m4.transformDir([0, 0, 0], m, [1, 0, 0]);
+      return Math.atan2(m4.dot(m4.cross(x, xT), zT), m4.dot(x, xT)) * 180 / Math.PI;
+    };
+
+    const poses = [];
+    for (const g of found) {
+      const p = { ...g };
+      for (const n of rot) {
+        const L = n.letter;
+        const turned = { ...p, [L]: p[L] + 10 };
+        // Free only if turning it leaves the tool pointing where it was.
+        if (1 - m4.dot(pose(turned).axis, zT) > 1e-9) continue;
+        const r0 = residual(p);
+        const slope = wrap(residual(turned) - r0) / 10;
+        if (Math.abs(slope) < 0.5) continue;
+        let v = p[L] - r0 / slope;
+        const lo = Math.max(n.limits.min, -360);
+        const hi = Math.min(n.limits.max, 360);
+        const c = now(L);
+        while (v - 360 >= lo && Math.abs(v - 360 - c) < Math.abs(v - c)) v -= 360;
+        while (v + 360 <= hi && Math.abs(v + 360 - c) < Math.abs(v - c)) v += 360;
+        while (v < lo && v + 360 <= hi) v += 360;
+        while (v > hi && v - 360 >= lo) v -= 360;
+        // Out of travel either way: the tool still points right, which
+        // is the part that matters, so the pose stands as it was found.
+        if (v >= lo && v <= hi) p[L] = Math.round(v * 1e9) / 1e9;
+      }
+      if (this.violations({ ...values, ...p }).length) continue;
+      if (!poses.some((q) => rot.every(({ letter }) => Math.abs(q[letter] - p[letter]) < 1e-6))) poses.push(p);
+    }
+    if (!poses.length) return null;
+
+    const distance = (p) => rot.reduce((sum, { letter }) => sum + Math.abs(p[letter] - now(letter)), 0);
+    poses.sort((a, b) => {
+      if (ref && dir && Math.abs(a[ref] - b[ref]) > 1e-6) return dir < 0 ? a[ref] - b[ref] : b[ref] - a[ref];
+      return distance(a) - distance(b);
+    });
+    return poses[0];
   }
 
   /** Anything outside its travel, for the limit check. */

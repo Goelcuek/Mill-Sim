@@ -249,7 +249,7 @@ export const EXAMPLES = [
       }
     },
     "file": "examples/siemens-swivel-and-cycles-840d.nc",
-    "lines": 55
+    "lines": 57
   }
 ];
 

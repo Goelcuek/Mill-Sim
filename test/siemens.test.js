@@ -259,7 +259,7 @@ test('G75 sends the Z slide home even with the head swung over, and leaves X whe
   const before = p.moves[2];
   const home = p.moves[3];
   assert.equal(home.tcp, 0, 'the slides move, not the tip');
-  const was = kin.linearsForTip(before.to, { A: 0, B: 90, C: 0 }, g);
+  const was = kin.linearsForTip(before.to, before.rotTo, g);
   const now = kin.linearsForTip(home.to, { A: 0, B: 0, C: 0 }, g);
   const zHome = kin.linearsForTip([0, 0, 250 - g], {}, g).Z;
   near(now.X, was.X, 1e-9, 'X slide stays');
@@ -429,4 +429,43 @@ test('in a CYCLE800 plane a rotary turned on its own turns the part, not the pla
   const linBefore = kin.linearsForTip(before.to, before.rotTo, 0);
   near(linOff.X, linBefore.X, 1e-6, 'X across CYCLE800()');
   near(linOff.Y, linBefore.Y, 1e-6, 'Y across CYCLE800()');
+});
+
+test('CYCLE800 swings to the whole plane: a plane with nothing turned puts C back to 0 under a vertical tool', () => {
+  const kin = buildPreset('tableTable');
+  const p = run([
+    'G0 X0 Y0 Z100',
+    'CYCLE800(1,"",0,57,0,0,0,0,90,0,0,0,0,-1,100,1)',
+    'G0 X0 Y0 Z20',
+    'CYCLE800(1,"",0,57,0,0,0,0,0,0,0,0,0,-1,100,1)',
+    'G0 X0 Y0 Z20',
+    'CYCLE800(1,"",0,57,0,0,0,0,0,25,0,0,0,-1,100,1)',
+    'M30',
+  ].join('\n'), { kinematics: kin });
+  assert.deepEqual(errors(p), []);
+  const at = (line) => p.moves.filter((m) => m.line === line).pop().rotTo;
+  near(at(2).A, -90, 1e-6, 'tipped');
+  near(at(2).C, -90, 1e-6, 'and turned to lay the plane on it');
+  // The tool axis alone leaves C anywhere once the tool is vertical.
+  near(at(4).A, 0, 1e-6, 'upright again');
+  near(at(4).C, 0, 1e-6, 'and C with it');
+  // Turned about Z only: C turns the part under the plane's X.
+  near(at(6).A, 0, 1e-6, 'still upright');
+  near(Math.abs(at(6).C), 25, 1e-6, 'C turns the 25°');
+});
+
+test('CYCLE800 _DIR: −1 the lower value of the tilting axis, +1 the higher, 0 no swing', () => {
+  const swing = (preset, dir) => {
+    const p = run(`G0 X0 Y0 Z100\nCYCLE800(1,"",0,57,0,0,0,0,30,0,0,0,0,${dir},100,1)\nM30`, { kinematics: buildPreset(preset) });
+    assert.deepEqual(errors(p), []);
+    return p.moves.filter((m) => m.line === 2).pop().rotTo;
+  };
+  near(swing('tableTable', -1).A, -30, 1e-6, 'trunnion, −1');
+  near(swing('tableTable', 1).A, 30, 1e-6, 'trunnion, +1');
+  near(swing('tableTable', '').A, -30, 1e-6, 'trunnion, empty is −1');
+  near(swing('headTable', -1).B, -30, 1e-6, 'head, −1');
+  near(swing('headTable', 1).B, 30, 1e-6, 'head, +1');
+  const still = swing('headTable', 0);
+  near(still.B, 0, 1e-9, '0 turns the plane only');
+  near(still.C, 0, 1e-9, '0 turns the plane only');
 });
