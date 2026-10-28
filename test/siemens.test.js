@@ -375,7 +375,7 @@ test('system variables in a wear check: $TC_DP wear reads 0, so the check passes
   assert.deepEqual(errors(p), []);
   assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 5, 10]);
   // An IF that cannot be read runs nothing under it, rather than looping.
-  const q = run(['G0 X0 Y0 Z1', 'L1:', 'IF NOSUCH(1) > 2', 'M0', 'GOTOB L1', 'ENDIF', 'G0 X10', 'M30'].join('\n'));
+  const q = run(['G0 X0 Y0 Z1', 'LOOP1:', 'IF NOSUCH(1) > 2', 'M0', 'GOTOB LOOP1', 'ENDIF', 'G0 X10', 'M30'].join('\n'));
   assert.equal(errors(q).length, 1);
   assert.deepEqual(q.moves.map((m) => m.to[0]), [0, 10]);
 });

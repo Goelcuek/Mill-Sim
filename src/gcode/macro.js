@@ -1140,7 +1140,7 @@ export class Vars {
 
   getNamed(name, index) {
     // The control's own variables, $ in front: the interpreter answers them.
-    if (name[0] === '$' && this.system) return this.system(name, index);
+    if (name[0] === '$' && this.dollar) return this.dollar(name, index);
     const entry = this.resolve(name);
     if (!entry) {
       if (name in CONSTANTS) return CONSTANTS[name];

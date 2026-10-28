@@ -938,7 +938,7 @@ export function interpret(text, config = {}) {
    * rest of what the control keeps — its geometry tables, its axis
    * readings — read as 0, said once each.
    */
-  vars.system = (name, index) => {
+  vars.dollar = (name, index) => {
     if (name === '$P_TOOLNO') return typeof st.tool === 'number' ? st.tool : 0;
     if (name === '$P_TOOL') return st.dNumber || 1;
     const dp = /^\$TC_DP(\d+)$/.exec(name);

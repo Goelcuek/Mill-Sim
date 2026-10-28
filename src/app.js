@@ -18,6 +18,7 @@ import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
 import { StockGizmo } from './scene/stockGizmo.js';
 import { MeasureView, circleThrough } from './scene/measureView.js';
+import { buildSurfaceIndex, isClosed } from './sim/surfaceIndex.js';
 import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
@@ -89,6 +90,12 @@ const SPEEDS = [
   { value: '100', label: '100×' },
   { value: 'max', label: 'Max' },
 ];
+
+/** A reference part on its own, for the run: its surface, and no grid. */
+function referenceOnly(parts) {
+  const surface = buildSurfaceIndex(parts, 2);
+  return surface ? { surface, closed: parts.every((p) => isClosed(p.positions)), map: null, grid: null } : null;
+}
 
 export class App {
   constructor(root) {
@@ -1850,7 +1857,10 @@ export class App {
 
     const started = performance.now();
     this.target = parts.length && this.stock ? buildTargetMap(this.stock, parts) : null;
-    this.simulator.target = this.target;
+    // A part the stock does not reach at all has no map on the stock's
+    // grid; the run still measures the tool against its surface, so the
+    // holder and a cutter going into it are reported wherever it stands.
+    this.simulator.target = this.target || (parts.length ? referenceOnly(parts) : null);
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
     this.refreshProbes();

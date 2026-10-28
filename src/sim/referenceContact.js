@@ -14,52 +14,92 @@
 // wholly buried — one inside test says which — so only the discs next to
 // the part cost anything.
 
-import { insideSolid, nearestWithin } from './surfaceIndex.js';
+import { insideSolid, nearestWithin, lineInside } from './surfaceIndex.js';
 
-const RINGS = [[1, 16], [0.5, 8]];
+/** Column spacing of the part's inside, mm; see insideColumns. */
+const COLUMN = 0.25;
+/** Columns kept before the cache starts again: a few hundred MB at most. */
+const COLUMN_CAP = 1500000;
 
 /**
- * The reference part's skyline: the highest point of it over each block of
- * the stock grid, each block taking in its neighbours too, so a sliver of
- * part between two column centres is not lost. A disc whose lowest point
- * stands above the skyline under it cannot be touching the part, and that
- * one look is all most of a run ever needs — the holder is above the part
- * nearly all the time, and asking the surface how far away it is, on a
- * million triangles, is what made a run sixty times slower.
+ * Inside the part, asked a column at a time: the stretches of Z the part
+ * fills along a vertical line, worked out once for each 0.25 mm square the
+ * tool goes over and kept. A point is then inside when its Z falls in one
+ * of its column's stretches — a lookup, where a ray fired up through a
+ * million triangles for every point of the cutter made a run take minutes.
  *
- * @param {object} target from buildTargetMap: its top-down map on the grid
+ * A point is judged by the column it stands in, which can call one a
+ * fraction of a column inside a wall it is really just outside of; how deep
+ * a point is, is measured to the real surface afterwards, so that is never
+ * reported as a gouge.
+ */
+export function insideColumns(target) {
+  if (!target || !target.surface) return null;
+  if (target.columns) return target.columns;
+  const index = target.surface;
+  const b = index.bounds;
+  let cache = new Map();
+  const fn = (x, y, z) => {
+    if (x < b[0] || y < b[1] || z < b[2] || x > b[3] || y > b[4] || z > b[5]) return false;
+    const i = Math.floor((x - b[0]) / COLUMN);
+    const j = Math.floor((y - b[1]) / COLUMN);
+    const key = j * 4194304 + i;
+    let runs = cache.get(key);
+    if (!runs) {
+      if (cache.size >= COLUMN_CAP) cache = new Map();
+      runs = lineInside(index, 2, b[0] + (i + 0.5) * COLUMN, b[1] + (j + 0.5) * COLUMN);
+      cache.set(key, runs);
+    }
+    for (let k = 0; k + 1 < runs.length; k += 2) {
+      if (z < runs[k]) return false;
+      if (z <= runs[k + 1]) return true;
+    }
+    return false;
+  };
+  target.columns = fn;
+  return fn;
+}
+
+const RINGS = [[1, 16], [0.5, 8]];
+/** How far round an inside point its depth is looked for first, mm. */
+const NEAR = 0.5;
+
+/**
+ * The reference part's skyline: the highest any of its triangles stands
+ * over each square of a grid laid over the part itself — each triangle
+ * counted at its top over every square its outline crosses, so the skyline
+ * is never below the part. A disc whose lowest point stands above the
+ * skyline under it cannot be touching the part, and that one look is all
+ * most of a run ever needs: the holder is above the part nearly all the
+ * time, and asking the surface how far away it is, on a million
+ * triangles, is what made a run sixty times slower.
+ *
+ * Built from the part and not from the stock's grid, so it is there
+ * whether or not a stock covers the part.
+ *
+ * @param {object} target anything with a surface index
  */
 export function referenceSkyline(target) {
-  if (!target || !target.map || !target.grid) return null;
+  if (!target || !target.surface) return null;
   if (target.skyline !== undefined) return target.skyline;
-  const { ox, oy, dx, dy, nx, ny } = target.grid;
-  const per = Math.max(1, Math.round(4 / Math.max(dx, dy)));
-  const bx = Math.ceil(nx / per), by = Math.ceil(ny / per);
-  const raw = new Float32Array(bx * by).fill(-Infinity);
-  for (let j = 0; j < ny; j++) {
-    const row = j * nx;
-    const bj = Math.floor(j / per) * bx;
-    for (let i = 0; i < nx; i++) {
-      const z = target.map[row + i];
-      const k = bj + Math.floor(i / per);
-      if (z > raw[k]) raw[k] = z;
-    }
-  }
+  const { tris, count, bounds } = target.surface;
+  const span = Math.max(bounds[3] - bounds[0], bounds[4] - bounds[1], 1e-6);
+  const cell = Math.max(4, span / 512);
+  const bx = Math.max(1, Math.ceil((bounds[3] - bounds[0]) / cell) + 1);
+  const by = Math.max(1, Math.ceil((bounds[4] - bounds[1]) / cell) + 1);
   const max = new Float32Array(bx * by).fill(-Infinity);
-  for (let j = 0; j < by; j++) {
-    for (let i = 0; i < bx; i++) {
-      let m = -Infinity;
-      for (let q = Math.max(0, j - 1); q <= Math.min(by - 1, j + 1); q++) {
-        for (let p = Math.max(0, i - 1); p <= Math.min(bx - 1, i + 1); p++) if (raw[q * bx + p] > m) m = raw[q * bx + p];
-      }
-      max[j * bx + i] = m;
+  for (let t = 0; t < count; t++) {
+    const o = t * 9;
+    const x0 = Math.min(tris[o], tris[o + 3], tris[o + 6]), x1 = Math.max(tris[o], tris[o + 3], tris[o + 6]);
+    const y0 = Math.min(tris[o + 1], tris[o + 4], tris[o + 7]), y1 = Math.max(tris[o + 1], tris[o + 4], tris[o + 7]);
+    const z1 = Math.max(tris[o + 2], tris[o + 5], tris[o + 8]);
+    const i0 = Math.floor((x0 - bounds[0]) / cell), i1 = Math.floor((x1 - bounds[0]) / cell);
+    const j0 = Math.floor((y0 - bounds[1]) / cell), j1 = Math.floor((y1 - bounds[1]) / cell);
+    for (let j = j0; j <= j1; j++) {
+      for (let i = i0; i <= i1; i++) if (z1 > max[j * bx + i]) max[j * bx + i] = z1;
     }
   }
-  const b = target.surface && target.surface.bounds;
-  // A part that reaches off the grid has no skyline out there; the top of
-  // its bounds stands in for it.
-  const off = b ? (b[0] < ox || b[1] < oy || b[3] > ox + nx * dx || b[4] > oy + ny * dy) : false;
-  target.skyline = { ox, oy, size: [per * dx, per * dy], bx, by, max, off, top: b ? b[5] : Infinity };
+  target.skyline = { ox: bounds[0], oy: bounds[1], size: [cell, cell], bx, by, max, off: false, top: bounds[5] };
   return target.skyline;
 }
 
@@ -98,7 +138,7 @@ function across(dir) {
  * @returns {null|{gap:number, depth:number, clearance:number, point:number[]}}
  *   the worst place, when it is in the part (gap < 0) or nearer than asked
  */
-export function checkReference(spheres, tip, dir, index, { skipBelow = 0, clearance = 0, closed = true, sky = null } = {}) {
+export function checkReference(spheres, tip, dir, index, { skipBelow = 0, skipAbove = Infinity, clearance = 0, closed = true, sky = null, inside = null } = {}) {
   if (!index || !spheres.length) return null;
   const want = Math.max(clearance, 0);
   const b = index.bounds;
@@ -106,29 +146,39 @@ export function checkReference(spheres, tip, dir, index, { skipBelow = 0, cleara
   // How far below its centre a disc reaches when the tool leans.
   const drop = Math.sqrt(Math.max(0, 1 - dir[2] * dir[2]));
   let worst = null;
+  const isIn = (x, y, z) => closed && (inside ? inside(x, y, z) : insideSolid(index, x, y, z));
+  // Asked only whether it is in the part — no room wanted — a point
+  // outside costs one lookup, and only a point inside is measured.
+  const quick = !!inside && want <= 0;
   const consider = (x, y, z, reach) => {
-    const inside = closed && insideSolid(index, x, y, z);
-    const d = nearestWithin(index, x, y, z, reach);
-    if (!inside && !(d < want)) return;
-    const gap = inside ? -(Number.isFinite(d) ? d : reach) : d;
+    const into = isIn(x, y, z);
+    if (!into && quick) return;
+    // Inside, the depth is looked for close by first: a point just inside
+    // a wall — most of them, a cutter running along a hole — is measured
+    // within half a millimetre, and only one deeper than that needs the
+    // long search.
+    let d = nearestWithin(index, x, y, z, into ? Math.min(NEAR, reach) : Math.max(want, 1e-9));
+    if (into && !Number.isFinite(d) && reach > NEAR) d = nearestWithin(index, x, y, z, reach);
+    if (!into && !(d < want)) return;
+    const gap = into ? -(Number.isFinite(d) ? d : reach) : d;
     if (!worst || gap < worst.gap) worst = { gap, depth: Math.max(-gap, 0), clearance: want, point: [x, y, z] };
   };
 
   for (let i = 0; i < spheres.length; i += 2) {
     const lz = spheres[i];
     const r = spheres[i + 1];
-    if (lz < skipBelow - 1e-9) continue;
+    if (lz < skipBelow - 1e-9 || lz > skipAbove + 1e-9) continue;
     const cx = tip[0] + dir[0] * lz;
     const cy = tip[1] + dir[1] * lz;
     const cz = tip[2] + dir[2] * lz;
     const m = r + want + 1e-6;
     if (cx < b[0] - m || cy < b[1] - m || cz < b[2] - m || cx > b[3] + m || cy > b[4] + m || cz > b[5] + m) continue;
     if (sky && cz - r * drop > skylineOver(sky, cx - m, cy - m, cx + m, cy + m) + want + 0.05) continue;
-    const near = nearestWithin(index, cx, cy, cz, m);
+    const near = quick ? 0 : nearestWithin(index, cx, cy, cz, m);
     if (!Number.isFinite(near)) {
       // Nothing within the disc's reach: clear of the part, or inside it
       // all round.
-      if (closed && (!worst || -r < worst.gap) && insideSolid(index, cx, cy, cz)) {
+      if (closed && (!worst || -r < worst.gap) && isIn(cx, cy, cz)) {
         worst = { gap: -r, depth: r, clearance: want, point: [cx, cy, cz] };
       }
       continue;

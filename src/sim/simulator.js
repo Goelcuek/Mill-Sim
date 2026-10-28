@@ -10,7 +10,7 @@ import { checkFixtures, checkLimits, checkTable, checkSolids, meshGrid } from '.
 import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
 import { gougeDepth } from './target.js';
-import { checkReference, referenceSkyline, skylineOver } from './referenceContact.js';
+import { checkReference, referenceSkyline, skylineOver, insideColumns } from './referenceContact.js';
 import { placeSolid, boxesMeet, solidContact, solidIntoStock } from './machineContact.js';
 
 export const COLLISION_TYPES = {
@@ -1119,17 +1119,18 @@ export class Simulator {
       }
     }
 
-    // The reference part asks for the fine steps only where the holder
-    // could come down to it: its lowest point, over the whole segment,
-    // below the highest the part stands under it.
+    // The reference part asks for the fine steps only where the tool could
+    // come down to it — the cutter as well as the holder, since a cutter in
+    // the part where there is no stock is a gouge only it can show: the
+    // tool's lowest point, over the whole segment, below the highest the
+    // part stands under it.
     let referenceNear = false;
     if (this.referenceOn()) {
       const sky = referenceSkyline(this.target);
       const want = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
       const reach = Math.max(slot.built.bodyRadius, slot.built.cutRadius) + bodyLean + want;
-      const holderLow = Math.min(az, bz) + slot.built.fluteLength * (this.fiveAxis ? Math.max(0, 1 - bodyLean / Math.max(slot.built.totalLength, 1e-9)) : 1)
-        - (bodyLean > 0 ? Math.max(slot.built.bodyRadius, slot.built.cutRadius) : 0);
-      referenceNear = !sky || holderLow <= skylineOver(sky, Math.min(ax, bx) - reach, Math.min(ay, by) - reach,
+      const toolLow = zLow - (bodyLean > 0 ? Math.max(slot.built.bodyRadius, slot.built.cutRadius) : 0);
+      referenceNear = !sky || toolLow <= skylineOver(sky, Math.min(ax, bx) - reach, Math.min(ay, by) - reach,
         Math.max(ax, bx) + reach, Math.max(ay, by) + reach) + want + 0.05;
     }
     const hasObstacles = (this.fixtures && this.fixtures.length) || (this.machine && this.machine.table && this.machine.table.enabled)
@@ -1185,7 +1186,9 @@ export class Simulator {
     const poses = this.probePoses(poseA, poseB, mv, from, to, u0, u1);
 
     if (stock) {
-      const opts = { target: this.target, tolerance: this.gougeTolerance };
+      // The carve compares on the stock's grid; a part the stock does not
+      // reach has no grid of its own and is measured by its surface only.
+      const opts = { target: this.target && this.target.map ? this.target : null, tolerance: this.gougeTolerance };
       let gouged = null;
       // Found along the lines rather than from above, and already measured
       // to the part's surface: see TriDexelStock.gougeAlong.
@@ -1314,12 +1317,35 @@ export class Simulator {
         }
       }
 
+      // The cutter where it cut nothing: no stock there to say whether it
+      // went past the part — air, or a blank that does not cover it — so
+      // the cutter itself is measured against the part, and inside it by
+      // more than the tolerance is a gouge. Where it did cut, the carve
+      // has already measured what it took.
+      if (this.referenceOn() && !(removed > 0) && this.target.closed !== false) {
+        const cut = checkReference(slot.spheres, tip, dir, this.target.surface, {
+          skipAbove: slot.built.fluteLength,
+          closed: true,
+          sky: referenceSkyline(this.target),
+          inside: insideColumns(this.target),
+        });
+        if (cut && cut.depth > this.gougeTolerance) {
+          this.report('gouge', {
+            line: mv.line,
+            message: (d) => `The cutter is ${d.toFixed(3)} mm inside the reference part, with no stock there to cut — this is gouging.`,
+            position: cut.point,
+            depth: cut.depth,
+          });
+        }
+      }
+
       if (this.referenceOn()) {
         const hit = checkReference(slot.spheres, tip, dir, this.target.surface, {
           skipBelow: slot.built.fluteLength,
           clearance,
           closed: this.target.closed !== false,
           sky: referenceSkyline(this.target),
+          inside: insideColumns(this.target),
         });
         if (hit && hit.gap < 0) {
           this.report('part', {
