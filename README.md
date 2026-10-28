@@ -482,9 +482,11 @@ Drag the side panel's right edge to make it wider or narrower (the arrow
 keys do the same once the edge has focus); double-click the edge to put
 the width back. The width is remembered in the browser.
 
-**View › Inspect › Section** cuts the part open on a plane square to X, Y
-or Z: the slider moves the plane through the stock, and **Flip** keeps the
-other side. Both stock models are closed solids, so what shows through the
+**View › Inspect › Section** cuts the whole view open on a plane square to
+the part's X, Y or Z — the machine, the fixtures, the reference part and the
+tool as well as the stock: the slider moves the plane across everything the
+scene holds, **At** puts it exactly, in the program's coordinates, and
+**Flip** keeps the other side. Both stock models are closed solids, so what shows through the
 opening is drawn as the cut face — flat, lit as the plane, in its own
 colour — and a hole or pocket the plane passes through shows as a gap in
 it.

@@ -459,6 +459,8 @@ export class Viewer {
       box.union(one);
     });
     if (box.isEmpty()) return;
+    /** What the scene fills, world mm: the section plane runs across it. */
+    this.sceneBox = box.clone();
     box.getCenter(this.sceneCentre);
     const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
     if (!Number.isFinite(radius)) return;

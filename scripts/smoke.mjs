@@ -114,13 +114,17 @@ try {
   // the 120 wide block.
   const xSection = await page.evaluate(() => {
     const app = window.millsim;
-    app.setDisplay({ sectionAxis: 'x', sectionPct: 50 });
+    app.setDisplay({ sectionAxis: 'x', sectionPct: 50, sectionAt: 0 });
     const u = app.stockView.surface.uniforms;
     const out = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value, side: app.stockView.surface.material.side };
-    app.setDisplay({ sectionAxis: 'z', sectionPct: 100 });
+    // And across everything else: the renderer's own plane, on the part's X.
+    out.clipped = app.viewer.renderer.clippingPlanes.length;
+    app.setDisplay({ sectionAxis: 'z', sectionPct: 100, sectionAt: null });
     out.after = app.stockView.surface.material.side;
+    out.unclipped = app.viewer.renderer.clippingPlanes.length;
     return out;
   });
+  check(xSection.clipped === 1 && xSection.unclipped === 0, `the section should cut the whole scene, and stop when it is off: ${JSON.stringify(xSection)}`);
   check(xSection.n[0] === 1 && Math.abs(xSection.d) < 1e-9 && xSection.side === 2 && xSection.after === 0,
     `an X section should cut at x = 0 and draw both sides: ${JSON.stringify(xSection)}`);
 
@@ -479,12 +483,12 @@ try {
     // Square to Y through the middle of the 90 deep block, then flipped.
     const planeY = await page.evaluate(() => {
       const app = window.millsim;
-      app.setDisplay({ sectionAxis: 'y', sectionPct: 50, sectionFlip: false });
+      app.setDisplay({ sectionAxis: 'y', sectionPct: 50, sectionFlip: false, sectionAt: 0 });
       const u = app.stockView.surface.uniforms;
       const a = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value };
-      app.setDisplay({ sectionFlip: true, sectionPct: 25 });
+      app.setDisplay({ sectionFlip: true, sectionPct: 25, sectionAt: 22.5 });
       const b = { n: u.uSectionN.value.toArray(), d: u.uSectionD.value };
-      app.setDisplay({ sectionAxis: 'z', sectionPct: 100, sectionFlip: false });
+      app.setDisplay({ sectionAxis: 'z', sectionPct: 100, sectionFlip: false, sectionAt: null });
       return { a, b };
     });
     check(planeY.a.n[1] === 1 && Math.abs(planeY.a.d) < 1e-9, `a Y section at 50% should be the plane y = 0: ${JSON.stringify(planeY.a)}`);

@@ -208,8 +208,9 @@ export class ViewPanel extends Panel {
     const d = app.state.display;
     const axisButton = (a) => el(`button.btn${d.sectionAxis === a ? '.active' : ''}`, {
       type: 'button',
-      onclick: () => { app.setDisplay({ sectionAxis: a }); this.render(); },
+      onclick: () => { app.setDisplay({ sectionAxis: a, sectionAt: null }); this.render(); },
     }, a.toUpperCase());
+    const cut = app.sectionPlane();
     const out = [section('Inspect', [
       el('div.section-row', {}, [
         el('span.field-label', {}, 'Section'),
@@ -222,7 +223,15 @@ export class ViewPanel extends Panel {
       ]),
       this.slider('Plane', d.sectionPct, {
         min: 0, max: 100, step: 0.5, format: (v) => (v >= 100 ? 'off' : `${v.toFixed(0)}%`),
-      }, (v) => app.setDisplay({ sectionPct: v })),
+      }, (v) => { app.setDisplay({ sectionPct: v, sectionAt: null }); this.render(); }),
+      // Exactly where, in machine coordinates: a slider across a whole
+      // machine moves in steps wider than a small part.
+      cut ? field(`At ${d.sectionAxis.toUpperCase()}`, Number(cut.value.toFixed(3)), {
+        step: 0.5, unit: 'mm',
+        title: `Where the plane stands, in the part's ${d.sectionAxis.toUpperCase()} — the program's coordinates; it cuts the machine, the fixtures, the parts and the stock`,
+        onChange: (v) => app.setDisplay({ sectionAt: Number(v) }),
+      }) : null,
+      el('div.hint', {}, 'The plane cuts everything in the view — the machine, the fixtures, the reference part, the tool and the stock — square to the part\u2019s X, Y or Z — the program\u2019s coordinates — and the slider runs it across all of it.'),
       this.slider('Tool opacity', d.toolOpacity, {
         min: 0.1, max: 1, step: 0.05, format: (v) => `${Math.round(v * 100)}%`,
       }, (v) => app.setDisplay({ toolOpacity: v })),

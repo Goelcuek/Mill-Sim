@@ -153,7 +153,7 @@ export class App {
         // watching one run. Off until asked for, on View.
         grid: false, axes: true, stock: true, tool: true, holder: true,
         toolpath: true, rapids: true, backplot: 'all', toolOpacity: 1, origins: false,
-        sectionPct: 100, sectionAxis: 'z', sectionFlip: false, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
+        sectionPct: 100, sectionAt: null, sectionAxis: 'z', sectionFlip: false, stockColor: '#b9c0cb', toolColors: true, showLimits: false,
         // Edges on the castings, fixtures, parts and tool — not on the
         // stock, which changes under the cutter every frame.
         edges: true,
@@ -1739,18 +1739,56 @@ export class App {
     this.refreshProbes();
     if (this.originView) this.originView.setVisible(d.origins);
 
-    if (this.stock) {
-      // How much of the part is kept, from the low side up — or from the
-      // high side down, flipped — on whichever axis the cut is square to.
-      const pct = clamp(d.sectionPct, 0, 100) / 100;
-      const axis = { x: 0, y: 1, z: 2 }[d.sectionAxis] ?? 2;
-      const st = this.stock;
-      const lo = axis === 2 ? st.base : st.origin[axis];
-      const hi = axis === 2 ? st.top : st.origin[axis] + st.size[axis];
-      const value = d.sectionFlip ? hi - (hi - lo) * pct : lo + (hi - lo) * pct;
-      this.stockView.setSection(pct >= 1 ? null : { axis, value, flip: !!d.sectionFlip });
-    }
+    this.applySection();
     this.viewer.invalidate();
+  }
+
+  /**
+   * Where the section plane runs: square to X, Y or Z of the part — the
+   * coordinates the program and the readout are in — at `sectionAt`, and
+   * across everything in the scene, not only the stock: the machine, the
+   * fixtures, the parts and the tool are cut by it too. The slider runs it
+   * across all the scene fills.
+   */
+  sectionPlane() {
+    const d = this.state.display;
+    const pct = clamp(d.sectionPct, 0, 100) / 100;
+    const box = this.viewer && this.viewer.sceneBox;
+    if (pct >= 1 || !box) return null;
+    const axis = { x: 0, y: 1, z: 2 }[d.sectionAxis] ?? 2;
+    const frame = this.stockView.group;
+    frame.updateWorldMatrix(true, false);
+    const toPart = new THREE.Matrix4().copy(frame.matrixWorld).invert();
+    // The scene's extent along the part's axis.
+    let lo = Infinity, hi = -Infinity;
+    const q = new THREE.Vector3();
+    for (let c = 0; c < 8; c++) {
+      q.set(c & 1 ? box.max.x : box.min.x, c & 2 ? box.max.y : box.min.y, c & 4 ? box.max.z : box.min.z).applyMatrix4(toPart);
+      const v = q.getComponent(axis);
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    const value = Number.isFinite(d.sectionAt) ? d.sectionAt : (d.sectionFlip ? hi - (hi - lo) * pct : lo + (hi - lo) * pct);
+    // Kept: below the plane, or above it when flipped — on the part, and
+    // carried out into the scene for everything else.
+    const normal = new THREE.Vector3();
+    normal.setComponent(axis, d.sectionFlip ? 1 : -1);
+    const onPart = new THREE.Plane(normal, d.sectionFlip ? -value : value);
+    return { axis, value, lo, hi, flip: !!d.sectionFlip, plane: onPart.clone().applyMatrix4(frame.matrixWorld) };
+  }
+
+  /** Put the section plane on everything; the stock draws its own cut face. */
+  applySection() {
+    if (!this.viewer) return;
+    const s = this.sectionPlane();
+    const r = this.viewer.renderer;
+    if (!s) {
+      if (r.clippingPlanes.length) r.clippingPlanes = [];
+      if (this.stock) this.stockView.setSection(null);
+      return;
+    }
+    r.clippingPlanes = [s.plane];
+    if (this.stock) this.stockView.setSection({ axis: s.axis, value: s.value, flip: s.flip });
   }
 
   /**
@@ -2583,6 +2621,8 @@ export class App {
       this.machineView.setGaugeLength(sim.activeSlot.built.gaugeLength);
     }
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera, this.viewer.apparentDistance());
+    // A trunnion turning the part turns the stock's frame under the plane.
+    if (this.state.display.sectionPct < 100) this.applySection();
     const pose = this.travelView
       ? this.homePose()
       : this.jog
