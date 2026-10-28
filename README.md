@@ -832,6 +832,11 @@ comments, `/` block delete
 - *Conditions and jumps* — `IF … ELSE … ENDIF` as a block, `IF cond
   GOTOF/GOTOB/GOTO label`, `GOTO` looking forward and then back, `GOTOC`
   the same and quiet when the label is not there.
+- *System variables* — `$P_TOOLNO` is the tool in the spindle, `$P_TOOL`
+  its D number, and the wear values `$TC_DP12`…`$TC_DP20` are 0, since
+  nothing here has measured any: a wear-tolerance check passes and the
+  program goes on. Any other `$` variable reads 0 and is named once. An
+  `IF` that cannot be read runs nothing down to its `ENDIF`.
 - *Sections* — a label ends in a colon. `REPEAT LABEL P=n` runs the lines
   from the label to `ENDLABEL:` (or, the label being above, down to the
   `REPEAT`), `REPEAT START END` between two labels, `REPEATB` one block,

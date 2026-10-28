@@ -364,3 +364,18 @@ test('block-numbered labels, IF … ENDIF blocks, GOTO and GOTOB: a loop of 29 p
   assert.equal(cs[28], 12 + 28 * 3);
   assert.equal(p.events.filter((e) => e.type === 'stop').length, 2, 'M01 on passes 1 and 16');
 });
+
+test('system variables in a wear check: $TC_DP wear reads 0, so the check passes and the program goes on', () => {
+  const p = run([
+    'N100 G17 G90 G54', 'N101 T1 M6', 'N102 G0 X0 Y0 Z1',
+    'N559 WCHKR1:', 'N560 IF ABS($TC_DP15[$P_TOOLNO,$P_TOOL])>0.0040', 'N561 MSG("RADYUS")', 'N562 M0', 'N563 GOTOB WCHKR1', 'N564 ENDIF',
+    'N566 IF $AA_IW[X] == 0', 'N567 G0 X5', 'N568 ENDIF',
+    'N573 G0 X10', 'N574 M30',
+  ].join('\n'));
+  assert.deepEqual(errors(p), []);
+  assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 5, 10]);
+  // An IF that cannot be read runs nothing under it, rather than looping.
+  const q = run(['G0 X0 Y0 Z1', 'L1:', 'IF NOSUCH(1) > 2', 'M0', 'GOTOB L1', 'ENDIF', 'G0 X10', 'M30'].join('\n'));
+  assert.equal(errors(q).length, 1);
+  assert.deepEqual(q.moves.map((m) => m.to[0]), [0, 10]);
+});

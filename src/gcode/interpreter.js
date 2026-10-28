@@ -932,6 +932,23 @@ export function interpret(text, config = {}) {
   // which is what makes a family of parts one program instead of twenty.
 
   const vars = new Vars(dialect.locals);
+  /**
+   * A Siemens system variable. The tool in the spindle and its D number
+   * are known; its wear is none, since nothing here has measured it; the
+   * rest of what the control keeps — its geometry tables, its axis
+   * readings — read as 0, said once each.
+   */
+  vars.system = (name, index) => {
+    if (name === '$P_TOOLNO') return typeof st.tool === 'number' ? st.tool : 0;
+    if (name === '$P_TOOL') return st.dNumber || 1;
+    const dp = /^\$TC_DP(\d+)$/.exec(name);
+    if (dp && Number(dp[1]) >= 12 && Number(dp[1]) <= 20) return 0;
+    if (!spokenFor.has(name)) {
+      spokenFor.add(name);
+      warn(vars.where.line, `${name}${index ? '[…]' : ''} is the control's own data, not kept here; it reads as 0.`);
+    }
+    return 0;
+  };
   /** Every block the run reads, in order: what single block steps through. */
   const blockLog = new BlockLog(cfg.maxBlockLog || 1000000);
 
@@ -1339,7 +1356,9 @@ export function interpret(text, config = {}) {
           // ENDIF; arriving at ELSE means the true part has run, so on to
           // the ENDIF.
           if (c.kind === 'if-block') {
-            if (evaluate(c.cond, vars)) continue;
+            // An IF that could not be read says why, and runs nothing.
+            if (!c.cond && b.error) warn(b.line, b.error, 'error');
+            if (c.cond && evaluate(c.cond, vars)) continue;
             const to = matchIf(pc - 1, true);
             if (to < 0) { warn(b.line, 'IF has no ENDIF.', 'error'); continue; }
             pc = to + 1;
@@ -1466,6 +1485,13 @@ export function interpret(text, config = {}) {
         }
       } catch (err) {
         warn(b.line, `Macro: ${err.message}.`, 'error');
+        // A condition that cannot be worked out guards nothing it should
+        // run: on past its ENDIF, not into it.
+        const c = b.macro.control;
+        if (c && c.kind === 'if-block') {
+          const to = matchIf(pc - 1, false);
+          if (to >= 0) pc = to + 1;
+        }
         continue;
       }
     }
@@ -1569,7 +1595,7 @@ export function interpret(text, config = {}) {
         case 'S': s = w.value; break;
         case 'T': t = w.value; break;
         case 'H': h = w.value; break;
-        case 'D': d = w.value; break;
+        case 'D': d = w.value; st.dNumber = w.value; break;
         case 'P': p = w.value; break;
         case 'Q': q = w.value; break;
         case 'R': r = w.value; break;

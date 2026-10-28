@@ -198,6 +198,16 @@ function tokenize(code, d) {
       continue;
     }
 
+    // A Siemens system variable — $P_TOOLNO, $TC_DP15[…] — is a name the
+    // control keeps for itself, read like any other.
+    if (d.namedVariables && !d.keywordPrefix && c === '$' && /[A-Za-z_]/.test(text[i + 1] || '')) {
+      let j = i + 1;
+      while (j < text.length && /[A-Za-z0-9_]/.test(text[j])) j++;
+      out.push({ kind: 'ident', text: text.slice(i, j).toUpperCase() });
+      i = j;
+      continue;
+    }
+
     // A control word with a mark in front of it — $IF, $GOTO — is one word.
     const prefixed = d.keywordPrefix && c === d.keywordPrefix && /[A-Za-z]/.test(text[i + 1] || '');
     // A name of one's own may start with an underscore: _DEPTH.
@@ -434,8 +444,18 @@ class Parser {
     let index = null;
     if (this.is('idx[')) {
       this.next();
-      index = [this.expression()];
-      while (this.eat(',')) index.push(this.expression());
+      // A system variable is indexed by an axis as often as by a number:
+      // $AA_IW[X]. The axis is taken as its name.
+      const item = () => {
+        const t = this.peek();
+        if (name[0] === '$' && (t.kind === 'address' || t.kind === 'ident') && [',', 'idx]'].includes(this.peek(1).kind)) {
+          this.next();
+          return { op: 'num', value: 0, axis: t.text };
+        }
+        return this.expression();
+      };
+      index = [item()];
+      while (this.eat(',')) index.push(item());
       this.expect('idx]');
     }
     return { op: 'named', name, index };
@@ -588,6 +608,10 @@ export function parseMacroBlock(code, dialect) {
           } else if (p.isWord('then')) {
             p.next();
             control = { kind: 'if-then', cond, assign: assignment() };
+          } else if (d.keywords.endIf) {
+            // Neither a jump nor the end of the condition: the condition
+            // itself is where reading stopped.
+            throw new Error(`${d.keywords.if}: the condition could not be read from "${p.peek().text}" on`);
           } else if (d.keywords.then === null) {
             // Siemens writes the jump straight after the condition, with no
             // THEN at all, so anything else here is a mistake worth naming.
@@ -683,6 +707,13 @@ export function parseMacroBlock(code, dialect) {
       throw new Error(`"${p.peek().text}" does not belong here`);
     }
   } catch (err) {
+    // An IF that cannot be read still opens a block: what it guards is
+    // passed over rather than run as if the condition held — which, with a
+    // GOTOB back to the IF inside it, ran for ever.
+    if (!control && d.keywords.endIf && new RegExp(`^\\s*(?:N\\d+\\s*)?${d.keywords.if}\\b`, 'i').test(code)
+      && !/\bGOTO[FBC]?\b/i.test(code)) {
+      control = { kind: 'if-block', cond: null };
+    }
     return { words, assigns, control, label, call, defs, error: err.message };
   }
 
@@ -1108,6 +1139,8 @@ export class Vars {
   }
 
   getNamed(name, index) {
+    // The control's own variables, $ in front: the interpreter answers them.
+    if (name[0] === '$' && this.system) return this.system(name, index);
     const entry = this.resolve(name);
     if (!entry) {
       if (name in CONSTANTS) return CONSTANTS[name];
