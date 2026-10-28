@@ -104,6 +104,10 @@ const SIEMENS = {
   logic: { and: 'AND', or: 'OR', xor: 'XOR' },
   keywords: {
     if: 'IF', then: null, goto: 'GOTOF', gotoBack: 'GOTOB',
+    // GOTO looks forward and then back; GOTOC the same, and no alarm when
+    // the label is nowhere. IF with nothing after its condition opens a
+    // block that ELSE and ENDIF close.
+    gotoEither: 'GOTO', gotoChecked: 'GOTOC', else: 'ELSE', endIf: 'ENDIF',
     while: 'WHILE', do: null, end: null, endWhile: 'ENDWHILE',
     for: 'FOR', to: 'TO', endFor: 'ENDFOR', repeat: 'REPEAT', until: 'UNTIL',
     rep: null, repEnd: null,

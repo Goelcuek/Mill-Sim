@@ -110,7 +110,8 @@ export function hasMacroSyntax(code, dialect) {
   // DEF REAL STEP declares a variable without giving it a value.
   if (d.namedVariables && /^\s*DEF\b/i.test(code)) return true;
   // A label definition on a control that names them: "MARK1:".
-  if (d.labels === 'name' && /^\s*[A-Za-z_][A-Za-z0-9_.]*\s*:/.test(code)) return true;
+  // With its block number in front, as a post-processor writes it: N224 TP3:
+  if (d.labels === 'name' && /^\s*(?:N\d+\s*)?[A-Za-z_][A-Za-z0-9_.]*\s*:/i.test(code)) return true;
   for (const letter of d.letters) {
     if (new RegExp(`\\b${escapeRe(letter)}\\s*[0-9\\${d.group[0]}]`, 'i').test(code)) return true;
   }
@@ -505,6 +506,18 @@ export function evaluate(node, vars) {
  * @param {string} code the block with its comments already stripped
  * @returns {{words:Array, assigns:Array, control:object|null, error?:string}}
  */
+/**
+ * Which way a jump looks for its label: GOTOF forward, GOTOB back, a
+ * Siemens GOTO forward and then back, GOTOC the same and quiet when the
+ * label is nowhere.
+ */
+function jumpHow(p) {
+  if (p.isWord('gotoBack')) return { back: true };
+  if (p.isWord('gotoEither')) return { back: false, either: true };
+  if (p.isWord('gotoChecked')) return { back: false, either: true, quiet: true };
+  return { back: false };
+}
+
 export function parseMacroBlock(code, dialect) {
   const d = dialect || DIALECTS.fanuc;
   const words = [];
@@ -564,10 +577,14 @@ export function parseMacroBlock(code, dialect) {
         if (p.isWord('if')) {
           p.next();
           const cond = p.expression();
-          if (p.isWord('goto') || p.isWord('gotoBack')) {
-            const back = p.isWord('gotoBack');
+          if (p.isWord('goto') || p.isWord('gotoBack') || p.isWord('gotoEither') || p.isWord('gotoChecked')) {
+            const how = jumpHow(p);
             p.next();
-            control = { kind: 'if-goto', cond, back, ...p.jumpTarget() };
+            control = { kind: 'if-goto', cond, ...how, ...p.jumpTarget() };
+          } else if (d.keywords.endIf && p.peek().kind === 'end') {
+            // IF R5 == 29 on its own: the lines down to ELSE or ENDIF run
+            // when it holds.
+            control = { kind: 'if-block', cond };
           } else if (p.isWord('then')) {
             p.next();
             control = { kind: 'if-then', cond, assign: assignment() };
@@ -597,12 +614,14 @@ export function parseMacroBlock(code, dialect) {
         if (p.isWord('end')) { p.next(); control = { kind: 'end', level: evaluateConstant(p.expression()) }; continue; }
         if (p.isWord('do')) { p.next(); control = { kind: 'do', level: evaluateConstant(p.expression()) }; continue; }
 
-        if (p.isWord('goto') || p.isWord('gotoBack')) {
-          const back = p.isWord('gotoBack');
+        if (p.isWord('goto') || p.isWord('gotoBack') || p.isWord('gotoEither') || p.isWord('gotoChecked')) {
+          const how = jumpHow(p);
           p.next();
-          control = { kind: 'goto', back, ...p.jumpTarget() };
+          control = { kind: 'goto', ...how, ...p.jumpTarget() };
           continue;
         }
+        if (p.isWord('else')) { p.next(); control = { kind: 'else' }; continue; }
+        if (p.isWord('endIf')) { p.next(); control = { kind: 'endif' }; continue; }
 
         if (p.isWord('for')) {
           p.next();

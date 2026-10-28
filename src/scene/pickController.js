@@ -319,7 +319,7 @@ export class PickController {
     const v = new THREE.Vector3(...point);
     const frame = this.frameObject();
     if (frame) v.applyMatrix4(frame.matrixWorld);
-    const d = this.viewer.camera.position.distanceTo(v);
+    const d = this.viewer.apparentDistance ? this.viewer.apparentDistance() : this.viewer.camera.position.distanceTo(v);
     return Math.max(d * 0.005, 0.15);
   }
 

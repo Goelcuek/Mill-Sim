@@ -108,7 +108,7 @@ export class MeasureView {
 
     for (const child of this.group.children) {
       if (!child.userData.isDot) continue;
-      const d = cam.position.distanceTo(child.getWorldPosition(this.tmp));
+      const d = this.viewer.apparentDistance ? this.viewer.apparentDistance() : cam.position.distanceTo(child.getWorldPosition(this.tmp));
       child.scale.setScalar(Math.max(d * 0.004, 0.12));
     }
 

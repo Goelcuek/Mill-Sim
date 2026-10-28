@@ -1094,6 +1094,32 @@ export function interpret(text, config = {}) {
     return found;
   };
 
+  /**
+   * The ELSE or ENDIF that answers the IF or ELSE at `idx`, with IFs inside
+   * it counted out. `orElse` stops at an ELSE as well as an ENDIF.
+   */
+  const ifCache = new Map();
+  const matchIf = (idx, orElse) => {
+    const key = `${idx}:${orElse}`;
+    if (ifCache.has(key)) return ifCache.get(key);
+    const from = blocks[idx];
+    let depth = 0;
+    let found = -1;
+    for (let i = idx + 1; i < blocks.length; i++) {
+      const b = blocks[i];
+      if ((b.src || null) !== (from.src || null)) break;
+      const c = b.macro && b.macro.control;
+      if (!c) continue;
+      if (c.kind === 'if-block') depth++;
+      else if (c.kind === 'endif') {
+        if (depth === 0) { found = i; break; }
+        depth--;
+      } else if (c.kind === 'else' && depth === 0 && orElse) { found = i; break; }
+    }
+    ifCache.set(key, found);
+    return found;
+  };
+
   const callStack = [];
   /** Is the block being read a tool change? See push. */
   let m6Block = false;
@@ -1298,6 +1324,7 @@ export function interpret(text, config = {}) {
           if (c.kind === 'goto' || (c.kind === 'if-goto' && evaluate(c.cond, vars))) {
             const target = c.label !== undefined ? c.label : evaluate(c.target, vars);
             const at = findLabel(b, target);
+            if (at < 0 && c.quiet) continue;               // GOTOC: no label, no alarm
             if (at < 0) {
               warn(b.line, typeof target === 'string'
                 ? `There is no label called ${target} in this program.`
@@ -1308,6 +1335,23 @@ export function interpret(text, config = {}) {
             continue;
           }
           if (c.kind === 'if-goto') continue;              // the condition was false
+          // IF … ELSE … ENDIF. A false condition goes past ELSE, or to the
+          // ENDIF; arriving at ELSE means the true part has run, so on to
+          // the ENDIF.
+          if (c.kind === 'if-block') {
+            if (evaluate(c.cond, vars)) continue;
+            const to = matchIf(pc - 1, true);
+            if (to < 0) { warn(b.line, 'IF has no ENDIF.', 'error'); continue; }
+            pc = to + 1;
+            continue;
+          }
+          if (c.kind === 'else') {
+            const to = matchIf(pc - 1, false);
+            if (to < 0) { warn(b.line, 'ELSE has no ENDIF.', 'error'); continue; }
+            pc = to + 1;
+            continue;
+          }
+          if (c.kind === 'endif') continue;
           if (c.kind === 'if-then') {
             if (evaluate(c.cond, vars)) assign(c.assign);
             continue;

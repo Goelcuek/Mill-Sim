@@ -146,6 +146,42 @@ export class ModelsView {
     this.viewer.invalidate();
   }
 
+  /**
+   * Turn a model about one of the machine's own axes — X, Y or Z as they
+   * stand, not as the model's earlier turns have tipped them — round the
+   * middle of the model, so it turns where it is.
+   *
+   * Three angles applied one after another are each about an axis the
+   * others have already moved, and typing a second one turned the part
+   * somewhere nobody could work out. A turn about a fixed axis is the
+   * same turn whatever was done before it.
+   *
+   * @param {0|1|2} axis
+   * @param {number} degrees
+   */
+  turnAbout(model, axis, degrees) {
+    if (!degrees) return;
+    const o = model.object;
+    const parent = o.parent;
+    if (parent) parent.updateWorldMatrix(true, false);
+    o.updateWorldMatrix(false, true);
+    const centre = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+    if (parent) parent.worldToLocal(centre);
+    const dir = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+    const q = new THREE.Quaternion().setFromAxisAngle(dir, (degrees * Math.PI) / 180);
+    o.position.sub(centre).applyQuaternion(q).add(centre);
+    o.quaternion.premultiply(q);
+    // A whole turn of a quarter comes out as 89.99999999 otherwise.
+    for (const k of ['x', 'y', 'z']) {
+      const r = o.rotation[k];
+      const snapped = Math.round((r * 180) / Math.PI * 1e6) / 1e6;
+      o.rotation[k] = (snapped * Math.PI) / 180;
+    }
+    model.dirty = true;
+    this.viewer.invalidate();
+    this.onChange('transform', model);
+  }
+
   setTransform(model, { position, rotation, scale }) {
     if (position) model.object.position.set(position[0], position[1], position[2]);
     if (rotation) model.object.rotation.set(rotation[0], rotation[1], rotation[2]);

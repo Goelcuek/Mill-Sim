@@ -2518,7 +2518,7 @@ export class App {
       this.machineView.setAssemblyLength(sim.activeSlot.built.totalLength);
       this.machineView.setGaugeLength(sim.activeSlot.built.gaugeLength);
     }
-    if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
+    if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera, this.viewer.apparentDistance());
     const pose = this.travelView
       ? this.homePose()
       : this.jog
@@ -3246,6 +3246,39 @@ export class App {
       title: `Set ${key} zero`,
       hints: [`Click the point that should read X0 Y0 Z0 in ${key}`],
       onDone: ([p]) => this.applyWcs(key, this.coordFromPart(p)),
+    });
+    this.buildRibbon();
+  }
+
+  /**
+   * The work zero on the centre of a bore, from three points on its wall.
+   *
+   * A bore along Z gives X and Y and leaves Z where it was — Z comes off a
+   * face, as with a probe, not from wherever on the wall the points were
+   * taken. A bore that is not along Z, on a tilted face, gives its centre
+   * in all three, in the plane the points were taken in.
+   */
+  setOriginByBore() {
+    const key = this.state.wcsEdit;
+    this.pick.begin({
+      steps: 3,
+      title: `Set ${key} on a bore`,
+      hints: ['Click a point on the bore wall', 'Click a second point round it', 'Click a third'],
+      onDone: (points) => {
+        const local = points.map((p) => this.coordFromPart(p));
+        const found = circleThrough(local[0], local[1], local[2]);
+        if (!found) {
+          this.notify('Those three points are in a line, so there is no circle through them.', 'error');
+          return;
+        }
+        const n = new THREE.Vector3(...local[1]).sub(new THREE.Vector3(...local[0]))
+          .cross(new THREE.Vector3(...local[2]).sub(new THREE.Vector3(...local[0]))).normalize();
+        const alongZ = Math.abs(n.z) > Math.cos((5 * Math.PI) / 180);
+        const cur = this.state.wcs[key];
+        const c = found.centre;
+        this.applyWcs(key, alongZ ? [c[0], c[1], cur[2]] : c);
+        this.notify(`${key} on the centre of a Ø${units.lenU(found.radius * 2, 3)} bore${alongZ ? '; Z left where it was' : ', its axis not along Z, so Z is the bore\u2019s too'}.`, 'ok');
+      },
     });
     this.buildRibbon();
   }

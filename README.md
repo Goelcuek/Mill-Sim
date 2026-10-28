@@ -489,6 +489,12 @@ opening is drawn as the cut face — flat, lit as the plane, in its own
 colour — and a hole or pocket the plane passes through shows as a gap in
 it.
 
+The viewport has **no perspective**: parallel edges stay parallel, a wall
+seen edge on stays a line, and a length on screen is the same length near
+and far. The wheel zooms towards the pointer, and nothing is ever cut away
+by coming too close — the clip planes take in the whole scene, behind the
+camera as well as in front.
+
 The viewport draws **on demand**. A machining simulator is static most of
 the time — the program is not running, nobody is dragging the view, and the
 picture is the same one it was a second ago. Redrawing it sixty times a
@@ -546,6 +552,13 @@ where it should go:
   lands on the second.
 - **Set zero** drops the active work origin straight onto a clicked point;
   **Move G54** shifts it by the distance between two points.
+- **Set by bore centre** takes three points on a bore's wall and puts the
+  work origin on its centre: X and Y for a bore along Z, with Z left where
+  it was, as a probe would; all three for a bore on a tilted face.
+- A fixture or part **turns about the machine's own X, Y and Z** — never
+  about an axis an earlier turn has tipped over. The ± buttons turn it by
+  the step round its middle; typing a new RX, RY or RZ turns it about that
+  machine axis by the difference.
 
 Points snap. Everything near the cursor is projected to the screen and the
 closest candidate within a few pixels wins, ranked so a corner beats an edge
@@ -807,6 +820,9 @@ comments, `/` block delete
   from the work zero.
 - *Block numbers* — `N415` in front of any of these, as a post-processor
   writes them, belongs to the block and changes nothing.
+- *Conditions and jumps* — `IF … ELSE … ENDIF` as a block, `IF cond
+  GOTOF/GOTOB/GOTO label`, `GOTO` looking forward and then back, `GOTOC`
+  the same and quiet when the label is not there.
 - *Sections* — a label ends in a colon. `REPEAT LABEL P=n` runs the lines
   from the label to `ENDLABEL:` (or, the label being above, down to the
   `REPEAT`), `REPEAT START END` between two labels, `REPEATB` one block,

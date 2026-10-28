@@ -368,6 +368,9 @@ export class SetupPanel extends Panel {
         { label: 'Move by two points…', onClick: () => app.moveOriginByPoints() },
       ]),
       actionRow([
+        { label: 'Set by bore centre…', hint: 'Three points on the bore wall: X and Y go to its centre, Z stays', onClick: () => app.setOriginByBore() },
+      ]),
+      actionRow([
         {
           label: 'Zero to stock corner',
           hint: 'Minimum X/Y corner of the top face',
@@ -475,11 +478,18 @@ export class SetupPanel extends Panel {
       app.models.setTransform(m, { position: p });
       app.refreshFixtures();
     };
+    // A new angle is a turn about that machine axis by the difference —
+    // the axis stays the machine's, whatever the other two say.
     const setRot = (i, deg) => {
-      const r = [o.rotation.x, o.rotation.y, o.rotation.z];
-      r[i] = ((deg || 0) * Math.PI) / 180;
-      app.models.setTransform(m, { rotation: r });
+      const was = ([o.rotation.x, o.rotation.y, o.rotation.z][i] * 180) / Math.PI;
+      app.models.turnAbout(m, i, (deg || 0) - was);
       app.refreshFixtures();
+      this.refresh();
+    };
+    const turn = (i, sign) => {
+      app.models.turnAbout(m, i, sign * (this.turnStep || 90));
+      app.refreshFixtures();
+      this.refresh();
     };
     const bb = m.mesh.geometry.boundingBox;
     const size = bb
@@ -503,6 +513,16 @@ export class SetupPanel extends Panel {
       row(['RX', 'RY', 'RZ'].map((a, i) => field(a, Number((([o.rotation.x, o.rotation.y, o.rotation.z][i] * 180) / Math.PI).toFixed(2)), {
         step: 15, unit: '°', onChange: (v) => setRot(i, v),
       }))),
+      el('div.turn-row', {}, [
+        field('Turn by', this.turnStep || 90, {
+          min: 0, step: 15, unit: '°',
+          onChange: (v) => { this.turnStep = Math.abs(Number(v)) || 90; },
+        }),
+        ...['X', 'Y', 'Z'].flatMap((a, i) => [-1, 1].map((sign) => button(`${a}${sign < 0 ? '−' : '+'}`, () => turn(i, sign), {
+          title: `Turn about the machine's ${a} axis, ${sign < 0 ? 'clockwise' : 'anticlockwise'} seen from its + end, round the middle of the model`,
+        }))),
+      ]),
+      el('div.hint', {}, 'Every turn is about the machine\u2019s own X, Y and Z, round the middle of the model — never about an axis an earlier turn has tipped over. Typing a new RX, RY or RZ turns it about that machine axis by the difference; the three numbers then say where it ended up.'),
       row([
         field('Scale', Number(o.scale.x.toFixed(4)), {
           min: 0.001, step: 0.1,

@@ -342,3 +342,25 @@ test('M6 for the named tool already in the spindle does nothing', () => {
   const p = run('T="FACE MILL"\nM6\nG0 X10\nT="face mill"\nM6\nT="DRILL"\nM6\nM30');
   assert.deepEqual(p.toolChanges.map((c) => c.tool), ['FACE MILL', 'DRILL']);
 });
+
+test('block-numbered labels, IF … ENDIF blocks, GOTO and GOTOB: a loop of 29 passes', () => {
+  const p = run([
+    'N100 G17 G54 G90', 'N101 T1 M6', 'N102 R5=0', 'N103 R10=3',
+    'N224 TP3: ;******* KESIM BASLANGICI *******',
+    'N225 STOPRE', 'N226 R20=R5*R10', 'N228 G0 A0 C=(12.+R20)',
+    'N231 G1 G90 X0 Y-8.035 C=DC(12.+R20) D1 F200.',
+    'N250 R5=R5+1',
+    'N252 IF R5 == 29; **** BITIS ****', 'N253 GOTO ITEM3FINISH', 'N254 ENDIF',
+    'N256 IF (R5 MOD 15) == 1 ; **** KONTROL ****', 'N257 G75 Z1.0', 'N259 M01', 'N260 ENDIF; **** KONTROL SONU ****',
+    'N262 IF (R5 MOD 15) == 0', 'N263 R30=R30+1', 'N264 ELSE', 'N265 R31=R31+1', 'N268 ENDIF',
+    'N269 GOTOB TP3',
+    'N271 ITEM3FINISH: ; **** ITEM SONU ****',
+    'N272 GOTOC NOWHERE',
+    'N274 M30',
+  ].join('\n'));
+  assert.deepEqual(errors(p), []);
+  const cs = [...new Set(p.moves.map((m) => Math.round(m.rotTo.C)))];
+  assert.equal(cs.length, 29, `C positions: ${cs.join(',')}`);
+  assert.equal(cs[28], 12 + 28 * 3);
+  assert.equal(p.events.filter((e) => e.type === 'stop').length, 2, 'M01 on passes 1 and 16');
+});

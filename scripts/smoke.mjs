@@ -705,18 +705,22 @@ try {
     await page.mouse.move(area.x + area.width * 0.5, area.y + area.height * 0.45);
     for (let i = 0; i < 60; i++) await page.mouse.wheel(0, -240);
     await page.waitForTimeout(400);
+    // No perspective: the wheel is the zoom, and how close in it got is
+    // how little of the part one pixel covers. The clip planes take in the
+    // whole scene in front of the camera and behind it, so nothing pushed
+    // in on is cut away.
     const close = await page.evaluate(() => {
       const v = window.millsim.viewer;
       return {
+        mmpp: v.mmPerPixel(),
         dist: v.camera.position.distanceTo(v.controls.target),
         near: v.camera.near,
         far: v.camera.far,
       };
     });
-    console.log('zoomed in:', JSON.stringify({ dist: +close.dist.toFixed(2), near: +close.near.toFixed(4) }));
-    check(close.dist < 10, `the wheel stopped ${close.dist.toFixed(1)} mm out on a 2 m part`);
-    check(close.near < close.dist * 0.6, `the near plane (${close.near.toFixed(3)}) would cut away what the camera is looking at`);
-    check(close.far / close.near < 2e5, 'the depth buffer is spread too thin');
+    console.log('zoomed in:', JSON.stringify({ mmPerPixel: +close.mmpp.toFixed(4), near: +close.near.toFixed(1), far: +close.far.toFixed(1) }));
+    check(close.mmpp < 0.05, `the wheel stopped at ${close.mmpp.toFixed(3)} mm a pixel on a 2 m part`);
+    check(close.near < -close.dist && close.far > close.dist, `the clip planes (${close.near.toFixed(1)}, ${close.far.toFixed(1)}) would cut away what the camera is looking at ${close.dist.toFixed(1)} mm off`);
 
     // Double-click puts the turning point on what was clicked.
     await page.evaluate(() => window.millsim.fitToScene());
@@ -1683,6 +1687,45 @@ try {
       for (const m of app.models.models.slice(n)) app.models.remove(m);
       app.refreshFixtures();
     }, was);
+  }
+
+  // ---- no perspective, turns about the machine's axes, zero on a bore ----
+  {
+    await page.click('.ribbon-tab[data-tab="setup"]');
+    await page.click('.ribbon-page[data-page="origin"]');
+    await page.waitForTimeout(200);
+    const r = await page.evaluate(() => {
+      const app = window.millsim;
+      const out = { ortho: !!app.viewer.camera.isOrthographicCamera };
+      // Three points round a Ø8 bore at X37 Y-12, part frame, on Z5.
+      const key = app.state.wcsEdit;
+      const z0 = app.state.wcs[key][2];
+      const pts = [0, 2, 4].map((k) => [37 + 4 * Math.cos(k), -12 + 4 * Math.sin(k), 5]);
+      const want = app.coordFromPart([37, -12, 5]);
+      app.setOriginByBore();
+      for (const p of pts) { app.pick.hover = { point: p }; app.pick.commit(); }
+      const got = app.state.wcs[key];
+      out.bore = { got, want: [want[0], want[1], z0] };
+      // A vice jaw turned about machine X, then about machine Z: the same
+      // as those two turns about fixed axes, Z's last.
+      app.addPrimitiveFixture('clamp');
+      const m = app.models.models[app.models.models.length - 1];
+      app.models.turnAbout(m, 0, 90);
+      app.models.turnAbout(m, 2, 90);
+      m.object.updateMatrixWorld(true);
+      const q = m.object.quaternion;
+      // Its own X axis should now point along machine Y, its own Y along machine Z.
+      const ax = (v) => { const x = v.clone().applyQuaternion(q); return [x.x, x.y, x.z].map((n) => Math.round(n)); };
+      const V = m.object.position.constructor;
+      out.turn = { x: ax(new V(1, 0, 0)), y: ax(new V(0, 1, 0)) };
+      app.models.remove(m);
+      app.refreshFixtures();
+      return out;
+    });
+    console.log('ortho, bore, turns:', JSON.stringify(r));
+    check(r.ortho, 'the viewport camera should be orthographic');
+    check(r.bore.got.every((v, i) => Math.abs(v - r.bore.want[i]) < 1e-6), `zero on a bore: ${JSON.stringify(r.bore)}`);
+    check(r.turn.x.join() === '0,1,0' && r.turn.y.join() === '0,0,1', `turning about machine X then Z: ${JSON.stringify(r.turn)}`);
   }
 
   // ---- a machine built from nothing looks like nothing ------------------

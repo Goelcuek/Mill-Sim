@@ -609,6 +609,9 @@ select.speed { width: 82px; }
 .row { display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; }
 .row > * { flex: 1 1 0; min-width: 0; }
 .row > .btn { flex: 0 1 auto; }
+.turn-row { display: flex; gap: 4px; align-items: flex-end; flex-wrap: wrap; margin: 4px 0; }
+.turn-row > .field { flex: 0 0 96px; }
+.turn-row > .btn { flex: 1 0 auto; min-width: 38px; padding-left: 6px; padding-right: 6px; }
 
 .field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .field-label {

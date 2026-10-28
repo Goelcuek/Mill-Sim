@@ -104,6 +104,7 @@ export async function writeProject(app) {
   const camera = app.viewer ? {
     position: app.viewer.camera.position.toArray(),
     target: app.viewer.controls.target.toArray(),
+    zoom: app.viewer.camera.zoom,
   } : null;
 
   const project = {
@@ -263,6 +264,10 @@ export async function readProject(app, entries) {
   if (def.camera && app.viewer) {
     app.viewer.camera.position.fromArray(def.camera.position);
     app.viewer.controls.target.fromArray(def.camera.target);
+    if (def.camera.zoom > 0) {
+      app.viewer.camera.zoom = def.camera.zoom;
+      app.viewer.camera.updateProjectionMatrix();
+    }
     app.viewer.controls.update();
     app.viewer.invalidate();
   }

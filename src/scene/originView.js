@@ -124,11 +124,13 @@ export class OriginView {
   }
 
   /** Keep labels a constant size on screen. */
-  update(camera) {
+  update(camera, distance = null) {
     for (const e of this.entries) {
       const world = new THREE.Vector3();
       e.entry.getWorldPosition(world);
-      const d = camera.position.distanceTo(world);
+      // Without perspective the size on screen does not change with
+      // distance, so the viewer says how far it is as good as standing.
+      const d = distance ?? camera.position.distanceTo(world);
       const h = Math.max(d * 0.03, 2.5);
       e.label.scale.set(h * e.label.userData.aspect, h, 1);
     }

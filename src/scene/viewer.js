@@ -101,8 +101,17 @@ export class Viewer {
     // metre frame. See updateClipping — a near plane picked once for the
     // whole session is what used to stop a big part being examined, since
     // everything within a centimetre of the camera was cut away.
-    this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
+    //
+    // The camera is orthographic: no perspective, so a wall stays a wall
+    // seen edge on, parallel edges stay parallel, and a length on screen is
+    // the same length near and far. Zooming is the camera's zoom, not
+    // walking it closer; how far back it stands changes nothing you see,
+    // and the clip planes reach behind it as well as in front, so pushing
+    // in on a feature never cuts it away.
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -6000, 6000);
     this.camera.position.set(240, -300, 220);
+    /** What height of the world fills the viewport at zoom 1, in mm. */
+    this.viewHeight = 500;
     /**
      * How big everything in the scene is and where the middle of it is,
      * in millimetres. Measured from the scene itself rather than from
@@ -127,8 +136,8 @@ export class Viewer {
     // How near and how far the camera may stand. Both follow the size of
     // the job rather than being numbers picked for a palm-sized part; the
     // near plane is what keeps the camera out of the metal now.
-    this.controls.minDistance = 0.02;
-    this.controls.maxDistance = 20000;
+    this.controls.minZoom = 0.0005;
+    this.controls.maxZoom = 5000;
     // Orbiting is the one thing that changes the picture without anything
     // in the app changing, so it asks for the redraw itself.
     this.controls.addEventListener('change', () => {
@@ -326,8 +335,8 @@ export class Viewer {
   resize() {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    this.aspect = w / h;
+    this.frustum();
     // The canvas is absolutely sized, so its CSS size has to track the
     // container or the layout below the viewport gets pushed off screen.
     this.renderer.setSize(w, h);
@@ -383,18 +392,42 @@ export class Viewer {
    * because that ratio is what the depth buffer's precision is spent on.
    */
   updateClipping() {
-    const d = this.camera.position.distanceTo(this.controls.target);
-    // Far enough to reach the back of the scene from where the camera
-    // stands — which is not the same as twice the size of whatever was
-    // last framed. Fit the view to a 30 mm part inside a three metre
-    // gantry and that difference is the whole machine.
-    const reach = this.camera.position.distanceTo(this.sceneCentre) + this.sceneRadius;
-    const far = Math.max(d + 200, reach + this.sceneRadius * 0.25 + 200, 100);
-    const near = Math.min(Math.max(d / 200, far / 100000), Math.max(d * 0.5, 0.02));
+    // With no perspective the depth buffer is spent evenly from the near
+    // plane to the far one, so both can simply take in the whole scene
+    // from wherever the camera stands — behind it included.
+    const reach = this.camera.position.distanceTo(this.sceneCentre) + this.sceneRadius * 1.25 + 200;
+    const near = -reach;
+    const far = reach;
     if (near === this.camera.near && far === this.camera.far) return;
     this.camera.near = near;
     this.camera.far = far;
     this.camera.updateProjectionMatrix();
+  }
+
+  /** The view box from the height shown and the viewport's shape. */
+  frustum() {
+    const h = this.viewHeight / 2;
+    const w = h * (this.aspect || 1);
+    this.camera.left = -w;
+    this.camera.right = w;
+    this.camera.top = h;
+    this.camera.bottom = -h;
+    this.camera.updateProjectionMatrix();
+  }
+
+  /** Millimetres of the world across one pixel of the viewport. */
+  mmPerPixel() {
+    const px = this.container.clientHeight || 600;
+    return this.viewHeight / this.camera.zoom / px;
+  }
+
+  /**
+   * The distance a perspective camera would stand from what it shows at
+   * this size. Markers and labels that keep their size on screen were
+   * sized from it; it is the same rule with the zoom in its place.
+   */
+  apparentDistance() {
+    return (this.viewHeight / this.camera.zoom) / (2 * Math.tan((42 * Math.PI) / 360));
   }
 
   /**
@@ -430,7 +463,6 @@ export class Viewer {
     const radius = box.getSize(new THREE.Vector3()).length() * 0.5;
     if (!Number.isFinite(radius)) return;
     this.sceneRadius = Math.max(radius, 5);
-    this.controls.maxDistance = Math.max(this.sceneRadius * 40, 4000);
     this.updateClipping();
   }
 
@@ -440,11 +472,15 @@ export class Viewer {
     const size = box.getSize(new THREE.Vector3());
     const centre = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.length() * 0.5, 5);
-    const dist = (radius / Math.sin((this.camera.fov * Math.PI) / 360)) * factor * 0.5;
+    // The box's ball fills the height, or the width when the viewport is
+    // the narrower way, with the same margin a perspective fit gave.
+    const across = radius * factor * 1.07;
+    this.camera.zoom = this.viewHeight / (across / Math.min(1, this.aspect || 1));
+    this.camera.updateProjectionMatrix();
 
     const dir = this.camera.position.clone().sub(this.controls.target);
     if (dir.lengthSq() < 1e-6) dir.set(1, -1, 0.8);
-    dir.normalize().multiplyScalar(Math.max(dist, 20));
+    dir.normalize().multiplyScalar(Math.max(radius * 3, 300));
 
     // Framing something small does not make the scene small: the clip
     // planes and the dolly limits come from the scene itself.
@@ -480,7 +516,7 @@ export class Viewer {
   /** Snap to a named view, keeping the current target and distance. */
   setView(name) {
     const dir = VIEWS[name] || VIEWS.iso;
-    const dist = this.camera.position.distanceTo(this.controls.target) || 300;
+    const dist = Math.max(this.camera.position.distanceTo(this.controls.target), this.sceneRadius * 2, 300);
     const v = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize().multiplyScalar(dist);
     this.camera.position.copy(this.controls.target).add(v);
     this.updateClipping();
