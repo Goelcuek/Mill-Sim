@@ -220,9 +220,9 @@ export class ToolsPanel extends Panel {
 
   // ---- rendering ----------------------------------------------------------
 
-  listItem({ id, selected, marked, onOpen, swatch, title, sub, extra }) {
+  listItem({ id, selected, marked, onOpen, swatch, title, sub, extra, inSpindle = false }) {
     const on = marked || selected;
-    return el(`div.list-item${on ? '.selected' : ''}${marked ? '.marked' : ''}`, {
+    return el(`div.list-item${on ? '.selected' : ''}${marked ? '.marked' : ''}${inSpindle ? '.in-spindle' : ''}`, {
       onclick: (e) => this.choose(id, e),
       ondblclick: onOpen,
       title: 'Double-click to edit. Ctrl-click to pick out several, Shift-click for a run of them.',
@@ -239,7 +239,10 @@ export class ToolsPanel extends Panel {
       swatch ? el('div.swatch', { style: { background: swatch } }) : null,
       el('div.list-main', {}, [
         el('div.list-title', {}, title),
-        el('div.list-sub', {}, sub),
+        el('div.list-sub', {}, [
+          inSpindle ? el('span.spindle-tag', { title: 'The tool the machine has in its spindle where the run stands' }, 'In the spindle') : null,
+          sub,
+        ]),
       ]),
       el('div.list-actions', {}, [
         button('Edit', (e) => { e.stopPropagation(); this.choose(id, null); onOpen(); }),
@@ -277,11 +280,15 @@ export class ToolsPanel extends Panel {
     const app = this.app;
     const lib = app.library;
     const list = el('div.list');
+    // The one the machine has in its spindle where the run stands.
+    const loaded = app.spindleAssemblyId();
+    this.shownSpindle = loaded;
 
     for (const a of lib.assemblies) {
       const built = lib.build(a.id, app.state.machine);
       list.appendChild(this.listItem({
         id: a.id,
+        inSpindle: a.id === loaded,
         selected: this.selected.assembly === a.id,
         marked: this.marked.assembly.has(a.id),
         onOpen: () => openAssemblyDialog(app, a.id),

@@ -1452,3 +1452,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .finding-filter.off { opacity: 0.55; text-decoration: line-through; background: transparent; }
 .finding-filter.off .finding-filter-dot { background: var(--text-3); }
 .finding-filter.reset { border-style: dashed; }
+
+/* Tools › Tool table: the assembly in the spindle where the run stands. */
+.list-item.in-spindle { box-shadow: inset 3px 0 0 var(--accent); background: var(--accent-soft, rgba(10, 124, 255, 0.08)); }
+.spindle-tag {
+  margin-right: 6px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600;
+  color: #fff; background: var(--accent); vertical-align: middle; white-space: nowrap;
+}

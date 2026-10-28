@@ -3079,6 +3079,9 @@ export class App {
       }
     }
     set(f.tool, this.travelView ? 'T–' : `T${sim.currentTool || '–'}`);
+    // A tool change during the run moves the mark in the tool table.
+    if (this.panels && this.activeTab === 'tools' && this.panels.tools.page === 'assemblies'
+      && this.panels.tools.shownSpindle !== this.spindleAssemblyId()) this.panels.tools.render();
     set(f.toolName, this.travelView ? 'spindle empty' : slot ? slot.built.tool.def.name : 'no tool');
     // The feed is shown in what the reader works in, which is not
     // necessarily the F word in the file.
@@ -3109,6 +3112,21 @@ export class App {
     } else {
       this.badge.style.display = 'none';
     }
+  }
+
+  /**
+   * The assembly in the spindle where the run stands: the one the last
+   * tool change loaded, or before any, the one the program starts with.
+   * None while the spindle is shown empty on Machine › Travels.
+   */
+  spindleAssemblyId() {
+    if (this.travelView) return null;
+    const sim = this.simulator;
+    const first = this.state.program && this.state.program.moves[0];
+    const slot = sim.activeSlot
+      || (first && sim.slots && sim.slots.get(typeof first.tool === 'string' ? slotNameKey(first.tool) : first.tool))
+      || this.fallbackSlot;
+    return slot ? slot.assemblyId || null : null;
   }
 
   /** The findings of the kinds not filtered out on Results › Findings. */
