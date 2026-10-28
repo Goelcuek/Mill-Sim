@@ -35,12 +35,12 @@ test('TRANS shifts the zero, ATRANS adds to it in the turned axes, TRANS alone c
   assert.deepEqual(to[2], [0, 0, 5]);
 });
 
-test('TRAORI is tool centre point on and TRAFOOF off; DIAMOF is accepted, DIAMON said once', () => {
+test('TRAORI is tool centre point on and TRAFOOF off; DIAMOF is accepted, DIAMON outside turning said once', () => {
   const p = run('DIAMOF\nTRAORI\nG1 X10 F500\nTRAFOOF\nG1 X20\nDIAMON\nM30');
   assert.deepEqual(p.moves.map((m) => m.tcp), [4, 0]);
   assert.ok(p.events.some((e) => /TRAORI/.test(e.text)));
   assert.deepEqual(errors(p), []);
-  assert.ok(said(p).some((w) => /DIAMON is diameter programming/.test(w)));
+  assert.ok(said(p).some((w) => /DIAMON outside turning mode: X is read as a diameter/.test(w)));
   assert.ok(!said(p).some((w) => /DIAMOF|TRAORI|TRAFOOF/.test(w)), said(p).join('\n'));
 });
 
@@ -559,4 +559,39 @@ test('A3/B3/C3 under TRAORI point the tool; ORIVECT sweeps it round the great ci
   // Without TRAORI there is nothing for a vector to mean.
   const off = run('G0 X0 Y0 Z50\nG1 X10 A3=0.2 B3=0 C3=1 F500\nM30', { kinematics: buildPreset('tableTable') });
   assert.ok(errors(off).some((e) => /under TRAORI/.test(e)), errors(off).join('\n'));
+});
+
+test('turning on the table: CYCLE800 "DREHEN", DIAMON, G96 with LIMS, G95 timed at the diameter', () => {
+  const kin = buildPreset('tableTable');
+  const p = run([
+    'G54 G18 G90',
+    'CYCLE800(0,"DREHEN",0,57,0,0,0,0,0,0,0,0,0,1)',
+    'DIAMON',
+    'G96 S150 M3 LIMS=1200',
+    'G95 F0.2',
+    'G0 X60 Z5',
+    'G1 Z-20',
+    'G1 X10',
+    'G0 Z5 C90',
+    'CYCLE800()',
+    'G0 X60',
+    'M30',
+  ].join('\n'), { kinematics: kin });
+  assert.ok(p.events.some((e) => /Turning mode on: the C table/.test(e.text)), 'DREHEN turns it on');
+  assert.ok(p.events.some((e) => /Turning mode off/.test(e.text)), 'CYCLE800() turns it off');
+  const at = (line) => p.moves.filter((m) => m.line === line);
+  // X60 is a diameter: 30 from the axis.
+  near(at(6).pop().to[0], 30, 1e-9, 'X60 under DIAMON');
+  const along = at(7)[0];
+  assert.equal(along.turning, true);
+  // 150 m/min at Ø60 is 795.8 rpm; at 0.2 mm/rev that is 159.2 mm/min over 25 mm.
+  near(along.rpm, 150000 / (Math.PI * 60), 1e-6, 'rpm at Ø60');
+  near(along.time, (25 / (0.2 * along.rpm)) * 60, 1e-6, 'G95 time at that rpm');
+  // Facing in to Ø10 averages Ø35, 1364 rpm: LIMS holds it to 1200.
+  near(at(8)[0].rpm, 1200, 1e-9, 'LIMS caps it');
+  // C is the spindle while turning.
+  assert.ok(errors(p).some((e) => /C is the spindle in turning mode/.test(e)), errors(p).join('\n'));
+  assert.equal(at(9)[0].rotTo.C || 0, 0, 'the C word did not move C');
+  // After CYCLE800(), milling again — DIAMON is still on, as on the control.
+  assert.equal(at(11).pop().turning, undefined);
 });

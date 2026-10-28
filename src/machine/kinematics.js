@@ -503,6 +503,29 @@ export class Kinematics {
     return this._refTip;
   }
 
+  /**
+   * The axis a part turns about when the table spins as a lathe spindle:
+   * the rotary nearest the table on its side of the chain — C on a
+   * trunnion. Given in the frame a move's points are in (the work frame
+   * at every rotary zero, from the fixture face), where it stands still
+   * whatever any rotary does: it rides on everything above it, and the
+   * part rides on it.
+   *
+   * @returns {null | {letter:string, point:number[], dir:number[]}}
+   */
+  turningAxis() {
+    const path = this.pathTo(this.workNode);
+    const node = [...path].reverse().find((n) => n.kind === 'rotary');
+    if (!node) return null;
+    this.solve({});
+    const inv = m4.invertRigid(m4.create(), this.matrixOf(this.workNode));
+    const rel = m4.multiply(m4.create(), inv, this.matrixOf(node.id));
+    const p = m4.transformPoint([0, 0, 0], rel, [0, 0, 0]);
+    const dir = m4.normalize(m4.transformDir([0, 0, 0], rel, node.axis));
+    const o = this.tableOffset;
+    return { letter: node.letter, point: [p[0] - o[0], p[1] - o[1], p[2] - o[2]], dir };
+  }
+
   /** The tool's direction in part coordinates; only the rotaries matter. */
   toolAxis(values, gaugeLength = 0) {
     return this.toolInWork(values, gaugeLength).axis;

@@ -217,6 +217,19 @@ class State {
      * tool's direction sweeps it, and one that gives angles moves the axes.
      */
     this.ori = null;
+    /**
+     * Turning on a mill-turn table: the table's rotary spins as the lathe
+     * spindle (CYCLE800 with "DREHEN"), and the tool stands still in the
+     * milling spindle.
+     */
+    this.turning = false;
+    /** G96: S is a cutting speed, m/min, and the spindle follows the diameter. */
+    this.cssOn = false;
+    this.css = 0;
+    /** LIMS: the most G96 may spin the spindle, rpm. */
+    this.lims = 0;
+    /** DIAMON (true), DIAM90 ('abs': absolute X only) or off: X as a diameter. */
+    this.diameter = false;
   }
 
   offset() {
@@ -677,6 +690,12 @@ export function interpret(text, config = {}) {
 
   const push = (move) => {
     move.i = moves.length;
+    // Made with the table spinning as a lathe: the cut is the tool's
+    // outline turned round the table's axis.
+    if (st.turning) {
+      move.turning = true;
+      if (st.cssOn) move.css = st.css;
+    }
     if (curSrc) move.source = curSrc;
     if (move.tcp && !st.tcp && st.swivel && st.swivelRot) move.swivelRot = st.swivelRot;
     // A CYCLE800 plane without TRAORI is a frame, not tool centre point:
@@ -741,7 +760,7 @@ export function interpret(text, config = {}) {
    * sensible speed along the tip. Read as mm/min, F0.1 at S1000 took a
    * thousand minutes over a 100 mm line, and a G93 F2 took fifty.
    */
-  const timing = (kind, tipLen, feed) => {
+  const timing = (kind, tipLen, feed, rpm = st.rpm) => {
     // The other axes the move turns or slides. A swing of the head with the
     // tip standing still is not a move of no length: it takes as long as
     // the slowest axis needs, and a U/V/W slide is travel like X, Y and Z.
@@ -753,7 +772,7 @@ export function interpret(text, config = {}) {
       return { feed: cfg.rapidRate, time: Math.max(len > 0 ? (len / cfg.rapidRate) * 60 : 0, turnMin) };
     }
     if (st.feedMode === 93 && st.feedRaw > 0) return { feed: len * st.feedRaw, time: Math.max(60 / st.feedRaw, turnMin) };
-    const rate = st.feedMode === 95 && st.rpm > 0 ? feed * st.rpm : feed;
+    const rate = st.feedMode === 95 && rpm > 0 ? feed * rpm : feed;
     // What F is a speed along. A rotary alone: degrees a minute. With the
     // linear axes, a Fanuc applies it to all of them together, degrees
     // counted as millimetres; Siemens, Heidenhain and Fidia to the linear
@@ -836,10 +855,32 @@ export function interpret(text, config = {}) {
     }
   };
 
+  /**
+   * How fast the spindle turns over a move. Under G96 in turning it is the
+   * cutting speed at the diameter the tool is on — the mean of the two
+   * ends, as the time is all it is wanted for — up to LIMS, or the
+   * machine's own limit; otherwise it is S.
+   */
+  const spindleRpm = (from, to) => {
+    if (!st.turning || !st.cssOn) return st.rpm;
+    const ax = cfg.kinematics && cfg.kinematics.turningAxis ? turningAxisOf() : null;
+    const radius = (p) => {
+      if (!ax) return Math.hypot(p[0], p[1]);
+      const w = [p[0] - ax.point[0], p[1] - ax.point[1], p[2] - ax.point[2]];
+      const along = w[0] * ax.dir[0] + w[1] * ax.dir[1] + w[2] * ax.dir[2];
+      return Math.hypot(w[0] - along * ax.dir[0], w[1] - along * ax.dir[1], w[2] - along * ax.dir[2]);
+    };
+    const r = (radius(from) + radius(to)) / 2;
+    const most = st.lims > 0 ? st.lims : (Number(cfg.turnMaxRpm) || 1000);
+    if (!(r > 1e-6)) return most;
+    return Math.min(most, (st.css * 1000) / (2 * Math.PI * r));
+  };
+
   const emitLinear = (line, kind, target, feed) => {
     const from = st.pos.slice();
     const len = dist3(from, target);
-    const pace = timing(kind, len, feed);
+    const rpmNow = spindleRpm(from, target);
+    const pace = timing(kind, len, feed, rpmNow);
     const move = push({
       kind,
       line,
@@ -850,7 +891,7 @@ export function interpret(text, config = {}) {
       rotTo: { ...st.rot },
       tcp: tcpNow(),
       feed: pace.feed,
-      rpm: st.rpm,
+      rpm: rpmNow,
       spindleDir: st.spindleDir,
       tool: st.tool,
       wcs: st.wcs,
@@ -888,7 +929,8 @@ export function interpret(text, config = {}) {
     for (let i = 3; i < path.length; i += 3) {
       len += Math.hypot(path[i] - path[i - 3], path[i + 1] - path[i - 2], path[i + 2] - path[i - 1]);
     }
-    const pace = timing('arc', len, feed);
+    const rpmNow = spindleRpm(from, target);
+    const pace = timing('arc', len, feed, rpmNow);
     const move = push({
       kind: 'arc',
       line,
@@ -902,7 +944,7 @@ export function interpret(text, config = {}) {
       ccw,
       path,
       feed: pace.feed,
-      rpm: st.rpm,
+      rpm: rpmNow,
       spindleDir: st.spindleDir,
       tool: st.tool,
       wcs: st.wcs,
@@ -1761,6 +1803,7 @@ export function interpret(text, config = {}) {
 
     // ---- the words a Siemens writes for itself ---------------------------
     if (b.modes) siemensModes(b);
+    if (b.spindle) siemensSpindle(b);
     if (b.siemens && siemensStatement(b)) continue;
     if (b.toolName && !b.words.length) {
       st.pendingTool = b.toolName;
@@ -2088,6 +2131,10 @@ export function interpret(text, config = {}) {
           break;
         case 94: st.feedMode = 94; break;
         case 95: st.feedMode = 95; break;
+        // Constant cutting speed: S is m/min at the diameter cut, and G97
+        // puts S back to revolutions a minute.
+        case 96: st.cssOn = true; break;
+        case 97: st.cssOn = false; break;
         case 98: st.retractMode = 98; break;
         case 99: st.retractMode = 99; break;
         default:
@@ -2111,7 +2158,15 @@ export function interpret(text, config = {}) {
       spokenFor.add('G95');
       warn(b.line, 'Feed per revolution (G95) with no spindle speed; F is read as mm/min for the times.');
     }
-    if (s !== undefined) st.rpm = s;
+    if (s !== undefined) {
+      if (st.cssOn) {
+        st.css = s;
+        if (!st.turning && !spokenFor.has('G96 milling')) {
+          spokenFor.add('G96 milling');
+          warn(b.line, 'G96 constant cutting speed outside turning mode: S is read as m/min, and there is no diameter for it to follow, so the spindle speed is left as it was.');
+        }
+      } else st.rpm = s;
+    }
     if (t !== undefined) st.pendingTool = t;
 
     // ---- M codes ---------------------------------------------------------
@@ -2294,6 +2349,12 @@ export function interpret(text, config = {}) {
 
     // ---- Motion ----------------------------------------------------------
     if (axesConsumed) continue;
+    // DIAMON: X is a diameter, and the tool goes half of it from the axis.
+    if (st.diameter && axis.X !== undefined) {
+      const mode = b.axisModes && b.axisModes.X;
+      const incremental = mode === 'IC' || (!mode && !st.absolute);
+      if (!(st.diameter === 'abs' && incremental)) axis.X /= 2;
+    }
     const hasAxisWord = axis.X !== undefined || axis.Y !== undefined || axis.Z !== undefined;
     const motion = motionThisBlock !== null ? motionThisBlock : st.motion;
 
@@ -2332,6 +2393,17 @@ export function interpret(text, config = {}) {
       continue;
     }
 
+    // Turning: the table's axis is the lathe spindle, not an axis to send.
+    if (st.turning) {
+      const ax = turningAxisOf();
+      if (ax && axis[ax.letter] !== undefined) {
+        delete axis[ax.letter];
+        if (!spokenFor.has('turning C')) {
+          spokenFor.add('turning C');
+          warn(b.line, `${ax.letter} is the spindle in turning mode; ${ax.letter} words were ignored until CYCLE800 puts the table back to milling.`, 'error');
+        }
+      }
+    }
     const hasRotaryWord = turning.some((L) => axis[L] !== undefined)
       || [...auxLinear].some((L) => axis[L] !== undefined);
 
@@ -2616,6 +2688,43 @@ export function interpret(text, config = {}) {
     return last;
   }
 
+  /**
+   * The table's spinning axis, worked out once per machine. A `var`, as
+   * the functions that read it are called before this line is reached.
+   */
+  // eslint-disable-next-line no-var
+  var turningAxisCache;
+  function turningAxisOf() {
+    if (turningAxisCache === undefined) {
+      const kin = cfg.kinematics;
+      turningAxisCache = kin && typeof kin.turningAxis === 'function' ? kin.turningAxis() : null;
+    }
+    return turningAxisCache;
+  }
+
+  /** LIMS= and SPOS=: the spindle's limit under G96, and a stop at an angle. */
+  function siemensSpindle(b) {
+    for (const [key, text] of Object.entries(b.spindle)) {
+      let value;
+      try {
+        const [expr] = parseArgs(text, dialect);
+        value = expr === null ? 0 : Number(evaluate(expr, vars));
+      } catch (err) {
+        warn(b.line, `${key}=${text}: ${err.message}.`, 'error');
+        continue;
+      }
+      if (key === 'LIMS') {
+        st.lims = Math.max(0, value);
+        events.push({ line: b.line, type: 'spindle', moveIndex: moves.length, text: `LIMS=${value}: G96 turns the spindle no faster than ${value} rpm` });
+      } else if (key === 'SPOS') {
+        // The milling spindle stopped at an angle, as a turning tool is held
+        // facing the part. The tool here always faces it, so the angle is
+        // recorded and not modelled.
+        events.push({ line: b.line, type: 'spindle', moveIndex: moves.length, text: `SPOS=${value}: spindle stopped at ${value}°` });
+      }
+    }
+  }
+
   /** Modes a Siemens writes as words: TRAORI, TRAFOOF, DIAMON and the rest. */
   function siemensModes(b) {
     for (const mode of b.modes) {
@@ -2636,11 +2745,16 @@ export function interpret(text, config = {}) {
       } else if (mode === 'ORIMKS' && !spokenFor.has(mode)) {
         spokenFor.add(mode);
         warn(b.line, 'ORIMKS gives the tool direction in machine coordinates; it is read in the workpiece frame here, as ORIWKS.');
-      } else if ((mode === 'DIAMON' || mode === 'DIAM90') && !spokenFor.has(mode)) {
-        // Diameter programming is a lathe's: X read as a diameter. A mill
-        // has no use for it, and this reader keeps X a position.
-        spokenFor.add(mode);
-        warn(b.line, `${mode} is diameter programming, for turning; X is read as a position here.`);
+      } else if (mode === 'DIAMON' || mode === 'DIAM90') {
+        // X as a diameter: half of it is how far the tool is from the axis.
+        // DIAM90 only for absolute X; DIAMON for G91 as well.
+        st.diameter = mode === 'DIAMON' ? true : 'abs';
+        if (!st.turning && !spokenFor.has(mode)) {
+          spokenFor.add(mode);
+          warn(b.line, `${mode} outside turning mode: X is read as a diameter, half of it from the work zero.`);
+        }
+      } else if (mode === 'DIAMOF') {
+        st.diameter = false;
       }
       // DIAMOF, SUPA (read where the axes are), and the smoothing and
       // orientation modes change nothing about where the tool goes.
@@ -2796,6 +2910,24 @@ export function interpret(text, config = {}) {
    */
   function cycle800(args, line) {
     const n = (i) => (Number.isFinite(Number(args[i])) && args[i] !== null && typeof args[i] !== 'string' ? Number(args[i]) : 0);
+    // The swivel data record named in _TC says what the table is for: with
+    // "DREHEN" (turning) it spins as the lathe spindle and the tool in the
+    // milling spindle stands still; any other, or CYCLE800() on its own,
+    // puts it back to milling.
+    const tc = typeof args[1] === 'string' ? args[1].trim().toUpperCase() : '';
+    const drehen = tc === 'DREHEN';
+    if (drehen !== st.turning) {
+      const ax = drehen ? turningAxisOf() : null;
+      if (drehen && !ax) {
+        warn(line, 'CYCLE800 "DREHEN" turns on the table, which needs a machine with a rotary table; load a 5-axis machine in Setup.', 'error');
+      } else {
+        st.turning = drehen;
+        events.push({
+          line, type: 'turning', moveIndex: moves.length,
+          text: drehen ? `Turning mode on: the ${ax.letter} table spins as the spindle (CYCLE800 "${tc}")` : 'Turning mode off: milling',
+        });
+      }
+    }
     if (!args.length || args.every((a) => a === null || a === '' || a === 0)) {
       if (st.tilt) events.push({ line, type: 'plane', moveIndex: moves.length, text: 'CYCLE800() swivel plane cleared' });
       setTcpMode(() => { st.swivel = false; });

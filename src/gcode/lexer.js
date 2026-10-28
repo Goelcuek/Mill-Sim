@@ -328,6 +328,26 @@ export function siemensWords(input, d = DIALECTS.siemens) {
     body = `${body.slice(0, o.index)} ${body.slice(end)}`;
     ORIENT_RE.lastIndex = o.index;
   }
+  // LIMS=3000 the most the spindle may turn under G96; SPOS=0 (SPOS[1]=0,
+  // SPOS=DC(90)) the spindle stopped at an angle. Values as the above.
+  const SPINDLE_RE = /\b(LIMS|SPOS)(?:\[\s*\d+\s*\])?\s*=\s*/gi;
+  let sp;
+  while ((sp = SPINDLE_RE.exec(body)) !== null) {
+    let end = sp.index + sp[0].length;
+    const mode = /^(DC|ACP|ACN|AC|IC)\s*\(/i.exec(body.slice(end));
+    if (mode) end += mode[0].length - 1;
+    if (body[end] === '(') {
+      const close = closing(body, end);
+      end = close < 0 ? body.length : close + 1;
+    } else {
+      while (end < body.length && !/\s/.test(body[end])) end++;
+    }
+    extra.spindle = extra.spindle || {};
+    const text = body.slice(sp.index + sp[0].length, end);
+    extra.spindle[sp[1].toUpperCase()] = mode ? text.slice(mode[0].length - 1) : text;
+    body = `${body.slice(0, sp.index)} ${body.slice(end)}`;
+    SPINDLE_RE.lastIndex = sp.index;
+  }
   // C=DC(90): the value in brackets, with how the axis is to get there.
   let m;
   VALUE_MODE_RE.lastIndex = 0;
