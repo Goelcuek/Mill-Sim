@@ -496,10 +496,19 @@ export function interpret(text, config = {}) {
   /** Control words already remarked on, so each is mentioned once. */
   const spokenFor = new Set();
 
+  /** The same note on the same line of the same file, said once and counted. */
+  const said = new Map();
   const warn = (line, message, severity = 'warning') => {
+    const key = `${curSrc || ''}\u0000${line}\u0000${message}`;
+    const again = said.get(key);
+    if (again) {
+      again.count = (again.count || 1) + 1;
+      return;
+    }
     if (warnings.length >= 500) return;
     const w = { line, message, severity };
     if (curSrc) w.source = curSrc;
+    said.set(key, w);
     warnings.push(w);
   };
 

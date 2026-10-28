@@ -2262,6 +2262,9 @@ export class App {
       const at = blockAt(program.blockLog, b);
       if (at) return at;
     }
+    // Nothing run yet: the machine is at the top of the program, not
+    // inside the M6 macro its first move happens to belong to.
+    if (!(this.simulator.time > 0)) return null;
     const mv = program.moves[this.simulator.moveIndex];
     return mv ? { line: mv.line, source: mv.source || null } : null;
   }
@@ -2404,7 +2407,13 @@ export class App {
     if (this.panels && this.panels.program) this.panels.program.vars.syncPins();
   }
 
-  seekToLine(line, time) {
+  /**
+   * @param {number} line
+   * @param {number} [time]
+   * @param {string|null} [source] the file the line is counted in — null for
+   *   the main program. A subprogram's line 3 is not the program's line 3.
+   */
+  seekToLine(line, time, source = null) {
     if (!this.state.program) return;
     if (time !== undefined && time !== null) {
       this.seekTo(time);
@@ -2412,7 +2421,7 @@ export class App {
     }
     let acc = 0;
     for (const mv of this.state.program.moves) {
-      if (mv.line >= line) break;
+      if ((mv.source || null) === (source || null) && mv.line >= line) break;
       acc += mv.time;
     }
     this.seekTo(acc);

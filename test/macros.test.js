@@ -280,3 +280,13 @@ test('M06 for the tool already in the spindle does nothing: no macro, no tool ch
   const again = p.moves.find((m) => m.line === 5);
   assert.ok(!again.toolChange);
 });
+
+test('a note raised each time a macro runs is said once, with a count, under the macro', () => {
+  const p = run(['G90 G21 G54', 'T1 M06', 'T2 M06', 'T3 M06', 'M30'], {
+    macros: [macro('M6', 'G0 Z100 ZZTOP')],
+  });
+  const notes = p.warnings.filter((w) => /ZZTOP/.test(w.message));
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].count, 3);
+  assert.equal(notes[0].source, 'M6 macro');
+});

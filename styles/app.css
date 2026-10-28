@@ -865,6 +865,9 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .issues li.issue-error { border-left-color: var(--danger); background: var(--danger-soft); }
 .issues li.issue-warning { border-left-color: var(--warn); background: var(--warn-soft); }
 .issue-line { font-family: var(--mono); color: var(--text-3); margin-right: 6px; }
+.issue-count { font-family: var(--mono); color: var(--text-3); }
+.issue-file { margin: 10px 0 4px; font-size: 12px; color: var(--text-2); }
+.issue-file:first-child { margin-top: 0; }
 
 /* Program › Variables. One row a variable: pin, name, value, where set. */
 .vars-host { padding: 12px 14px 16px; }

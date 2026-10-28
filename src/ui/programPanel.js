@@ -48,6 +48,9 @@ export function runningFile(app) {
 function textOf(app, showing) {
   if (showing.kind === 'main') return app.state.source || '';
   if (showing.sub) return showing.sub.text || '';
+  // One of the machine's own subprograms: L_M54 lives in the control.
+  const own = (app.state.machine.subprograms || []).find((x) => x.name === showing.name);
+  if (own) return own.text || '';
   const macro = (app.state.machine.macros || []).find((m) => showing.name.startsWith(String(m.code)));
   return macro ? (macro.body || '') : '';
 }
@@ -551,7 +554,7 @@ export class ProgramPanel extends Panel {
       // Path length is quoted the way a shop quotes it: metres, or feet.
       ['Cutting', units.distanceU(s.feedDistance)],
       ['Rapids', units.distanceU(s.rapidDistance)],
-      ['Tools used', program.toolChanges.length ? [...new Set(program.toolChanges.map((t) => `T${t.tool}`))].join(' ') : 'none'],
+      ['Tools used', program.toolChanges.length ? [...new Set(program.toolChanges.map((t) => (typeof t.tool === 'string' ? `T="${t.tool}"` : `T${t.tool}`)))].join(' ') : 'none'],
     ].map(([k, v]) => el('div.stat', {}, [el('div.stat-label', {}, k), el('div.stat-value', {}, v)])));
 
     const extents = el('table.extents', {}, [
@@ -604,16 +607,44 @@ export class ProgramPanel extends Panel {
     const errors = program.warnings.filter((w) => w.severity === 'error');
     const warns = program.warnings.filter((w) => w.severity !== 'error');
     if (program.warnings.length) {
-      this.summaryHost.appendChild(section(`Interpreter notes (${errors.length} error${errors.length === 1 ? '' : 's'}, ${warns.length} warning${warns.length === 1 ? '' : 's'})`, [
-        el('ul.issues', {}, program.warnings.slice(0, 120).map((w) => el(`li.issue-${w.severity}`, {
-          onclick: () => {
-            this.app.seekToLine(w.line);
-            this.app.setPage('program', 'editor');
-            if (this.editor) this.editor.focusLine(w.line);
-          },
-          title: 'Jump to this line',
-        }, [el('span.issue-line', {}, `L${w.line}`), w.message]))),
-      ]));
+      // Each file's notes under its own name. A note from the M6 macro or
+      // a subprogram counts its lines in that file, and listed among the
+      // program's own it read as a mistake on a line that has none.
+      const files = new Map([[null, []]]);
+      for (const w of program.warnings) {
+        const src = w.source || null;
+        if (!files.has(src)) files.set(src, []);
+        files.get(src).push(w);
+      }
+      const item = (w) => el(`li.issue-${w.severity}`, {
+        onclick: () => {
+          // To the line, in its file: the editor shows whichever file the
+          // run is in, so going there in the run is what opens it.
+          this.app.seekToLine(w.line, null, w.source || null);
+          this.app.setPage('program', 'editor');
+          if (this.editor) this.editor.focusLine(w.line);
+        },
+        title: 'Jump to this line',
+      }, [
+        el('span.issue-line', {}, `L${w.line}`),
+        w.message,
+        w.count > 1 ? el('span.issue-count', { title: 'Said each time the line ran' }, ` ×${w.count}`) : null,
+      ]);
+      const body = [];
+      for (const [src, list] of files) {
+        if (!list.length) continue;
+        if (files.size > 1) {
+          const own = src === null ? app.state.programName || 'Main program' : src;
+          const what = src === null ? 'the program' : / macro$/.test(src) ? 'machine macro' : 'subprogram';
+          const errs = list.filter((w) => w.severity === 'error').length;
+          body.push(el('div.issue-file', {}, [
+            el('b', {}, own),
+            ` — ${what}: ${errs} error${errs === 1 ? '' : 's'}, ${list.length - errs} warning${list.length - errs === 1 ? '' : 's'}`,
+          ]));
+        }
+        body.push(el('ul.issues', {}, list.slice(0, 120).map(item)));
+      }
+      this.summaryHost.appendChild(section(`Interpreter notes (${errors.length} error${errors.length === 1 ? '' : 's'}, ${warns.length} warning${warns.length === 1 ? '' : 's'})`, body));
     }
   }
 }
