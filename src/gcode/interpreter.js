@@ -591,13 +591,33 @@ export function interpret(text, config = {}) {
    */
   const turnFor = (move) => {
     const kin = cfg.kinematics;
-    const off = cfg.wcsRotary && cfg.wcsRotary[move.wcs];
-    if (!move.tcp || !kin || !off || typeof kin.solve !== 'function') return null;
-    const letters = Object.keys(off).filter((L) => Number(off[L]));
-    if (!letters.length) return null;
+    if (!move.tcp || !kin || typeof kin.solve !== 'function') return null;
+    // What the points are counted against. In a CYCLE800 plane without
+    // TRAORI, the angles the cycle swung to: the plane was made then, and a
+    // rotary turned on its own afterwards turns the part under it and not
+    // the plane. Under TRAORI, the rotaries as programmed — the work
+    // offset's turn of them left out.
+    let reference;
+    if (move.swivelRot) {
+      const frozen = move.swivelRot;
+      reference = (rot) => ({ ...rot, ...frozen });
+    } else {
+      const off = cfg.wcsRotary && cfg.wcsRotary[move.wcs];
+      const letters = off ? Object.keys(off).filter((L) => Number(off[L])) : [];
+      if (!letters.length) return null;
+      reference = (rot) => {
+        const r = { ...rot };
+        for (const L of letters) r[L] = (Number(r[L]) || 0) - Number(off[L]);
+        return r;
+      };
+    }
+    const differs = (rot) => {
+      const r = reference(rot);
+      return Object.keys({ ...rot, ...r }).some((L) => Math.abs((Number(rot[L]) || 0) - (Number(r[L]) || 0)) > 1e-12);
+    };
+    if (!differs(move.rotFrom || {}) && !differs(move.rotTo || {})) return null;
     const at = (rot, programmed) => {
-      const values = { ...rot, X: 0, Y: 0, Z: 0 };
-      if (programmed) for (const L of letters) values[L] = (Number(values[L]) || 0) - Number(off[L]);
+      const values = { ...(programmed ? reference(rot) : rot), X: 0, Y: 0, Z: 0 };
       kin.solve(values);
       return m4.copy(m4.create(), kin.matrixOf(kin.workNode));
     };
@@ -629,6 +649,7 @@ export function interpret(text, config = {}) {
   const push = (move) => {
     move.i = moves.length;
     if (curSrc) move.source = curSrc;
+    if (move.tcp && !st.tcp && st.swivel && st.swivelRot) move.swivelRot = st.swivelRot;
     const turn = turnFor(move);
     if (turn) {
       move.from = turn(move.from, 0);
@@ -722,16 +743,22 @@ export function interpret(text, config = {}) {
    */
   const setTcpMode = (change) => {
     const before = tcpNow();
+    const frozenBefore = !st.tcp && st.swivel ? st.swivelRot : null;
     change();
     const after = tcpNow();
+    const frozenAfter = !st.tcp && st.swivel ? st.swivelRot : null;
     const kin = cfg.kinematics;
     if (!!before === !!after || !kin || typeof kin.linearsForTip !== 'function') return;
-    if (!turning.some((L) => Math.abs((st.rot[L] || 0) - rotaryOffset(L)) > 1e-9)) return;
     const g = cfg.gaugeLength || 0;
     // Under TCP a point is counted with the rotaries at their programmed
     // angles — the work offset's turn of them left out; see turnFor.
     const rot = {};
     for (const L of turning) rot[L] = (st.rot[L] || 0) - rotaryOffset(L);
+    // In a CYCLE800 plane the point is counted at the angles the cycle
+    // swung to, whatever a rotary has done since; see turnFor.
+    const frozen = after ? frozenAfter : frozenBefore;
+    if (frozen) for (const L of turning) if (frozen[L] !== undefined) rot[L] = frozen[L];
+    if (!turning.some((L) => Math.abs(rot[L]) > 1e-9)) return;
     const zero = {};
     for (const L of turning) zero[L] = 0;
     const axes = after
@@ -2653,6 +2680,10 @@ export function interpret(text, config = {}) {
     st.tilt = plane;
     updateXf();
     const swivelOn = () => {
+      // The angles the plane is made at; a rotary turned on its own later
+      // turns the part under the plane, not the plane.
+      st.swivelRot = {};
+      for (const L of turning) st.swivelRot[L] = st.rot[L] || 0;
       setTcpMode(() => { st.swivel = true; st.tcp = tcpWas; });
       updateXf();
     };

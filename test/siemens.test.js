@@ -401,3 +401,32 @@ test('the program sets its own work offsets: $P_UIFR copies and components, G505
   const lin = (m) => kin.linearsForTip(m.to, m.rotTo, 0);
   assert.ok(Math.abs(lin(cuts[2]).X - lin(cuts[0]).X - 1) < 1e-6, `${lin(cuts[0]).X} → ${lin(cuts[2]).X}`);
 });
+
+test('in a CYCLE800 plane a rotary turned on its own turns the part, not the plane', () => {
+  const kin = buildPreset('tableTable');
+  const lines = (extra) => ['G90 G17 G710', 'T1 M6', 'G0 X0 Y0 Z100',
+    'CYCLE800(0,"TC",0,192,0,0,0,-20,90,0,0,0,0,1,0,1)',
+    'G1 X30 Y0 Z10 F500', ...extra, 'G1 X30 Y0 Z10', 'CYCLE800()', 'G0 Z100', 'M30'].join('\n');
+  const machineAt = (p) => {
+    const cut = p.moves.filter((m) => m.kind === 'feed').pop();
+    const lin = kin.linearsForTip(cut.to, cut.rotTo, 0);
+    return { lin, cut };
+  };
+  const still = run(lines([]), { kinematics: kin });
+  const turned = run(lines(['G0 C30']), { kinematics: kin });
+  assert.deepEqual(errors(turned), []);
+  const a = machineAt(still);
+  const b = machineAt(turned);
+  assert.equal(b.cut.rotTo.C, 30);
+  for (const L of ['X', 'Y', 'Z']) near(b.lin[L], a.lin[L], 1e-6, `machine ${L} after C30`);
+  // The point on the part is 60° round from where it was.
+  const angle = (p) => (Math.atan2(p[1], p[0]) * 180) / Math.PI;
+  near(((angle(b.cut.to) - angle(a.cut.to) + 540) % 360) - 180, 60, 1e-6, 'on the part');
+  // And the plane cleared afterwards leaves the tool where it is.
+  const off = turned.moves.filter((m) => m.kind === 'rapid').pop();
+  const before = turned.moves[off.i - 1];
+  const linOff = kin.linearsForTip(off.from, { A: 0, C: 0 }, 0);
+  const linBefore = kin.linearsForTip(before.to, before.rotTo, 0);
+  near(linOff.X, linBefore.X, 1e-6, 'X across CYCLE800()');
+  near(linOff.Y, linBefore.Y, 1e-6, 'Y across CYCLE800()');
+});

@@ -827,7 +827,11 @@ comments, `/` block delete
   already there; `_FR` retracts Z (and X, Y) first; `_DIR 0` turns the
   plane without swinging. The retract and the swing are made with the
   slides, as the cycle does, and inside the swivelled plane the tip is
-  what is programmed. `CYCLE800()` takes the plane away.
+  what is programmed. The plane is made at the angles the cycle swings to:
+  a rotary turned on its own afterwards (`C30` after `CYCLE800(…C90…)`)
+  turns the part under the plane, and the tool still goes where the plane
+  says in the machine — under TRAORI the points ride the part instead.
+  `CYCLE800()` takes the plane away.
 - *Modes* — `TRAORI`/`TRAFOOF` tool centre point on and off, `DIAMOF`
   (`DIAMON` is noted: diameter programming is for turning), and `SUPA`,
   `G153`, `G500`, `G70`/`G71`, the smoothing modes and `CYCLE832` read and
