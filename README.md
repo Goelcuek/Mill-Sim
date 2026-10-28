@@ -758,8 +758,9 @@ comments, `/` block delete
 
 - *Frames* — `TRANS`/`ATRANS` shift the program's zero, `ROT`/`AROT` turn it
   (`ROT X Y Z` is Z, then Y, then X; `RPL=` turns in the working plane).
-  The plain forms replace the frame; with nothing after them they clear it,
-  which is what `ROT` on its own line is for. `SCALE` and `MIRROR` are
+  The plain forms replace the frame. `ROT` on its own zeros the turns —
+  `ROT`'s and `AROT`'s alike — and keeps the shift; `TRANS` on its own
+  clears the frame. `SCALE` and `MIRROR` are
   named and not applied.
 - *Swivel* — `CYCLE800(_FR, _TC, _ST, _MODE, _X0, _Y0, _Z0, _A, _B, _C,
   _X1, _Y1, _Z1, _DIR, …)`: angles axis by axis (`_MODE` gives the order, 57
@@ -789,8 +790,12 @@ comments, `/` block delete
 - *Tools* — `T` comes before `M6`, by number or by name (`T="10 flat"`),
   and `M6` alone changes to it. A name is matched against the assemblies'
   names, with or without their `T1 · ` in front, and their tools' names.
-- *Fixed point* — `G75 FP=1 Z1` sends the axes it names home at rapid,
-  straight there; `G74` the same for the reference point.
+- *Fixed point* — `G75 FP=1 Z1` sends the slides it names home at rapid,
+  straight there, whatever the head or table is turned to and whatever
+  frame is on; `G74` the same for the reference point.
+- *Subprograms by name* — a line that is only a name (`L_M54`, `L100`,
+  with `P3` or `P=3` to repeat) calls the subprogram of that name, from
+  the program's files or the machine's own; `RET` or `M17` comes back.
 - *Axis values with a mode* — `C=DC(90)` the shorter way round,
   `ACP`/`ACN` forwards or backwards to the position, `X=AC(…)`/`X=IC(…)`
   absolute or incremental whatever `G90`/`G91` says.

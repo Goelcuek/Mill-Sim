@@ -102,7 +102,7 @@ export function lex(text, dialect) {
     // the rest is read, and carried on the block for the interpreter.
     let extra = null;
     if (d.siemensWords) {
-      const pre = siemensWords(body);
+      const pre = siemensWords(body, d);
       body = pre.body;
       extra = pre.extra;
     }
@@ -280,7 +280,7 @@ function closing(text, open) {
  *
  * @returns {{body:string, extra:null|{siemens?:object, toolName?:string, axisModes?:object}}}
  */
-export function siemensWords(input) {
+export function siemensWords(input, d = DIALECTS.siemens) {
   let body = input;
   const extra = {};
   // T="FACE MILL 50": a tool chosen by its name rather than a pot number.
@@ -343,6 +343,25 @@ export function siemensWords(input) {
   if (frame) {
     extra.siemens = { op: 'frame', name: frame[1].toUpperCase() };
     body = trimmed.slice(frame[0].length);
+    return { body, extra };
+  }
+  // RET: back to whatever called this subprogram, as M17 does.
+  if (/^RET$/i.test(trimmed)) {
+    extra.siemens = { op: 'ret' };
+    return { body: '', extra };
+  }
+  // A subprogram called by its name and nothing else — L_M54, PART_2,
+  // L100 — perhaps with a count, P3 or P=3. Read letter by letter, L_M54 is
+  // an M54 word and some junk; a name is a name. One that is a macro
+  // keyword (ENDWHILE) or an address with a number (M30) is not one.
+  const bare = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s+P\s*=?\s*(\d+))?$/.exec(trimmed);
+  if (bare) {
+    const name = bare[1].toUpperCase();
+    const address = /^[A-Za-z]\d+$/.test(name) && name[0] !== 'L';
+    if (!address && !hasMacroSyntax(bare[1], d)) {
+      extra.siemens = { op: 'call', name, argsText: '', modal: false, bare: true, count: bare[2] ? Number(bare[2]) : 1 };
+      return { body: '', extra };
+    }
   }
   return { body, extra: Object.keys(extra).length ? extra : null };
 }

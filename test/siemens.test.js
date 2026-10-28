@@ -234,3 +234,34 @@ test('CYCLE800 mode 192: the angles are the rotary positions, _A axis 1 and _B a
   near(z20[0], 20, 1e-9, 'the plane\'s Z is along the tool, now lying along X');
   near(z20[2], 0, 1e-9, 'and level');
 });
+
+test('ROT on its own zeros the turns of ROT and AROT alike, and keeps the shift', () => {
+  const p = run('TRANS X100\nAROT Z90\nG0 X10 Y0 Z5\nROT\nG0 X10 Y0\nM30');
+  assert.deepEqual(errors(p), []);
+  assert.deepEqual(ends(p), [[100, 10, 5], [110, 0, 5]]);
+});
+
+test('A subprogram called by its bare name — L_M54, with a count — and RET to come back', () => {
+  const subs = [{ name: 'L_M54.SPF', text: 'G91 G0 X10\nG90\nRET' }];
+  const p = run('G0 X0 Y0 Z50\nL_M54\nL_M54 P2\nG0 X5\nM30', { subprograms: subs });
+  assert.deepEqual(errors(p), []);
+  assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 10, 20, 30, 5]);
+  const missing = run('G0 X0\nL_NOPE\nM30');
+  assert.ok(errors(missing).some((w) => /no subprogram called L_NOPE/.test(w)), errors(missing).join('\n'));
+});
+
+test('G75 sends the Z slide home even with the head swung over, and leaves X where it is', () => {
+  const kin = buildPreset('headTable');
+  const g = 100;
+  const p = run('G0 X0 Y0 Z50\nCYCLE800(0,"",0,57,0,0,0,0,90,0,0,0,0,-1)\nG0 X0 Y0 Z20\nG75 Z1.0\nCYCLE800()\nM30',
+    { kinematics: kin, machineZero: [0, 0, 250], gaugeLength: g });
+  assert.deepEqual(errors(p), []);
+  const before = p.moves[2];
+  const home = p.moves[3];
+  assert.equal(home.tcp, 0, 'the slides move, not the tip');
+  const was = kin.linearsForTip(before.to, { A: 0, B: 90, C: 0 }, g);
+  const now = kin.linearsForTip(home.to, { A: 0, B: 0, C: 0 }, g);
+  const zHome = kin.linearsForTip([0, 0, 250 - g], {}, g).Z;
+  near(now.X, was.X, 1e-9, 'X slide stays');
+  near(now.Z, zHome, 1e-9, 'Z slide at home');
+});

@@ -1885,16 +1885,25 @@ export function interpret(text, config = {}) {
     if (g75) {
       // Every axis the block names, at rapid, straight to the point — no
       // intermediate point, unlike G28. A rotary named goes to its zero.
+      // It is the slides that go, whatever the head or table is turned to
+      // and whatever frame or TCP is on: so the move is written as a
+      // machine without TCP is told it, where Z home is the spindle face
+      // on machine zero and the tip a gauge length under it.
       const point = fixedPoint === 2 ? cfg.g30 : cfg.machineZero;
-      const drop = gaugeDrop();
+      const g = cfg.gaugeLength || 0;
+      const tcpWas = st.tcp;
+      const swivelWas = st.swivel;
+      setTcpMode(() => { st.tcp = 0; st.swivel = false; });
       const target = st.pos.slice();
-      for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) target[i] = point[i] + drop[i];
+      for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) target[i] = point[i] - (i === 2 ? g : 0);
       const turned = turning.filter((L) => axis[L] !== undefined);
       if (turned.length) {
         st.rotPrev = { ...st.rot };
         for (const L of turned) st.rot[L] = 0;
       }
       emitLinear(b.line, 'rapid', target, cfg.rapidRate);
+      setTcpMode(() => { st.tcp = tcpWas; st.swivel = swivelWas; });
+      if (st.xf) { st.tiltLocal = workToPlane(st.pos); st.tiltLocalPrev = st.tiltLocal; }
       continue;
     }
 
@@ -2115,6 +2124,10 @@ export function interpret(text, config = {}) {
       siemensFrame(b);
       return true;
     }
+    if (sw.op === 'ret') {
+      returnFromCall();
+      return true;
+    }
     if (sw.op !== 'call') return false;
     // Settings the control keeps for the machining that follows — high
     // speed, the message line, the blank's outline for its own graphics —
@@ -2145,9 +2158,13 @@ export function interpret(text, config = {}) {
     const target = namedTarget(name);
     if (target !== undefined) {
       if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); return true; }
-      callStack.push({ ret: pc, remaining: 0, target, scoped: true });
+      callStack.push({ ret: pc, remaining: Math.max(1, sw.count || 1) - 1, target, scoped: true });
       vars.pushScope(name);
       pc = target;
+      return true;
+    }
+    if (sw.bare) {
+      warn(b.line, `There is no subprogram called ${name}: none in this program's files or on the machine (Machine › Macros).`, 'error');
       return true;
     }
     if (!spokenFor.has(name)) {
@@ -2171,11 +2188,21 @@ export function interpret(text, config = {}) {
     const additive = name[0] === 'A';
     const base = name.replace(/^A/, '');
     if (!has) {
-      if (!additive) {
-        if (st.frame) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: `${name}: programmable frame cleared` });
-        st.frame = null;
-        updateXf();
+      if (additive) return;
+      if (base === 'ROT') {
+        // ROT on its own takes the turns away — ROT's and AROT's alike —
+        // and leaves the shift where it was.
+        if (st.frame) {
+          const shift = [st.frame[12], st.frame[13], st.frame[14]];
+          st.frame = shift.some((v) => Math.abs(v) > 1e-12) ? m4.fromTranslation(m4.create(), shift) : null;
+          events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'ROT: rotations cleared' });
+          updateXf();
+        }
+        return;
       }
+      if (st.frame) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: `${name}: programmable frame cleared` });
+      st.frame = null;
+      updateXf();
       return;
     }
     let mat;
