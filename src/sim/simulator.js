@@ -988,7 +988,7 @@ export class Simulator {
     // is placed with the spindle that far across — see turnFrame — as the
     // control does with the tool's offsets, turning or not.
     if (!cutTip && mv && this.activeSlot && this.activeSlot.built.turning) {
-      const f = this.turnFrame(point);
+      const f = this.turnFrame(point, undefined, mv, u);
       if (f) point = [point[0] + f.across[0] * f.axisU, point[1] + f.across[1] * f.axisU, point[2] + f.across[2] * f.axisU];
     }
     const idx = this.indexer;
@@ -1210,7 +1210,7 @@ export class Simulator {
       const zero = k.linearsForTip([0, 0, 0], {}, gauge);
       if (axes && zero) values = { ...rot, X: axes.X - zero.X, Y: axes.Y - zero.Y, Z: axes.Z - zero.Z };
     }
-    const turn = this.turnFrame(point);
+    const turn = this.turnFrame(point, undefined, mv, u);
     return {
       values, axes: axes ? { ...rot, ...axes } : null, gauge, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0,
       // Which way a turning tool faces, into its body, on the part.
@@ -1241,7 +1241,7 @@ export class Simulator {
    * outside tool, inward for an inside one, square to the tool. Null when
    * nothing is turning or the tool is not a turning tool.
    */
-  turnFrame(p, built = this.activeSlot && this.activeSlot.built) {
+  turnFrame(p, built = this.activeSlot && this.activeSlot.built, mv = null, u = 1) {
     const ax = this.turnAxis;
     if (!ax || !built || !built.turning) return null;
     const d = ax.dir;
@@ -1249,13 +1249,47 @@ export class Simulator {
     const z = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
     const q = [w[0] - z * d[0], w[1] - z * d[1], w[2] - z * d[2]];
     const r = Math.hypot(q[0], q[1], q[2]);
-    // The tool does not turn to follow the tip round: the spindle is held
-    // at one angle (SPOS), facing the part from +X. So which way across it
-    // faces is fixed — +X square to the axis — and past the centre it is
-    // the same tool on the other side, not one turned round.
-    const e = this.turnAcross(d);
+    // Which way the tool faces is the spindle's: it is held at one angle
+    // (CYCLE800's turn about Z), whatever the tip is doing and wherever
+    // the part is — so past the centre it is the same tool on the other
+    // side, never one turned round.
+    const e = this.turnAcrossAt(mv, u);
     const s = built.turning.side === 'ID' ? -1 : 1;
     return { r, z, radial: e, across: e.map((v) => v * s), axisU: built.turning.axisU, outline: built.turning };
+  }
+
+  /**
+   * Which way a turning tool's body is, on the part: the spindle's own +X,
+   * turned round the spindle by the move's tool angle, square to the axis
+   * the part spins about. Read off the machine's chain, so it is the
+   * machine's +X however the part frame is set up.
+   */
+  turnAcrossAt(mv, u = 1) {
+    const ax = this.turnAxis;
+    const k = this.kinematics;
+    const d = ax.dir;
+    const rot = mv ? this.rotaryAt(mv, u) : {};
+    const key = `${mv ? mv.toolAngle || 0 : 0}|${Object.entries(rot).map(([L, v]) => `${L}${v}`).join(',')}`;
+    if (this._acrossKey === key && this._acrossFor === k) return this._across;
+    const values = k.lastValues ? { ...k.lastValues } : null;
+    const m = k.toolInWork({ ...rot }, this.gaugeLength).matrix;
+    if (values) k.solve(values);
+    let x = [m[0], m[1], m[2]];
+    const t = (((mv && mv.toolAngle) || 0) * Math.PI) / 180;
+    if (t) {
+      const zt = m4.normalize([m[8], m[9], m[10]]);
+      const c = [zt[1] * x[2] - zt[2] * x[1], zt[2] * x[0] - zt[0] * x[2], zt[0] * x[1] - zt[1] * x[0]];
+      const dot = zt[0] * x[0] + zt[1] * x[1] + zt[2] * x[2];
+      x = x.map((v, i) => v * Math.cos(t) + c[i] * Math.sin(t) + zt[i] * dot * (1 - Math.cos(t)));
+    }
+    const kk = x[0] * d[0] + x[1] * d[1] + x[2] * d[2];
+    let e = [x[0] - kk * d[0], x[1] - kk * d[1], x[2] - kk * d[2]];
+    const l = Math.hypot(e[0], e[1], e[2]);
+    e = l > 1e-9 ? e.map((v) => v / l) : this.turnAcross(d);
+    this._acrossKey = key;
+    this._acrossFor = k;
+    this._across = e;
+    return e;
   }
 
   /** +X, square to the turning axis (+Y if the axis is along X). */
@@ -1286,7 +1320,7 @@ export class Simulator {
     const B = tipAt(to, u1);
     // Signed along the way the tool faces, so a facing cut through the
     // centre goes straight through zero rather than folding back at it.
-    const e = this.turnAcross(ax.dir);
+    const e = this.turnAcrossAt(mv, u0);
     const rzOf = (p) => {
       const d = ax.dir;
       const w = [p[0] - ax.point[0], p[1] - ax.point[1], p[2] - ax.point[2]];
@@ -1333,10 +1367,10 @@ export class Simulator {
    *
    * @returns {null | {depth:number, point:number[]}}
    */
-  turnBarHit(tip, dir, slot) {
+  turnBarHit(tip, dir, slot, mv = null, u = 1) {
     const stock = this.stock;
     const ax = this.turnAxis;
-    const f = this.turnFrame(tip, slot.built);
+    const f = this.turnFrame(tip, slot.built, mv, u);
     if (!stock || !ax || !f) return null;
     const bar = f.outline.bar;
     const a = f.across;
@@ -1415,9 +1449,9 @@ export class Simulator {
    * The turning tool against fixtures turning with the part — the jaws of
    * a chuck: points of the insert and the bar, carried round the axis.
    */
-  turnFixtureHit(tip, dir, slot) {
+  turnFixtureHit(tip, dir, slot, mv = null, u = 1) {
     const ax = this.turnAxis;
-    const f = this.turnFrame(tip, slot.built);
+    const f = this.turnFrame(tip, slot.built, mv, u);
     if (!ax || !f || !this.fixtures || !this.fixtures.length) return null;
     const a = f.across;
     const bar = f.outline.bar;
@@ -1653,7 +1687,7 @@ export class Simulator {
         for (let k = 1; k <= steps && !this.halted; k++) {
           const t = k / steps;
           const tip = [tipA[0] + (tipB[0] - tipA[0]) * t, tipA[1] + (tipB[1] - tipA[1]) * t, tipA[2] + (tipB[2] - tipA[2]) * t];
-          const bar = this.turnBarHit(tip, poseB.dir, slot);
+          const bar = this.turnBarHit(tip, poseB.dir, slot, mv, u1);
           if (bar) {
             this.report('holder', {
               line: mv.line,
@@ -1662,7 +1696,7 @@ export class Simulator {
               depth: bar.depth,
             });
           }
-          const jaw = this.turnFixtureHit(tip, poseB.dir, slot);
+          const jaw = this.turnFixtureHit(tip, poseB.dir, slot, mv, u1);
           if (jaw) {
             this.report('fixture', {
               line: mv.line,
@@ -1681,7 +1715,7 @@ export class Simulator {
       } else {
         // A turning tool moving while the table is still: fine through
         // air, a crash if it meets metal — nothing turns to make it a cut.
-        const f = this.turnFrame(this.poseAt(mv, to, u1, true).tip, slot.built);
+        const f = this.turnFrame(this.poseAt(mv, to, u1, true).tip, slot.built, mv, u1);
         if (f) {
           const tip = this.poseAt(mv, to, u1, true).tip;
           const d = poseB.dir;

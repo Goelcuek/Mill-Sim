@@ -128,3 +128,33 @@ test('past the centre the turning tool does not turn round: it faces +X wherever
   // And the face is gone all the way across, centre included.
   assert.deepEqual(stock.stretchesAt(2, [0.125, 0.125, -10]).map((r) => r.map((v) => +v.toFixed(2))), [[-40, -1]]);
 });
+
+test('the turning tool faces the way CYCLE800 turns it round the spindle, on any machine, and C does not swing for it', () => {
+  // A and C inverted, as on the shop's trunnion.
+  const inverted = () => { const k = buildPreset('tableTable'); for (const n of k.rotaries()) n.invert = true; return k; };
+  const run = (zTurn, lines) => {
+    const kin = inverted();
+    const program = interpret(['T11 M6', 'G18 G90', `CYCLE800(0,"DREHEN",0,57,0,0,0,0,0,${zTurn},0,0,0,1)`, 'DIAMON', 'G96 S150 M3 LIMS=1500', 'G95 F0.25', ...lines, 'M30'].join('\n'), { ...SIEMENS, kinematics: kin });
+    const stock = new TriDexelStock({ origin: [-30, -30, -40], size: [60, 60, 40], resolution: 0.25 });
+    const sim = new Simulator();
+    sim.haltOnCollision = false;
+    const slot = slotOf(od, 0);
+    sim.load({ program, stock, slots: new Map([[11, slot]]), fallbackSlot: slot, kinematics: kin });
+    sim.runAll();
+    return { program, sim, stock };
+  };
+  // 0: its body towards machine +X, either side of the centre.
+  const a = run(0, ['G0 X90 Z5', 'G0 Z-1', 'G1 X-1.6', 'G0 Z5']);
+  const lastA = a.program.moves[a.program.moves.length - 1];
+  assert.deepEqual(a.sim.turnFrame([-0.8, 0, -1], a.sim.activeSlot.built, lastA, 1).across.map((v) => +v.toFixed(9)), [1, 0, 0]);
+  assert.deepEqual(a.sim.turnFrame([20, 0, -1], a.sim.activeSlot.built, lastA, 1).across.map((v) => +v.toFixed(9)), [1, 0, 0]);
+  // 180: the other way round, working on the −X side — and C has not moved.
+  const b = run(180, ['G0 X-90 Z5', 'G0 X-84', 'G1 Z-20', 'G1 X-90', 'G0 Z5']);
+  const lastB = b.program.moves[b.program.moves.length - 1];
+  assert.equal(lastB.toolAngle, 180);
+  assert.ok(b.program.moves.every((m) => !(m.rotTo.C || 0)), 'C stays where it was');
+  assert.deepEqual(b.sim.turnFrame([-42, 0, -5], b.sim.activeSlot.built, lastB, 1).across.map((v) => +v.toFixed(9)), [-1, 0, 0]);
+  assert.deepEqual(b.sim.collisions.map((c) => c.message), []);
+  // Turned all the way round all the same: the corner is gone to r 42.
+  near(b.stock.stretchesAt(0, [0, 29.875, -10.125])[0][1], Math.sqrt(42 * 42 - 29.875 ** 2), 0.05, 'turned from the −X side');
+});

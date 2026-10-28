@@ -78,6 +78,23 @@ function depthAlong(inside, v) {
   return 0;
 }
 
+/** Take column q out of a sorted list of [start, end) runs of columns. */
+function leaveRun(runs, q) {
+  // The run it is in: the last start at or before it.
+  let lo = 0, hi = runs.length / 2 - 1, at = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (runs[2 * mid] <= q) { at = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  if (at < 0) return;
+  const s = runs[2 * at], e = runs[2 * at + 1];
+  if (q >= e) return;
+  if (e - s === 1) runs.splice(2 * at, 2);
+  else if (q === s) runs[2 * at] = s + 1;
+  else if (q === e - 1) runs[2 * at + 1] = e - 1;
+  else runs.splice(2 * at + 1, 0, q, q + 1);
+}
+
 /**
  * The part of a convex [r, z] outline on one side of the axis: r ≥ 0 for
  * side 1, r ≤ 0 for side −1. Still convex, and still [r, z].
@@ -355,6 +372,26 @@ export class TriDexelStock extends Stock {
    */
   fill(F) {
     const init = this.initial;
+    // Up the stock, a line is [0, its column's height] or nothing, read
+    // straight off the column: millions of little lists for that were most
+    // of the memory a fine shaped stock took to make.
+    if (init && F.a === 2) {
+      F.pool = new Float32Array(2 * F.rays + 4096);
+      F.who = new Uint8Array(F.pool.length);
+      for (let r = 0; r < F.rays; r++) {
+        const hgt = init[r] - this.base;
+        F.off[r] = 2 * r;
+        F.cap[r] = 1;
+        F.cnt[r] = hgt > SLIVER ? 1 : 0;
+        F.pool[2 * r] = 0;
+        F.pool[2 * r + 1] = hgt > SLIVER ? hgt : 0;
+      }
+      F.used = 2 * F.rays;
+      F.version++;
+      const o = this.o3;
+      this.markDirty3(o[0], o[1], o[2], o[0] + this.size[0], o[1] + this.size[1], o[2] + this.size[2]);
+      return;
+    }
     const lists = init ? this.shapedRuns(F, init) : null;
     let total = 0;
     for (let r = 0; r < F.rays; r++) total += Math.max(1, lists ? lists[r].length / 2 : 1);
@@ -459,19 +496,53 @@ export class TriDexelStock extends Stock {
     // Along X: a run of columns in one row taller than the line's height.
     // Along Y: the same down a column of the grid. The run ends at the
     // edges of the columns, which is as near as a column says.
-    for (let k = 0; k < F.nc; k++) {
-      const z = (k + 0.5) * dz;
-      for (let m = 0; m < F.nb; m++) {
-        const runs = [];
-        let start = -1;
-        const n = F.a === 0 ? nx : ny;
-        const step = F.a === 0 ? this.dx : this.dy;
-        for (let q = 0; q <= n; q++) {
-          const inside = q < n && (F.a === 0 ? init[m * nx + q] : init[q * nx + m]) - base > z;
-          if (inside && start < 0) start = q;
-          if (!inside && start >= 0) { runs.push(start * step, q * step); start = -1; }
+    //
+    // Going up a row's lines, columns only ever drop out — each at the
+    // line its height ends below — so the runs are made once at the bottom
+    // and only changed where a column leaves: a block or a bar changes
+    // once, and every line until then shares the same list. Asking every
+    // line about every column was the grid cubed: a minute and more at
+    // the fine end, with the page frozen.
+    const n = F.a === 0 ? nx : ny;
+    const step = F.a === 0 ? this.dx : this.dy;
+    const nc = F.nc;
+    const drop = new Int32Array(n);
+    const bucketStart = new Int32Array(nc + 2);
+    const bucket = new Int32Array(n);
+    for (let m = 0; m < F.nb; m++) {
+      // How many of this row's lines each column reaches.
+      bucketStart.fill(0);
+      for (let q = 0; q < n; q++) {
+        const hh = (F.a === 0 ? init[m * nx + q] : init[q * nx + m]) - base;
+        const d = hh > SLIVER ? Math.min(nc, Math.max(0, Math.ceil(hh / dz - 0.5))) : 0;
+        drop[q] = d;
+        bucketStart[d + 1]++;
+      }
+      for (let d = 0; d <= nc; d++) bucketStart[d + 1] += bucketStart[d];
+      const fillAt = bucketStart.slice();
+      for (let q = 0; q < n; q++) bucket[fillAt[drop[q]]++] = q;
+      // The runs at the bottom line, as column numbers [start, end).
+      const runs = [];
+      let start = -1;
+      for (let q = 0; q <= n; q++) {
+        const inside = q < n && drop[q] > 0;
+        if (inside && start < 0) start = q;
+        if (!inside && start >= 0) { runs.push(start, q); start = -1; }
+      }
+      let shared = null;
+      for (let k = 0; k < nc; k++) {
+        // The columns that end below this line leave it.
+        let changed = false;
+        for (let b = bucketStart[k]; b < bucketStart[k + 1]; b++) {
+          if (k === 0) break;
+          leaveRun(runs, bucket[b]);
+          changed = true;
         }
-        out[k * F.nb + m] = runs;
+        if (k === 0 || changed || !shared) {
+          shared = new Array(runs.length);
+          for (let t = 0; t < runs.length; t++) shared[t] = runs[t] * step;
+        }
+        out[k * F.nb + m] = shared;
       }
     }
     return out;

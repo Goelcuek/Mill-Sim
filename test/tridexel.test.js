@@ -334,3 +334,34 @@ test('a body lying flat is not a chain of spheres bulging back past its own face
   const up = td.probeChain(chain, [0, 0, -40], [0, 0, -1]);
   assert.equal(up, null);
 });
+
+test('a shaped stock: every X and Y line is the runs of columns taller than it, however uneven they are', () => {
+  // Heights that go up and down along every row and column, with holes.
+  const column = (x, y) => {
+    const h = -12 + 6 * Math.sin(x * 0.7) + 5 * Math.cos(y * 0.45) + 3 * Math.sin((x + y) * 1.3);
+    return h < -19 ? null : Math.min(h, 0);
+  };
+  const td = new TriDexelStock({ origin: [-10, -8, -20], size: [20, 16, 20], resolution: 0.5, column });
+  const tops = td.initial;
+  for (const a of [0, 1]) {
+    const F = td.fam[a];
+    for (let k = 0; k < F.nc; k += 3) {
+      const z = td.base + (k + 0.5) * td.d3[2];
+      for (let m = 0; m < F.nb; m++) {
+        // What it should be: straight from the column heights.
+        const n = a === 0 ? td.nx : td.ny;
+        const step = a === 0 ? td.dx : td.dy;
+        const want = [];
+        let s = -1;
+        for (let q = 0; q <= n; q++) {
+          const inside = q < n && (a === 0 ? tops[m * td.nx + q] : tops[q * td.nx + m]) > z;
+          if (inside && s < 0) s = q;
+          if (!inside && s >= 0) { want.push(s * step, q * step); s = -1; }
+        }
+        const r = k * F.nb + m;
+        const got = Array.from(F.pool.subarray(F.off[r], F.off[r] + 2 * F.cnt[r]));
+        assert.deepEqual(got.map((v) => +v.toFixed(4)), want.map((v) => +v.toFixed(4)), `family ${a}, line ${k}/${m}`);
+      }
+    }
+  }
+});

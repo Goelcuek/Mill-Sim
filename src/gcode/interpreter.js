@@ -223,6 +223,8 @@ class State {
      * milling spindle.
      */
     this.turning = false;
+    /** CYCLE800's turn about Z while turning: the tool round the spindle, degrees. */
+    this.turnToolAngle = 0;
     /** G96: S is a cutting speed, m/min, and the spindle follows the diameter. */
     this.cssOn = false;
     this.css = 0;
@@ -694,6 +696,7 @@ export function interpret(text, config = {}) {
     // outline turned round the table's axis.
     if (st.turning) {
       move.turning = true;
+      move.toolAngle = st.turnToolAngle || 0;
       if (st.cssOn) move.css = st.css;
       if (st.diameter) move.diameter = true;
     }
@@ -2951,6 +2954,7 @@ export function interpret(text, config = {}) {
       m4.multiply(rot, rot, m4.fromRotation(m4.create(), a, deg2rad(deg)));
     };
     let direct = null;
+    let toolAngle = 0;
     if (kind === 0 || kind === 2) {
       if (kind === 2 && !spokenFor.has('CYCLE800 projection')) {
         spokenFor.add('CYCLE800 projection');
@@ -2958,10 +2962,17 @@ export function interpret(text, config = {}) {
       }
       const order = [mode & 3, (mode >> 2) & 3, (mode >> 4) & 3];
       if (!order.some(Boolean)) order.splice(0, 3, 1, 2, 3);
-      order.forEach((ax, k) => turn(ax, angles[k]));
+      // Turning: the turn about Z is the tool's, round the spindle — which
+      // way the insert faces — and not the plane's: the table is spinning,
+      // there is no angle of it to set.
+      order.forEach((ax, k) => {
+        if (drehen && ax === 3) toolAngle = angles[k];
+        else turn(ax, angles[k]);
+      });
     } else if (kind === 1) {
       // A solid angle: round Z in the plane, then tipped about the new Y.
-      turn(3, angles[0]);
+      if (drehen) toolAngle = angles[0];
+      else turn(3, angles[0]);
       turn(2, angles[1]);
     } else {
       // The rotary positions themselves, in the order the machine has them.
@@ -3005,6 +3016,10 @@ export function interpret(text, config = {}) {
       }
     }
     st.tilt = plane;
+    st.turnToolAngle = drehen ? toolAngle : 0;
+    if (drehen) {
+      events.push({ line, type: 'turning', moveIndex: moves.length, text: `Turning tool at ${+toolAngle.toFixed(3)}° round the spindle (0°: its body towards machine +X)` });
+    }
     updateXf();
     const swivelOn = () => {
       // The angles the plane is made at; a rotary turned on its own later
