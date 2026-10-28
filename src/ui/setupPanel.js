@@ -29,7 +29,7 @@ export class SetupPanel extends Panel {
     this.gizmoMode = 'translate';
     /** Which handles the block gets: Move or Turn. */
     this.stockGizmoMode = 'translate';
-    this.importOpts = { units: 'mm', role: 'fixture', recentre: true };
+    this.importOpts = { units: 'mm', role: 'fixture', recentre: false };
     // A fixture that has been moved is in a different place, and the crash
     // model has to hear about it: dragging a clamp into the tool's path and
     // being told nothing is the one thing this page must not do.
@@ -481,15 +481,7 @@ export class SetupPanel extends Panel {
       app.models.setTransform(m, { position: p });
       app.refreshFixtures();
     };
-    // The angle as typed: each about the machine's own axis, applied X
-    // then Y then Z, round the model's origin.
-    const setRot = (i, deg) => {
-      const r = [o.rotation.x, o.rotation.y, o.rotation.z];
-      r[i] = ((deg || 0) * Math.PI) / 180;
-      app.models.setTransform(m, { rotation: r });
-      app.refreshFixtures();
-      this.refresh();
-    };
+    // A turn about the machine's X, Y or Z, through the model's origin.
     const turn = (i, sign) => {
       app.models.turnAbout(m, i, sign * (this.turnStep || 90));
       app.refreshFixtures();
@@ -511,22 +503,24 @@ export class SetupPanel extends Panel {
           this.refresh();
         },
       }, label))),
+      el('div.place-label', {}, 'Origin'),
       row(AXES.map((a, i) => field(a, Number(o.position.toArray()[i].toFixed(3)), {
         step: 1, unit: 'mm', onChange: (v) => setPos(i, v),
       }))),
-      row(['RX', 'RY', 'RZ'].map((a, i) => field(a, Number((([o.rotation.x, o.rotation.y, o.rotation.z][i] * 180) / Math.PI).toFixed(2)), {
-        step: 15, unit: '°', onChange: (v) => setRot(i, v),
-      }))),
-      el('div.turn-row', {}, [
-        field('Turn by', this.turnStep || 90, {
+      el('div.place-label', {}, 'Rotate about the origin'),
+      el('div.turn-grid', {}, [
+        field('Angle', this.turnStep || 90, {
           min: 0, step: 15, unit: '°',
           onChange: (v) => { this.turnStep = Math.abs(Number(v)) || 90; },
         }),
-        ...['X', 'Y', 'Z'].flatMap((a, i) => [-1, 1].map((sign) => button(`${a}${sign < 0 ? '−' : '+'}`, () => turn(i, sign), {
-          title: `R${a} ${sign < 0 ? '−' : '+'} the step: about the machine's ${a} axis, ${sign < 0 ? 'clockwise' : 'anticlockwise'} seen from its + end, round the model's origin`,
-        }))),
+        ...['X', 'Y', 'Z'].map((a, i) => el('div.turn-axis', {}, [-1, 1].map((sign) => button(`${a} ${sign < 0 ? '−' : '+'}`, () => turn(i, sign), {
+          title: `Turn about the machine's ${a} axis through the model's origin, ${sign < 0 ? 'clockwise' : 'anticlockwise'} seen from the + end of ${a}`,
+        })))),
       ]),
-      el('div.hint', {}, 'The model turns about its origin — the point X, Y and Z give — so turning it never moves it. RX, RY and RZ are turns about the machine\u2019s own axes, applied X first, then Y, then Z, whatever order they were typed in: RX 90 and RZ 45 is laid over about X, then swung 45° about the machine\u2019s Z. The buttons add the step to that angle.'),
+      row([button('Reset rotation', () => { app.models.resetTurns(m); app.refreshFixtures(); this.refresh(); }, {
+        title: 'Back to the way the file was drawn; the origin stays where it is',
+      })]),
+      el('div.hint', {}, 'Everything is done about the model\u2019s origin — the point X, Y and Z give, drawn as its own small axes. A turn is about the machine\u2019s X, Y or Z through that point: the axis is always the machine\u2019s, however the model is already turned, the origin stays put and the model and its axes turn round it. Moving it moves the origin with it.'),
       row([
         field('Scale', Number(o.scale.x.toFixed(4)), {
           min: 0.001, step: 0.1,

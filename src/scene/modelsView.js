@@ -56,12 +56,27 @@ export class ModelsView {
     });
     this.gizmo.addEventListener('objectChange', () => {
       if (this.selected) this.selected.dirty = true;
+      this.syncMarker();
       viewer.invalidate();
     });
     const helper = this.gizmo.getHelper ? this.gizmo.getHelper() : this.gizmo;
     this.gizmoHelper = helper;
     viewer.scene.add(helper);
     helper.visible = false;
+
+    // The selected model's own axes at its origin; see syncMarker. Drawn
+    // over everything, so an origin inside the part still shows.
+    this.marker = new THREE.AxesHelper(1);
+    this.marker.matrixAutoUpdate = false;
+    this.marker.userData.unbounded = true;
+    this.marker.renderOrder = 999;
+    this.marker.material.depthTest = false;
+    this.marker.material.transparent = true;
+    this.marker.visible = false;
+    viewer.scene.add(this.marker);
+    // The part frame turns with a trunnion while the program runs, and the
+    // model with it; the marker follows on every frame drawn.
+    viewer.onFrame(() => { if (this.marker.visible) this.syncMarker(); });
   }
 
   /**
@@ -135,7 +150,7 @@ export class ModelsView {
       positions: stl.positions,
       role: opts.role || 'fixture',
       units: opts.units || 'mm',
-      recentre: opts.recentre !== false,
+      recentre: !!opts.recentre,
     });
     model.source = { file: file.name, format: stl.format, size: b.size };
     return model;
@@ -150,6 +165,7 @@ export class ModelsView {
       this.gizmo.detach();
       this.gizmoHelper.visible = false;
     }
+    this.syncMarker();
     this.viewer.invalidate();
     this.onChange('select', model);
   }
@@ -166,22 +182,61 @@ export class ModelsView {
   }
 
   /**
-   * Turn a model by a step about one of the machine's axes: the step goes
-   * on that angle, and the model turns about its own origin — the point
-   * its X, Y and Z say — so where it stands does not change.
+   * Turn a model about one of the machine's axes, through its own origin.
+   *
+   * The axis is the machine's X, Y or Z — the same direction whatever the
+   * model has been turned to before — and it runs through the model's
+   * origin, so the origin stays where it is and everything else turns
+   * round it. Turns add up as turns do, one after another; there are no
+   * angles to set, because three angles always end up meaning one turn
+   * about an axis some other turn has tipped over.
    *
    * @param {0|1|2} axis
-   * @param {number} degrees
+   * @param {number} degrees anticlockwise seen from the axis's + end
    */
   turnAbout(model, axis, degrees) {
     if (!degrees) return;
-    const r = model.object.rotation;
-    const k = ['x', 'y', 'z'][axis];
-    const deg = wrapDeg((r[k] * 180) / Math.PI + degrees);
-    r[k] = (deg * Math.PI) / 180;
+    const dir = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
+    const q = new THREE.Quaternion().setFromAxisAngle(dir, (degrees * Math.PI) / 180);
+    const o = model.object;
+    o.quaternion.premultiply(q).normalize();
+    // Quarter turns land on quarter turns, not a hair beside them.
+    const e = o.quaternion;
+    for (const k of ['x', 'y', 'z', 'w']) {
+      const v = e[k];
+      for (const c of [0, 0.5, Math.SQRT1_2, 1]) if (Math.abs(Math.abs(v) - c) < 1e-9) e[k] = Math.sign(v) * c;
+    }
+    o.quaternion.normalize();
     model.dirty = true;
+    this.syncMarker();
     this.viewer.invalidate();
     this.onChange('transform', model);
+  }
+
+  /** Back to the way the file was drawn, the origin where it is. */
+  resetTurns(model) {
+    model.object.quaternion.identity();
+    model.dirty = true;
+    this.syncMarker();
+    this.viewer.invalidate();
+    this.onChange('transform', model);
+  }
+
+  /**
+   * The selected model's origin, drawn as three short axes that turn and
+   * move with it: where everything done to it is done about, and which
+   * way its own X, Y and Z point now.
+   */
+  syncMarker() {
+    const m = this.selected;
+    this.marker.visible = !!m && m.visible;
+    if (!m) return;
+    m.object.updateWorldMatrix(true, false);
+    const bb = m.mesh.geometry.boundingBox;
+    const size = bb ? Math.max(bb.getSize(new THREE.Vector3()).length() * 0.3, 15) : 25;
+    const scale = new THREE.Matrix4().makeScale(size, size, size);
+    this.marker.matrix.copy(m.object.matrixWorld).multiply(scale);
+    this.marker.matrixWorldNeedsUpdate = true;
   }
 
   /**
@@ -200,6 +255,7 @@ export class ModelsView {
     }
     if (scale) model.object.scale.set(scale[0], scale[1], scale[2]);
     model.dirty = true;
+    if (model === this.selected) this.syncMarker();
     this.viewer.invalidate();
     this.onChange('transform', model);
   }

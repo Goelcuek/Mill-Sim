@@ -3085,8 +3085,13 @@ export class App {
       ],
     };
     for (const spec of specs[kind] || []) {
-      const box = boxToTriangles(spec.min, spec.max);
+      // Drawn about its own origin — the middle of its base — and set
+      // down there, so it turns about itself and not about the table's
+      // middle.
+      const at = [(spec.min[0] + spec.max[0]) / 2, (spec.min[1] + spec.max[1]) / 2, spec.min[2]];
+      const box = boxToTriangles(spec.min.map((v, i) => v - at[i]), spec.max.map((v, i) => v - at[i]));
       const model = this.models.add({ name: spec.name, positions: box.positions, role: kind === 'parallels' ? 'fixture' : 'clamp', recentre: false });
+      this.models.setTransform(model, { position: at });
       model.source = { file: 'built-in primitive', format: 'box', size: [spec.max[0] - spec.min[0], spec.max[1] - spec.min[1], spec.max[2] - spec.min[2]] };
     }
     this.notify('Fixture added. Click it in the viewport to put handles on it — drag to move, or the rings to turn it — or type exact coordinates.', 'ok');

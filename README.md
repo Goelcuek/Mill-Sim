@@ -555,12 +555,16 @@ where it should go:
 - **Set by bore centre** takes three points on a bore's wall and puts the
   work origin on its centre: X and Y for a bore along Z, with Z left where
   it was, as a probe would; all three for a bore on a tilted face.
-- A fixture or part **turns about its own origin** — the point its X, Y
-  and Z give — so turning it never moves it. RX, RY and RZ are turns about
-  the machine's own axes, applied X first, then Y, then Z, whatever order
-  they were typed in: RX 90 and RZ 45 is laid over about X, then swung 45°
-  about the machine's Z. The ± buttons add the step to that angle. A
-  project saved before this keeps its parts where they were.
+- A fixture or part is placed by **its own origin**. An imported file
+  keeps the origin it was drawn about and lands with it on X0 Y0 Z0; the
+  built-in vice, parallels and clamp have theirs at the middle of their
+  base. X, Y and Z say where the origin is, and the selected model shows
+  it as a small set of its own axes. **Rotate about the origin** turns it
+  by the angle about the machine's X, Y or Z through that point — always
+  the machine's axis, however the model is already turned — so the origin
+  stays put and the model and its axes turn round it; the turns add up one
+  after another, and **Reset rotation** takes them all away. The rotate
+  handles in the viewport do the same.
 
 Points snap. Everything near the cursor is projected to the screen and the
 closest candidate within a few pixels wins, ranked so a corner beats an edge

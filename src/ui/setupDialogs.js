@@ -25,11 +25,13 @@ const KINDS = [
  * @param {{importFiles:(files:File[]) => Promise<void>, refresh:() => void}} panel
  */
 export function openFixtureDialog(app, panel) {
-  const state = { kind: 'vice', units: 'mm', role: 'fixture', recentre: true, files: [] };
+  // A file's origin is kept: it lands on X0 Y0 Z0 and everything done to
+  // it afterwards is about that point.
+  const state = { kind: 'vice', units: 'mm', role: 'fixture', recentre: false, files: [] };
 
   // Made before the blocks that hold them: a control used before its line
   // is a ReferenceError, and the window never opened.
-  const place = checkbox('Sit it on Z0 and centre it in XY', state.recentre, (v) => { state.recentre = v; sync(); });
+  const place = checkbox('Put its origin at the middle of its base instead of the file\u2019s', state.recentre, (v) => { state.recentre = v; sync(); });
   const placeHint = el('div.hint');
   const kindHint = el('div.hint');
 
@@ -52,12 +54,9 @@ export function openFixtureDialog(app, panel) {
       select('Role', Object.entries(MODEL_ROLES).map(([k, v]) => ({ value: k, label: v.label })),
         state.role, (v) => {
           state.role = v;
-          // A reference part has to sit where the program thinks it sits.
-          // Moving it on the way in is right for a vice, whose place is
-          // wherever you put it, and wrong for the part itself: recentred,
-          // it lines up with nothing and nothing is ever reported against
-          // it.
-          state.recentre = v !== 'reference';
+          // A reference part has to sit where the program thinks it sits,
+          // which is its own origin on the part zero.
+          if (v === 'reference') state.recentre = false;
           sync();
         }),
     ]),
