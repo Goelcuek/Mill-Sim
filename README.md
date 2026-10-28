@@ -563,7 +563,9 @@ where it should go:
   by the angle about the machine's X, Y or Z through that point — always
   the machine's axis, however the model is already turned — so the origin
   stays put and the model and its axes turn round it; the turns add up one
-  after another, and **Reset rotation** takes them all away. The rotate
+  after another, and **Reset rotation** takes them all away. RX, RY and RZ
+  show the turn as angles about the machine's X, Y and Z, applied in that
+  order through the origin, and a typed one is set as typed. The rotate
   handles in the viewport do the same.
 
 Points snap. Everything near the cursor is projected to the screen and the

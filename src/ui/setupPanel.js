@@ -481,6 +481,15 @@ export class SetupPanel extends Panel {
       app.models.setTransform(m, { position: p });
       app.refreshFixtures();
     };
+    // The turn as three angles about the machine's X, Y and Z, applied in
+    // that order through the model's origin; a typed one is set as typed.
+    const setRot = (i, deg) => {
+      const r = [o.rotation.x, o.rotation.y, o.rotation.z];
+      r[i] = ((deg || 0) * Math.PI) / 180;
+      app.models.setTransform(m, { rotation: r });
+      app.refreshFixtures();
+      this.refresh();
+    };
     // A turn about the machine's X, Y or Z, through the model's origin.
     const turn = (i, sign) => {
       app.models.turnAbout(m, i, sign * (this.turnStep || 90));
@@ -508,6 +517,11 @@ export class SetupPanel extends Panel {
         step: 1, unit: 'mm', onChange: (v) => setPos(i, v),
       }))),
       el('div.place-label', {}, 'Rotate about the origin'),
+      row(['RX', 'RY', 'RZ'].map((a, i) => field(a, Number((([o.rotation.x, o.rotation.y, o.rotation.z][i] * 180) / Math.PI).toFixed(3)), {
+        step: 15, unit: '°',
+        title: `About the machine's ${a.slice(1)} axis through the origin; the three are applied X, then Y, then Z`,
+        onChange: (v) => setRot(i, v),
+      }))),
       el('div.turn-grid', {}, [
         field('Angle', this.turnStep || 90, {
           min: 0, step: 15, unit: '°',
@@ -520,7 +534,7 @@ export class SetupPanel extends Panel {
       row([button('Reset rotation', () => { app.models.resetTurns(m); app.refreshFixtures(); this.refresh(); }, {
         title: 'Back to the way the file was drawn; the origin stays where it is',
       })]),
-      el('div.hint', {}, 'Everything is done about the model\u2019s origin — the point X, Y and Z give, drawn as its own small axes. A turn is about the machine\u2019s X, Y or Z through that point: the axis is always the machine\u2019s, however the model is already turned, the origin stays put and the model and its axes turn round it. Moving it moves the origin with it.'),
+      el('div.hint', {}, 'Everything is done about the model\u2019s origin — the point X, Y and Z give, drawn as its own small axes — so turning never moves it. RX, RY and RZ are turns about the machine\u2019s X, Y and Z through the origin, applied in that order: X first, then Y, then Z. The buttons turn it by the angle about the machine\u2019s axis, however it is already turned, and the three boxes then show where it ended up.'),
       row([
         field('Scale', Number(o.scale.x.toFixed(4)), {
           min: 0.001, step: 0.1,
