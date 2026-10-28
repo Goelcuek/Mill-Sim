@@ -774,6 +774,58 @@ wherever that line meets the surface now, so a probe on a raw top reads
 +0.8 before the facing pass and −0.2 after one that went too deep. The
 same measure gives the reading under the pointer.
 
+### Turning on the table (mill-turn)
+
+On a machine whose table is a rotary — C on a trunnion, or a head-table —
+the table can spin the part as a lathe spindle while the tool stands
+still in the milling spindle. A Siemens program switches it with the
+swivel data record called `DREHEN`:
+
+```
+T11 M6
+CYCLE800(1, "DREHEN", 0, 57, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+DIAMON                 ; X is a diameter
+G18
+G96 S180 M3 LIMS=800   ; 180 m/min, the table no faster than 800 rpm
+G95 F0.25              ; mm a revolution, at the rpm the diameter gives
+G0 X76 Z2
+G1 Z-30
+...
+CYCLE800()             ; back to milling
+```
+
+`CYCLE800()`, or one naming another record, ends it. Under G96 the rpm of
+a move is the cutting speed at the diameter it is on, held under `LIMS`;
+G97 makes S an rpm again. `SPOS=` is read and recorded. A C word while
+the table spins is reported and ignored. The readout shows X as a
+diameter and the rpm with its cutting speed.
+
+**Turning tools** — on the Tools page, *Turning insert* (ISO C, D, V, W,
+T, S or round, with nose radius and lead angle κr, outside or inside),
+*Grooving / parting blade* (width, depth, corner radius) and *Threading
+insert* (flank angle). Each is an outline in the plane through the
+part's axis on a bar, its programmed point the imaginary tip where the
+nose's tangents meet. The tool faces the part from +X, as the spindle
+holds it, and past the centre it is the same tool on the other side.
+The bar stands beside the tip; the spindle is placed on the bar's middle,
+so the head is drawn and checked where it is. The starter library has
+T11–T14 (on a library you already have: Tools › Library › *Put the
+built-in tools back*).
+
+**The cut** is the insert's outline swept along each move and turned
+round the table's axis, removed from every line of the stock exactly —
+a turned diameter is round, a chamfer a cone, facing past the centre the
+whole face.
+
+**Checks** — the bar against the part as it spins (the radii it covers
+at each height against metal all the way round), the tool against
+fixtures turning with the part, and the machine's castings, the table
+and the travels as for milling. A milling cutter in the spindle while
+the table turns, and a turning tool meeting metal while it does not, are
+findings of their own. Not yet: tool orientation from CYCLE800's angles
+for turning (the tool is upright, the part's axis along it), cone and
+thread cycles, and nose-radius compensation.
+
 ### What the crash model catches
 
 | Reported as | Meaning |

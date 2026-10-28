@@ -107,17 +107,22 @@ test('a cut remakes only blocks it can reach: the rest are as they were', () => 
     snapshot.push(Array.from(o.positions.subarray(0, 3 * o.vertices)).join(',') + '|' + Array.from(o.index.subarray(0, o.indices)).join(','));
   }
   td.takeDirty3();
+  td.takeDirtyCells();
   td.carveLinear(ball6.cutEnvelope, [-4, -2, -3], [5, 3, -5], [0, 0, 1], 0);
   td.carveLinear(flat6.cutEnvelope, [20, 1, -9], [6, 1, -9], [1, 0, 0], 1);
-  const box = td.takeDirty3();
-  assert.ok(box, 'the cuts say where they were');
+  // The cells the cuts changed, not one box round both.
+  const cells = td.takeDirtyCells();
+  assert.ok(cells.length, 'the cuts say where they were');
   const after = new DexelMesher(td, { block: 8 });
-  const [bx0, by0, bz0, bx1, by1, bz1] = after.blocksFor(box);
+  const marked = new Set();
+  for (const box of cells) {
+    const [bx0, by0, bz0, bx1, by1, bz1] = after.blocksFor(box);
+    for (let z = bz0; z <= bz1; z++) for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) marked.add(after.blockIndex(x, y, z));
+  }
   let remade = 0;
   let same = 0;
   for (let k = 0; k < after.blockCount; k++) {
-    const [bx, by, bz] = after.blockCoords(k);
-    const inside = bx >= bx0 && bx <= bx1 && by >= by0 && by <= by1 && bz >= bz0 && bz <= bz1;
+    const inside = marked.has(k);
     const o = after.buildBlock(k);
     const now = Array.from(o.positions.subarray(0, 3 * o.vertices)).join(',') + '|' + Array.from(o.index.subarray(0, o.indices)).join(',');
     if (inside) { remade++; continue; }

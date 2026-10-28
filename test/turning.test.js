@@ -118,3 +118,13 @@ test('the wrong tool for the mode is said: a milling cutter while the table turn
   const still = turnRun(['T11 M6', 'G90', 'G0 X25 Y0 Z5', 'G1 Z-5 F100', 'M30']);
   assert.ok(still.found.some((f) => /^turning: .* meets the stock while the table is not turning/.test(f)), still.found.join('\n'));
 });
+
+test('past the centre the turning tool does not turn round: it faces +X wherever the tip is', () => {
+  const { sim, stock } = turnRun([...DREHEN, 'G0 X90 Z5', 'G0 Z-1', 'G1 X-1.6', 'G0 Z5', 'M30']);
+  const right = sim.turnFrame([10, 0, -1], sim.activeSlot.built);
+  const left = sim.turnFrame([-0.8, 0, -1], sim.activeSlot.built);
+  assert.deepEqual(left.across.map((v) => +v.toFixed(9)), right.across.map((v) => +v.toFixed(9)));
+  assert.deepEqual(right.across.map((v) => +v.toFixed(9)), [1, 0, 0]);
+  // And the face is gone all the way across, centre included.
+  assert.deepEqual(stock.stretchesAt(2, [0.125, 0.125, -10]).map((r) => r.map((v) => +v.toFixed(2))), [[-40, -1]]);
+});

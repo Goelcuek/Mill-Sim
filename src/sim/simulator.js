@@ -1249,11 +1249,22 @@ export class Simulator {
     const z = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
     const q = [w[0] - z * d[0], w[1] - z * d[1], w[2] - z * d[2]];
     const r = Math.hypot(q[0], q[1], q[2]);
-    // On the axis there is no way out; the last one is kept, and +X to begin.
-    let radial = r > 1e-6 ? [q[0] / r, q[1] / r, q[2] / r] : (this._lastRadial || [1, 0, 0]);
-    if (r > 1e-6) this._lastRadial = radial;
+    // The tool does not turn to follow the tip round: the spindle is held
+    // at one angle (SPOS), facing the part from +X. So which way across it
+    // faces is fixed — +X square to the axis — and past the centre it is
+    // the same tool on the other side, not one turned round.
+    const e = this.turnAcross(d);
     const s = built.turning.side === 'ID' ? -1 : 1;
-    return { r, z, radial, across: radial.map((v) => v * s), axisU: built.turning.axisU, outline: built.turning };
+    return { r, z, radial: e, across: e.map((v) => v * s), axisU: built.turning.axisU, outline: built.turning };
+  }
+
+  /** +X, square to the turning axis (+Y if the axis is along X). */
+  turnAcross(d) {
+    const ref = Math.abs(d[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const k = ref[0] * d[0] + ref[1] * d[1] + ref[2] * d[2];
+    const v = [ref[0] - k * d[0], ref[1] - k * d[1], ref[2] - k * d[2]];
+    const l = Math.hypot(v[0], v[1], v[2]);
+    return [v[0] / l, v[1] / l, v[2] / l];
   }
 
   /**
@@ -1273,10 +1284,9 @@ export class Simulator {
     const tipAt = (p, u) => this.poseAt(mv, p, u, true).tip;
     const A = tipAt(from, u0);
     const B = tipAt(to, u1);
-    const fa = this.turnFrame(A, slot.built);
-    // Signed along one way out, so a facing cut through the centre goes
-    // straight through zero rather than folding back at it.
-    const e = fa.radial;
+    // Signed along the way the tool faces, so a facing cut through the
+    // centre goes straight through zero rather than folding back at it.
+    const e = this.turnAcross(ax.dir);
     const rzOf = (p) => {
       const d = ax.dir;
       const w = [p[0] - ax.point[0], p[1] - ax.point[1], p[2] - ax.point[2]];

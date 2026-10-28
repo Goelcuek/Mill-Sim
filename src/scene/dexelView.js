@@ -25,6 +25,8 @@ const TRI_BUDGET = askedBudget() || (coarsePointer() ? 600000 : 2400000);
  * two instead of the run stuttering to keep it exact.
  */
 const FRAME_BUDGET = 4;
+/** What a frame may take when a batch is large, so the picture catches up. */
+const CATCH_UP_BUDGET = 16;
 /** What a full redraw may take at once; the rest follow on idle frames. */
 const FORCE_BUDGET = 150;
 
@@ -85,9 +87,18 @@ export class DexelSurface {
     this.dev = { mode: false, target: null, tolerance: 0.02, range: 0.5 };
     this.material = this.buildMaterial();
     this.blocks = new Array(this.mesher.blockCount).fill(null);
-    this.dirty = new Uint8Array(this.mesher.blockCount).fill(1);
+    /**
+     * Blocks are remade a batch at a time: `dirty` is the batch being
+     * built, `next` what the cutter has changed since it began. A batch is
+     * built out of sight and put up whole — see sync.
+     */
+    this.dirty = new Uint8Array(this.mesher.blockCount);
+    this.next = new Uint8Array(this.mesher.blockCount).fill(1);
+    this.batchLeft = 0;
+    this.staged = [];
     this.pending = true;
     stock.takeDirty3();
+    if (stock.takeDirtyCells) stock.takeDirtyCells();
     this.sync(false, FORCE_BUDGET);
   }
 
@@ -195,43 +206,101 @@ export class DexelSurface {
   }
 
   /**
-   * Remake the blocks the cutter changed since the last look, for no more
-   * than `budget` milliseconds; whatever is left is still waiting, and
-   * `pending` says so.
+   * Remake the blocks the cutter changed, for no more than `budget`
+   * milliseconds a call; whatever is left is still waiting, and `pending`
+   * says so.
+   *
+   * Blocks change together — a turned cut reaches all the way round — and
+   * putting each up as soon as it was made showed some blocks cut and their
+   * neighbours not, with slits along the seams until the rest caught up.
+   * So the blocks changed by then are a batch, built out of sight over as
+   * many frames as it takes and put up all at once: the picture may trail
+   * the cut, but it is always one moment of it. What changes meanwhile is
+   * the next batch.
    */
   sync(force = false, budget) {
     if (!(budget >= 0)) budget = force ? FORCE_BUDGET : FRAME_BUDGET;
     const m = this.mesher;
     if (force) {
-      this.dirty.fill(1);
+      this.next.fill(1);
       this.stock.takeDirty3();
+      if (this.stock.takeDirtyCells) this.stock.takeDirtyCells();
     } else {
+      // The whole stock when it was reset; otherwise the cells the cuts
+      // since really changed — a turned cut goes all the way round, and a
+      // box round it would be the whole part to remake for a thin shell.
+      const boxes = this.stock.takeDirtyCells ? this.stock.takeDirtyCells() : [];
       const box = this.stock.takeDirty3();
-      if (box) {
-        const [bx0, by0, bz0, bx1, by1, bz1] = m.blocksFor(box);
+      if (box) boxes.push(box);
+      for (const bx3 of boxes) {
+        const [bx0, by0, bz0, bx1, by1, bz1] = m.blocksFor(bx3);
         for (let bz = bz0; bz <= bz1; bz++) {
           for (let by = by0; by <= by1; by++) {
-            for (let bx = bx0; bx <= bx1; bx++) this.dirty[m.blockIndex(bx, by, bz)] = 1;
+            for (let bx = bx0; bx <= bx1; bx++) this.next[m.blockIndex(bx, by, bz)] = 1;
           }
         }
       }
     }
+    // A batch done: the next one starts with everything changed since.
+    if (this.batchLeft === 0) {
+      let n = 0;
+      for (let k = 0; k < this.next.length; k++) if (this.next[k]) n++;
+      if (n) {
+        const t = this.dirty;
+        this.dirty = this.next;
+        this.next = t;
+        this.next.fill(0);
+        this.batchLeft = n;
+        this.staged.length = 0;
+      }
+    }
+    // A big batch gets more of each frame, or the picture falls far behind.
+    if (!force && this.batchLeft > 24) budget = Math.max(budget, CATCH_UP_BUDGET);
     const t0 = performance.now();
-    let changed = false;
-    let left = false;
-    for (let k = 0; k < this.dirty.length; k++) {
+    let built = false;
+    for (let k = 0; k < this.dirty.length && this.batchLeft > 0; k++) {
       if (!this.dirty[k]) continue;
-      if (changed && performance.now() - t0 > budget) { left = true; break; }
+      if (built && performance.now() - t0 > budget) break;
       this.dirty[k] = 0;
-      this.buildBlock(k);
+      this.batchLeft--;
+      this.staged.push(this.stageBlock(k));
+      built = true;
+    }
+    let changed = false;
+    if (this.batchLeft === 0 && this.staged.length) {
+      for (const st of this.staged) this.applyBlock(st.k, st);
+      this.staged.length = 0;
       changed = true;
     }
-    this.pending = left;
+    let more = this.batchLeft > 0;
+    if (!more) for (let k = 0; k < this.next.length; k++) if (this.next[k]) { more = true; break; }
+    this.pending = more;
     return changed;
   }
 
-  buildBlock(k) {
+  /** One block meshed and copied out of the mesher's own buffers, to put up later. */
+  stageBlock(k) {
     const out = this.mesher.buildBlock(k);
+    if (!out.indices) return { k, vertices: 0, indices: 0 };
+    const V = out.vertices;
+    const I = out.indices;
+    return {
+      k,
+      vertices: V,
+      indices: I,
+      positions: out.positions.slice(0, 3 * V),
+      normals: out.normals.slice(0, 3 * V),
+      who: out.who.slice(0, V),
+      index: out.index.slice(0, I),
+    };
+  }
+
+  /** Make one block now, as sync would, and put it straight up. */
+  buildBlock(k) {
+    this.applyBlock(k, this.mesher.buildBlock(k));
+  }
+
+  applyBlock(k, out) {
     let mesh = this.blocks[k];
     if (!out.indices) {
       if (mesh) mesh.geometry.setDrawRange(0, 0);
@@ -333,7 +402,7 @@ export class DexelSurface {
     this.uniforms.uDevTol.value = d.tolerance;
     this.uniforms.uDevRange.value = d.range;
     if (d.mode && d.target && (!before.mode || before.target !== d.target || before.cap !== this.devCap() || before.tolerance !== d.tolerance)) {
-      this.dirty.fill(1);
+      this.next.fill(1);
       this.pending = true;
     }
   }

@@ -56,6 +56,8 @@ const REMOVED = [];
 /** How many places a carve may ask the part about exactly. */
 const GOUGE_CANDIDATES = 4;
 const SPAN = [0, 0];
+/** Grid cells a side of the coarse cells changes are tracked in. */
+const COARSE = 8;
 
 const PARALLEL = 0;
 const PERP_FLAT = 1;
@@ -300,6 +302,15 @@ export class TriDexelStock extends Stock {
     this.d3 = [this.dx, this.dy, this.size[2] / nz];
     this.o3 = [this.origin[0], this.origin[1], this.base];
     this.fam = [0, 1, 2].map((a) => this.makeFamily(a));
+    /**
+     * Where the stock changed, cell by coarse cell (COARSE grid cells a
+     * side), for whoever draws it: a box round everything a cut touched is
+     * the whole part for a turned cut, which goes all the way round while
+     * changing only a shell.
+     */
+    this.cn3 = this.n3.map((n) => Math.ceil(n / COARSE));
+    this.cellMarks = new Uint8Array(this.cn3[0] * this.cn3[1] * this.cn3[2]);
+    this.cellList = [];
     /** The reference part along each line, as it is asked for; made when there is one. */
     this.partCache = { target: null, lines: [] };
     this.partLines = null;
@@ -389,6 +400,47 @@ export class TriDexelStock extends Stock {
     const d = this.dirty3 || null;
     this.dirty3 = null;
     return d;
+  }
+
+  /** Mark the coarse cells a removal from line r of family F, [lo, hi] along it, passed through. */
+  markLine(F, r, lo, hi) {
+    const { a, b, c, nb } = F;
+    const i = r % nb;
+    const j = (r - i) / nb;
+    const cn = this.cn3;
+    const ca0 = Math.max(0, Math.floor(lo / this.d3[a] / COARSE));
+    const ca1 = Math.min(cn[a] - 1, Math.floor(hi / this.d3[a] / COARSE));
+    const q = [0, 0, 0];
+    q[b] = (i / COARSE) | 0;
+    q[c] = (j / COARSE) | 0;
+    for (let ca = ca0; ca <= ca1; ca++) {
+      q[a] = ca;
+      const k = (q[2] * cn[1] + q[1]) * cn[0] + q[0];
+      if (!this.cellMarks[k]) {
+        this.cellMarks[k] = 1;
+        this.cellList.push(k);
+      }
+    }
+  }
+
+  /**
+   * The coarse cells changed since last asked, as world boxes, cleared for
+   * next time.
+   * @returns {number[][]} [x0, y0, z0, x1, y1, z1] each
+   */
+  takeDirtyCells() {
+    const cn = this.cn3;
+    const out = [];
+    for (const k of this.cellList) {
+      this.cellMarks[k] = 0;
+      const x = k % cn[0];
+      const y = ((k - x) / cn[0]) % cn[1];
+      const z = (k - x - y * cn[0]) / (cn[0] * cn[1]);
+      const lo = [x, y, z].map((v, a) => this.o3[a] + v * COARSE * this.d3[a]);
+      out.push([lo[0], lo[1], lo[2], lo[0] + COARSE * this.d3[0], lo[1] + COARSE * this.d3[1], lo[2] + COARSE * this.d3[2]]);
+    }
+    this.cellList.length = 0;
+    return out;
   }
 
   /** Stretches of each line inside a shaped stock, from its column heights. */
@@ -484,6 +536,7 @@ export class TriDexelStock extends Stock {
         REMOVED.push(a, e0);
         pool[o + k + 1] = a;
         who[o + k + 1] = flag;
+        this.markLine(F, r, a, e0);
         return removed;
       }
     }
@@ -510,6 +563,7 @@ export class TriDexelStock extends Stock {
       }
     }
     if (removed <= MIN_CUT) return 0;
+    this.markLine(F, r, REMOVED[0], REMOVED[REMOVED.length - 1]);
     let count = m >> 1;
     if (count > MAX_INTERVALS) {
       // More teeth than a line holds: the last ones are merged, which keeps
@@ -1027,12 +1081,6 @@ export class TriDexelStock extends Stock {
     if (ti1 >= 0) {
       F.version++;
       if (a === 2) this.markDirtyRect(ti0, tj0, ti1, tj1);
-      const lo = [0, 0, 0];
-      const hi = [0, 0, 0];
-      lo[a] = oa + Math.max(0, aLo); hi[a] = oa + Math.min(F.len, aHi);
-      lo[b] = ob + ti0 * db; hi[b] = ob + (ti1 + 1) * db;
-      lo[c] = oc + tj0 * dc; hi[c] = oc + (tj1 + 1) * dc;
-      this.markDirty3(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
     }
     return total;
   }
@@ -1272,12 +1320,6 @@ export class TriDexelStock extends Stock {
     if (ti1 >= 0) {
       F.version++;
       if (a === 2) this.markDirtyRect(ti0, tj0, ti1, tj1);
-      const lo3 = [0, 0, 0];
-      const hi3 = [0, 0, 0];
-      lo3[a] = oa + Math.max(0, aLo); hi3[a] = oa + Math.min(F.len, aHi);
-      lo3[b] = ob + ti0 * db; hi3[b] = ob + (ti1 + 1) * db;
-      lo3[c] = oc + tj0 * dc; hi3[c] = oc + (tj1 + 1) * dc;
-      this.markDirty3(lo3[0], lo3[1], lo3[2], hi3[0], hi3[1], hi3[2]);
     }
     return total;
   }
