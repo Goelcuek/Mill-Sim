@@ -14,7 +14,9 @@ import { uid } from '../core/util.js';
 export const MODEL_ROLES = {
   fixture: { label: 'Fixture (collision)', color: 0xd98b4a, collide: true },
   clamp: { label: 'Clamp (collision)', color: 0xd06a62, collide: true },
-  reference: { label: 'Reference part', color: 0x5fb3a1, collide: false },
+  // Not a box like the fixtures: the holder, shank and spindle are checked
+  // against its real shape, and the cutter against it as a gouge.
+  reference: { label: 'Reference part (collision, gouge)', color: 0x5fb3a1, collide: false },
   decor: { label: 'Decoration only', color: 0xa8aeba, collide: false },
 };
 

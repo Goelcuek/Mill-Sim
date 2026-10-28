@@ -134,7 +134,10 @@ export class SetupPanel extends Panel {
         partRow('tool', 'The cutter and its shank', 'The flutes and the shank above them'),
         partRow('holder', 'The holder', 'Collet chuck, shrink fit, shell arbor'),
         partRow('spindle', 'The spindle nose', 'The face of the spindle itself'),
-        el('div.hint', {}, 'Everything checked is checked against the fixtures, the table and the travel limits. Turning one off does not make it safe — it makes this program stop mentioning it.'),
+        checkbox('Holder, shank and spindle against the reference part', c.reference !== false, (v) => app.setChecks({ reference: v }), {
+          title: 'Against its real shape, not a box round it. The cutting edge is the gouge check\u2019s.',
+        }),
+        el('div.hint', {}, 'Everything checked is checked against the fixtures, the table and the travel limits, and — above the flutes — against the reference part\u2019s real shape; the cutter going past the part is a gouge. Turning one off does not make it safe — it makes this program stop mentioning it.'),
       ]),
       section('Exceptions', [
         el('div.hint', {}, ignored || special
@@ -422,7 +425,7 @@ export class SetupPanel extends Panel {
     if (!app.models.models.length) {
       list.appendChild(el('div.empty', {}, [
         el('div.empty-title', {}, 'Nothing clamped yet'),
-        el('div.hint', {}, 'Add a vice, some parallels or a toe clamp, or bring in your own STL. Fixtures are collision-checked against the whole tool assembly; a reference part is the shape the job is meant to produce, and cutting past it is reported as a gouge.'),
+        el('div.hint', {}, 'Add a vice, some parallels or a toe clamp, or bring in your own STL. Fixtures are collision-checked against the whole tool assembly; a reference part is the shape the job is meant to produce: the holder, shank and spindle are checked against it, and the cutter going past it is a gouge.'),
       ]));
     }
     for (const m of app.models.models) {

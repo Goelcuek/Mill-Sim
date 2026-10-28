@@ -62,7 +62,7 @@ export function openFixtureDialog(app, panel) {
         }),
     ]),
     place,
-    el('div.hint', {}, 'STL carries no units, so pick the right one here. Fixtures and clamps are collision-checked against the whole tool assembly; a reference part is not — it is the shape the job should produce, and cutting past it is reported as a gouge.'),
+    el('div.hint', {}, 'STL carries no units, so pick the right one here. Fixtures and clamps are collision-checked against the whole tool assembly. A reference part is the shape the job should produce: the holder, shank and spindle are checked against its real shape, and the cutter going past it is reported as a gouge.'),
     placeHint,
   ]);
 

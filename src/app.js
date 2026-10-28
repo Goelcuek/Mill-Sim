@@ -180,6 +180,8 @@ export class App {
         nearMiss: 0,
         parts: { tool: true, shank: true, holder: true, spindle: true },
         rapidIntoStock: true,
+        /** The holder, shank and spindle against the reference part. */
+        reference: true,
       },
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
