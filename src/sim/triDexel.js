@@ -1120,7 +1120,10 @@ export class TriDexelStock extends Stock {
       const nz = -turn * (r1 - r0);
       const l = Math.hypot(nr, nz);
       if (l < 1e-12) continue;
-      edges.push({ nr: nr / l, nz: nz / l, k: (nr * r0 + nz * z0) / l, r0, z0, r1, z1 });
+      edges.push({
+        nr: nr / l, nz: nz / l, k: (nr * r0 + nz * z0) / l, r0, z0, r1, z1,
+        dr: r1 - r0, dz: z1 - z0, len2: (r1 - r0) ** 2 + (z1 - z0) ** 2,
+      });
     }
     const inside = (r, z) => {
       for (const e of edges) if (e.nr * r + e.nz * z > e.k + 1e-9) return false;
@@ -1175,6 +1178,30 @@ export class TriDexelStock extends Stock {
         if (nearest > rMax * rMax + 1e-9) continue;
         if (square && (z0 < zMin - 1e-9 || z0 > zMax + 1e-9)) continue;
         if (parallel && (Math.sqrt(C2) < rMin - 1e-9)) continue;
+        // Where along the line the outline's band of heights is, against
+        // where the line has metal at all: a line already cut back, or
+        // below the band, has nothing to give.
+        {
+          const o = F.off[r];
+          const first = F.pool[o];
+          const last = F.pool[o + 2 * F.cnt[r] - 1];
+          let tLo = -Infinity, tHi = Infinity;
+          if (!square) {
+            const ta = (zMin - z0) / da;
+            const tb = (zMax - z0) / da;
+            tLo = Math.min(ta, tb);
+            tHi = Math.max(ta, tb);
+          }
+          if (!parallel) {
+            // And where it is within rMax of the axis.
+            const disc = B2 * B2 - 4 * A2 * (C2 - rMax * rMax);
+            if (disc < 0) continue;
+            const sq = Math.sqrt(disc);
+            tLo = Math.max(tLo, (-B2 - sq) / (2 * A2));
+            tHi = Math.min(tHi, (-B2 + sq) / (2 * A2));
+          }
+          if (tHi < first - 1e-6 || tLo > last + 1e-6) continue;
+        }
 
         // Where it crosses each edge's line, kept if on the edge itself.
         ts.length = 0;
@@ -1185,23 +1212,27 @@ export class TriDexelStock extends Stock {
           const qa = e.nr * e.nr * A2 - g1 * g1;
           const qb = e.nr * e.nr * B2 - 2 * g0 * g1;
           const qc = e.nr * e.nr * C2 - g0 * g0;
-          const roots = [];
+          // Its roots, without an array for them: this runs for every edge
+          // of every line in reach.
+          let n2 = 0, t1 = 0, t2 = 0;
           if (Math.abs(qa) < 1e-14) {
-            if (Math.abs(qb) > 1e-14) roots.push(-qc / qb);
+            if (Math.abs(qb) > 1e-14) { t1 = -qc / qb; n2 = 1; }
           } else {
             const disc = qb * qb - 4 * qa * qc;
             if (disc >= 0) {
               const sq = Math.sqrt(disc);
-              roots.push((-qb - sq) / (2 * qa), (-qb + sq) / (2 * qa));
+              t1 = (-qb - sq) / (2 * qa);
+              t2 = (-qb + sq) / (2 * qa);
+              n2 = 2;
             }
           }
-          for (const tt of roots) {
+          for (let q = 0; q < n2; q++) {
+            const tt = q === 0 ? t1 : t2;
             if (!Number.isFinite(tt)) continue;
             const rr = Math.sqrt(Math.max(0, A2 * tt * tt + B2 * tt + C2));
             const zz = z0 + da * tt;
             // On this edge, not on the far side of its line.
-            const len2 = (e.r1 - e.r0) ** 2 + (e.z1 - e.z0) ** 2;
-            const s = len2 > 0 ? ((rr - e.r0) * (e.r1 - e.r0) + (zz - e.z0) * (e.z1 - e.z0)) / len2 : 0;
+            const s = e.len2 > 0 ? ((rr - e.r0) * e.dr + (zz - e.z0) * e.dz) / e.len2 : 0;
             if (s < -1e-6 || s > 1 + 1e-6) continue;
             if (Math.abs(e.nr * rr + e.nz * zz - e.k) > 1e-6 * (1 + Math.abs(e.k))) continue;
             ts.push(tt);

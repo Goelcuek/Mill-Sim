@@ -2733,7 +2733,7 @@ export class App {
         ? this.jogPose()
         : (this.state.program ? sim.currentPose() : this.parkPose());
     const placed = this.machineView.update(pose);
-    this.toolView.setPose(placed.tip, placed.dir);
+    this.toolView.setPose(placed.tip, placed.dir, placed.across);
     this.toolpathView.setProgress(sim.progress);
     if (this.state.display.toolpath && this.state.program) {
       const r = sim.activeSlot ? sim.activeSlot.built.cutRadius : 1;
@@ -3165,7 +3165,9 @@ export class App {
     // Jogging, the readout is where the jogged tip is; otherwise the run.
     const at = this.jog || null;
     const tip = this.travelView ? this.homePose().tip : at ? this.jogPose().tip : sim.pos;
-    set(f.x, units.len(tip[0], 3));
+    // Turning under DIAMON, X reads as the control shows it: a diameter.
+    const runMove = !at && !this.travelView && this.state.program ? this.state.program.moves[sim.moveIndex] : null;
+    set(f.x, runMove && runMove.turning && runMove.diameter ? `Ø${units.len(tip[0] * 2, 3)}` : units.len(tip[0], 3));
     set(f.y, units.len(tip[1], 3));
     set(f.z, units.len(tip[2], 3));
     const mcs = this.machinePosition();
@@ -3191,7 +3193,7 @@ export class App {
     // The feed is shown in what the reader works in, which is not
     // necessarily the F word in the file.
     set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${units.feed(mv.feed, 0)}`) : '');
-    set(f.rpm, mv && mv.rpm ? `S${mv.rpm}` : '');
+    set(f.rpm, mv && mv.rpm ? `S${Math.round(mv.rpm)}${mv.turning ? (mv.css ? ` · ${Math.round(mv.css)} m/min` : '') : ''}` : '');
     set(f.removed, units.volumeU(sim.removedVolume, 2));
     const a = this.analyzer && this.analyzer.view;
     const k = mv ? mv.i : -1;

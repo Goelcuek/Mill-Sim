@@ -695,6 +695,7 @@ export function interpret(text, config = {}) {
     if (st.turning) {
       move.turning = true;
       if (st.cssOn) move.css = st.css;
+      if (st.diameter) move.diameter = true;
     }
     if (curSrc) move.source = curSrc;
     if (move.tcp && !st.tcp && st.swivel && st.swivelRot) move.swivelRot = st.swivelRot;
@@ -2154,10 +2155,6 @@ export function interpret(text, config = {}) {
       st.feed = toMM(f, st.metric) * (dialect.feedScale || 1);
       st.feedRaw = f;
     }
-    if (st.feedMode === 95 && !(st.rpm > 0) && !spokenFor.has('G95')) {
-      spokenFor.add('G95');
-      warn(b.line, 'Feed per revolution (G95) with no spindle speed; F is read as mm/min for the times.');
-    }
     if (s !== undefined) {
       if (st.cssOn) {
         st.css = s;
@@ -2166,6 +2163,10 @@ export function interpret(text, config = {}) {
           warn(b.line, 'G96 constant cutting speed outside turning mode: S is read as m/min, and there is no diameter for it to follow, so the spindle speed is left as it was.');
         }
       } else st.rpm = s;
+    }
+    if (st.feedMode === 95 && !(st.rpm > 0) && !(st.turning && st.cssOn && st.css > 0) && !spokenFor.has('G95')) {
+      spokenFor.add('G95');
+      warn(b.line, 'Feed per revolution (G95) with no spindle speed; F is read as mm/min for the times.');
     }
     if (t !== undefined) st.pendingTool = t;
 

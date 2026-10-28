@@ -67,3 +67,54 @@ test('a sloped outline — a chamfer — leaves a cone', () => {
     near(across[0][1], Math.sqrt((40 + z) ** 2 - 0.125 ** 2), 0.01, `radius at Z${z}`);
   }
 });
+
+import { interpret } from '../src/gcode/interpreter.js';
+import { buildPreset } from '../src/machine/presets.js';
+import { Simulator } from '../src/sim/simulator.js';
+import { silhouetteSpheres } from '../src/sim/collision.js';
+import { buildAssembly } from '../src/tools/assembly.js';
+import { makeTool, defaultTools } from '../src/tools/toolDefs.js';
+
+const SIEMENS = { controller: { flavour: 'siemens', dialect: 'siemens' } };
+const slotOf = (tool, index) => {
+  const built = buildAssembly({ stickout: tool.overallLength || 60 }, tool, null, { spindleDiameter: 90, spindleLength: 80 });
+  return { built, index, spheres: silhouetteSpheres(built.toolPoints) };
+};
+const od = defaultTools().find((t) => t.id === 'tool_turn_od');
+const flat = makeTool({ type: 'flat', diameter: 10, fluteLength: 30, overallLength: 75 });
+// A trunnion, the part a 60 × 60 block on the middle of the table, top at Z0.
+const turnRun = (lines, slots = { 11: slotOf(od, 0), 2: slotOf(flat, 1) }) => {
+  const kin = buildPreset('tableTable');
+  const program = interpret(lines.join('\n'), { ...SIEMENS, kinematics: kin });
+  const stock = new TriDexelStock({ origin: [-30, -30, -40], size: [60, 60, 40], resolution: 0.25 });
+  const sim = new Simulator();
+  sim.haltOnCollision = false;
+  const map = new Map(Object.entries(slots).map(([k, v]) => [Number(k), v]));
+  sim.load({ program, stock, slots: map, fallbackSlot: map.get(11), kinematics: kin });
+  sim.runAll();
+  return { program, stock, sim, found: sim.collisions.map((c) => `${c.type}: ${c.message}`) };
+};
+const DREHEN = ['T11 M6', 'G18 G90', 'CYCLE800(0,"DREHEN",0,57,0,0,0,0,0,0,0,0,0,1)', 'DIAMON', 'G96 S150 M3 LIMS=1500', 'G95 F0.25'];
+
+test('turning the corners off a block: round to Ø84 down to Z-20, nothing in the way', () => {
+  const { stock, found, program } = turnRun([...DREHEN, 'G0 X100 Z5', 'G0 X84', 'G1 Z-20', 'G1 X100', 'G0 Z5', 'M30']);
+  assert.deepEqual(program.warnings.filter((w) => w.severity === 'error').map((w) => w.message), []);
+  assert.deepEqual(found, []);
+  // A line near the block's edge, Y29.875: the corner is gone to r 42.
+  const row = stock.stretchesAt(0, [0, 29.875, -10.125]);
+  near(row[0][1], Math.sqrt(42 * 42 - 29.875 ** 2), 0.05, 'turned to r42 at the corner');
+  // Below Z-20 the block is square still.
+  near(stock.stretchesAt(0, [0, 29.875, -25.125])[0][1], 30, 1e-3, 'untouched below');
+});
+
+test('turning too deep for the bar: the bar runs into the spinning corners', () => {
+  const { found } = turnRun([...DREHEN, 'G0 X100 Z5', 'G0 X50', 'G1 Z-10', 'G1 X100', 'G0 Z5', 'M30']);
+  assert.ok(found.some((f) => /^holder: The turning bar of OD turning C80 R0.8 runs [\d.]+ mm into the spinning part/.test(f)), found.join('\n'));
+});
+
+test('the wrong tool for the mode is said: a milling cutter while the table turns, a turning tool while it does not', () => {
+  const milling = turnRun(['T2 M6', 'G18 G90', 'CYCLE800(0,"DREHEN",0,57,0,0,0,0,0,0,0,0,0,1)', 'G96 S150 M3', 'G95 F0.25', 'G0 X40 Z5', 'G1 Z-5', 'M30']);
+  assert.ok(milling.found.some((f) => /^turning: .* is a milling cutter, in the spindle while the table turns/.test(f)), milling.found.join('\n'));
+  const still = turnRun(['T11 M6', 'G90', 'G0 X25 Y0 Z5', 'G1 Z-5 F100', 'M30']);
+  assert.ok(still.found.some((f) => /^turning: .* meets the stock while the table is not turning/.test(f)), still.found.join('\n'));
+});

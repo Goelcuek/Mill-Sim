@@ -219,11 +219,11 @@ function turningParts(built) {
   const b = o.bar;
   const bar = new THREE.BoxGeometry(b.u1 - b.u0, b.thick, b.w1 - b.w0);
   bar.translate((b.u0 + b.u1) / 2, 0, (b.w0 + b.w1) / 2);
-  let spindle = null;
-  if (built.spindlePoints.length > 1) {
-    spindle = latheFrom(built.spindlePoints, 40);
-    spindle.translate(o.axisU, 0, 0);
-  }
+  // The origin is the spindle axis at the tip's height — where the machine
+  // puts the tool — and the tip is `axisU` back across from it.
+  insert.translate(-o.axisU, 0, 0);
+  bar.translate(-o.axisU, 0, 0);
+  const spindle = built.spindlePoints.length > 1 ? latheFrom(built.spindlePoints, 40) : null;
   return { insert, bar, spindle };
 }
 

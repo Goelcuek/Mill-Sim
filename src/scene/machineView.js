@@ -51,6 +51,13 @@ function box(w, d, h, material, x = 0, y = 0, z = 0) {
   return mesh;
 }
 
+/** Which way a turning tool faces, carried into the scene; null for a round tool. */
+function acrossIn(p, world) {
+  if (!p.across) return null;
+  const v = new THREE.Vector3(p.across[0], p.across[1], p.across[2]).transformDirection(world).normalize();
+  return [v.x, v.y, v.z];
+}
+
 export class MachineView {
   constructor() {
     this.group = new THREE.Group();
@@ -500,7 +507,7 @@ export class MachineView {
       this.group.updateMatrixWorld(true);
       const spun = new THREE.Vector3(p.tip[0], p.tip[1], p.tip[2]).applyMatrix4(this.partGroup.matrixWorld);
       const spunDir = new THREE.Vector3(p.dir[0], p.dir[1], p.dir[2]).transformDirection(this.partGroup.matrixWorld).normalize();
-      return { tip: [spun.x, spun.y, spun.z], dir: [spunDir.x, spunDir.y, spunDir.z] };
+      return { tip: [spun.x, spun.y, spun.z], dir: [spunDir.x, spunDir.y, spunDir.z], across: acrossIn(p, this.partGroup.matrixWorld) };
     }
 
     // The part is clamped to the table at a fixed place and stays there.
@@ -566,7 +573,7 @@ export class MachineView {
     const world = this.partGroup.matrixWorld;
     const tip = new THREE.Vector3(p.tip[0], p.tip[1], p.tip[2]).applyMatrix4(world);
     const dir = new THREE.Vector3(p.dir[0], p.dir[1], p.dir[2]).transformDirection(world).normalize();
-    return { tip: [tip.x, tip.y, tip.z], dir: [dir.x, dir.y, dir.z] };
+    return { tip: [tip.x, tip.y, tip.z], dir: [dir.x, dir.y, dir.z], across: acrossIn(p, world) };
   }
 
   /** The chain node that indexes the work, when the machine has one. */

@@ -206,8 +206,16 @@ export const EXAMPLES = [
     "description": "Two holes drilled into the side through a G68.2 tilted plane, then one from the top that meets the first. The stock keeps its material along X, Y and Z, so a hole under the top is there to see, section and measure.",
     "setup": {
       "stock": {
-        "size": [120, 90, 40],
-        "origin": [40, -45, -40],
+        "size": [
+          120,
+          90,
+          40
+        ],
+        "origin": [
+          40,
+          -45,
+          -40
+        ],
         "resolution": 0.25
       },
       "machine": {
@@ -250,6 +258,42 @@ export const EXAMPLES = [
     },
     "file": "examples/siemens-swivel-and-cycles-840d.nc",
     "lines": 57
+  },
+  {
+    "name": "Siemens mill-turn: turning on the table",
+    "description": "A Ø80 bar on the A/C trunnion's table, turned: CYCLE800 \"DREHEN\" makes the C table the spindle, DIAMON reads X as a diameter, G96 with LIMS holds the cutting speed. Faced, roughed and finished to Ø68 with a chamfer, grooved and threaded, then back to milling. Loading it sets the machine to the trunnion and to Siemens.",
+    "setup": {
+      "stock": {
+        "shape": "round",
+        "diameter": 80,
+        "size": [
+          80,
+          80,
+          50
+        ],
+        "origin": [
+          -40,
+          -40,
+          -50
+        ],
+        "resolution": 0.25
+      },
+      "machine": {
+        "preset": "tableTable",
+        "controller": {
+          "flavour": "siemens",
+          "dialect": "siemens",
+          "syntax": null,
+          "plane": 17,
+          "metric": true,
+          "absolute": true,
+          "arcCentreAbsolute": false,
+          "feedMode": 94
+        }
+      }
+    },
+    "file": "examples/siemens-mill-turn-840d.nc",
+    "lines": 74
   }
 ];
 

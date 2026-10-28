@@ -12,6 +12,7 @@ import { homeOf, limitsInScene } from '../machine/config.js';
 import { gougeDepth } from './target.js';
 import { checkReference, referenceSkyline, skylineOver, insideColumns } from './referenceContact.js';
 import { placeSolid, boxesMeet, solidContact, solidIntoStock, solidIntoReference } from './machineContact.js';
+import { outlineAt, hull2 } from '../tools/turningDefs.js';
 
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
@@ -27,6 +28,7 @@ export const COLLISION_TYPES = {
   gouge: { label: 'Gouge into the reference part', severity: 'error' },
   part: { label: 'Reference part collision', severity: 'error' },
   near: { label: 'Near miss', severity: 'warning' },
+  turning: { label: 'Turning', severity: 'error' },
 };
 
 /**
@@ -980,7 +982,15 @@ export class Simulator {
    * @param {number[]} point programmed point, work coordinates
    * @param {number} u  0..1 through the move, for interpolating the swing
    */
-  poseAt(mv, point, u) {
+  poseAt(mv, point, u, cutTip = false) {
+    // A turning tool's tip is not on the spindle axis: the bar is, and the
+    // tip is beside it. The program says where the tip goes, so the machine
+    // is placed with the spindle that far across — see turnFrame — as the
+    // control does with the tool's offsets, turning or not.
+    if (!cutTip && mv && this.activeSlot && this.activeSlot.built.turning) {
+      const f = this.turnFrame(point);
+      if (f) point = [point[0] + f.across[0] * f.axisU, point[1] + f.across[1] * f.axisU, point[2] + f.across[2] * f.axisU];
+    }
     const idx = this.indexer;
     const index = idx ? this.indexAt(mv, u) : 0;
     // How far down its own line the tool has been sent. Nothing on the
@@ -1200,7 +1210,238 @@ export class Simulator {
       const zero = k.linearsForTip([0, 0, 0], {}, gauge);
       if (axes && zero) values = { ...rot, X: axes.X - zero.X, Y: axes.Y - zero.Y, Z: axes.Z - zero.Z };
     }
-    return { values, axes: axes ? { ...rot, ...axes } : null, gauge, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0 };
+    const turn = this.turnFrame(point);
+    return {
+      values, axes: axes ? { ...rot, ...axes } : null, gauge, tip: pose.tip, dir: pose.dir, rot, index: pose.index || 0,
+      // Which way a turning tool faces, into its body, on the part.
+      across: turn ? turn.across : null,
+    };
+  }
+
+  // ---- turning -----------------------------------------------------------
+
+  /** The axis the table spins the part about, in the part's frame. */
+  get turnAxis() {
+    const k = this.kinematics;
+    if (!k || typeof k.turningAxis !== 'function') return null;
+    if (this._turnAxisKey !== k.order) {
+      this._turnAxisKey = k.order;
+      const values = k.lastValues ? { ...k.lastValues } : null;
+      this._turnAxis = k.turningAxis();
+      // turningAxis solves the chain at home; put it back where it was.
+      if (values) k.solve(values);
+    }
+    return this._turnAxis;
+  }
+
+  /**
+   * A point against the spinning axis: how far along it (z), how far out
+   * (r), and the way out to it (radial) — and, for the turning tool in the
+   * spindle, which way across it faces, into its body: outward for an
+   * outside tool, inward for an inside one, square to the tool. Null when
+   * nothing is turning or the tool is not a turning tool.
+   */
+  turnFrame(p, built = this.activeSlot && this.activeSlot.built) {
+    const ax = this.turnAxis;
+    if (!ax || !built || !built.turning) return null;
+    const d = ax.dir;
+    const w = [p[0] - ax.point[0], p[1] - ax.point[1], p[2] - ax.point[2]];
+    const z = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
+    const q = [w[0] - z * d[0], w[1] - z * d[1], w[2] - z * d[2]];
+    const r = Math.hypot(q[0], q[1], q[2]);
+    // On the axis there is no way out; the last one is kept, and +X to begin.
+    let radial = r > 1e-6 ? [q[0] / r, q[1] / r, q[2] / r] : (this._lastRadial || [1, 0, 0]);
+    if (r > 1e-6) this._lastRadial = radial;
+    const s = built.turning.side === 'ID' ? -1 : 1;
+    return { r, z, radial, across: radial.map((v) => v * s), axisU: built.turning.axisU, outline: built.turning };
+  }
+
+  /**
+   * One chunk of a turning move: the insert's outline swept from where the
+   * chunk starts to where it ends, turned round the axis and taken from the
+   * stock. A move square to the axis or along it is a straight line in
+   * (r, z), and the sweep is the hull of the two ends; one that leaves that
+   * plane — off centre — curves there, and is split until it does not.
+   *
+   * @returns {{volume:number, gouge3:object|null}}
+   */
+  turnCut(mv, from, to, u0, u1, slot, opts) {
+    const stock = this.stock;
+    const ax = this.turnAxis;
+    const out = { volume: 0, gouge3: null };
+    if (!stock || !stock.carveRevolved || !ax) return out;
+    const tipAt = (p, u) => this.poseAt(mv, p, u, true).tip;
+    const A = tipAt(from, u0);
+    const B = tipAt(to, u1);
+    const fa = this.turnFrame(A, slot.built);
+    // Signed along one way out, so a facing cut through the centre goes
+    // straight through zero rather than folding back at it.
+    const e = fa.radial;
+    const rzOf = (p) => {
+      const d = ax.dir;
+      const w = [p[0] - ax.point[0], p[1] - ax.point[1], p[2] - ax.point[2]];
+      const z = w[0] * d[0] + w[1] * d[1] + w[2] * d[2];
+      const q = [w[0] - z * d[0], w[1] - z * d[1], w[2] - z * d[2]];
+      const along = q[0] * e[0] + q[1] * e[1] + q[2] * e[2];
+      const off = Math.hypot(q[0] - along * e[0], q[1] - along * e[1], q[2] - along * e[2]);
+      return [off > 1e-3 ? Math.sign(along || 1) * Math.hypot(along, off) : along, z];
+    };
+    const pieces = [];
+    const split = (pa, pb, ua, ub, depth) => {
+      const a = rzOf(pa);
+      const b = rzOf(pb);
+      if (depth < 6) {
+        const um = (ua + ub) / 2;
+        const pm = tipAt([(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2], um);
+        const mid = [(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2];
+        const m = rzOf(depth === 0 ? pm : mid);
+        const chord = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (Math.hypot(m[0] - chord[0], m[1] - chord[1]) > 0.01) {
+          split(pa, mid, ua, um, depth + 1);
+          split(mid, pb, um, ub, depth + 1);
+          return;
+        }
+      }
+      pieces.push([a, b]);
+    };
+    split(A, B, u0, u1, 0);
+    const o = slot.built.turning;
+    for (const [a, b] of pieces) {
+      const poly = hull2([...outlineAt(o, a[0], a[1]), ...outlineAt(o, b[0], b[1])]);
+      const r = stock.carveRevolved(poly, ax, slot.index, opts);
+      out.volume += r.volume;
+      if (r.gouge3 && (!out.gouge3 || r.gouge3.depth > out.gouge3.depth)) out.gouge3 = r.gouge3;
+    }
+    return out;
+  }
+
+  /**
+   * The bar of a turning tool against the part spinning past it: at each
+   * height the bar stands at, what radii it covers, and whether the part
+   * has metal anywhere round that band. Asked of the stock at angles all
+   * the way round, since the part turns under it.
+   *
+   * @returns {null | {depth:number, point:number[]}}
+   */
+  turnBarHit(tip, dir, slot) {
+    const stock = this.stock;
+    const ax = this.turnAxis;
+    const f = this.turnFrame(tip, slot.built);
+    if (!stock || !ax || !f) return null;
+    const bar = f.outline.bar;
+    const a = f.across;
+    const b = [dir[1] * a[2] - dir[2] * a[1], dir[2] * a[0] - dir[0] * a[2], dir[0] * a[1] - dir[1] * a[0]];
+    const sz = stock.size;
+    const so = stock.origin;
+    // The stock's own reach, so heights and radii it cannot have are not asked.
+    let reach = 0;
+    for (const cx of [so[0], so[0] + sz[0]]) for (const cy of [so[1], so[1] + sz[1]]) for (const cz of [stock.base, stock.base + sz[2]]) {
+      const w = [cx - ax.point[0], cy - ax.point[1], cz - ax.point[2]];
+      const z = w[0] * ax.dir[0] + w[1] * ax.dir[1] + w[2] * ax.dir[2];
+      reach = Math.max(reach, Math.hypot(w[0] - z * ax.dir[0], w[1] - z * ax.dir[1], w[2] - z * ax.dir[2]));
+    }
+    // And its reach along the axis: heights outside it are air.
+    let zLoS = Infinity, zHiS = -Infinity;
+    for (const cx of [so[0], so[0] + sz[0]]) for (const cy of [so[1], so[1] + sz[1]]) for (const cz of [stock.base, stock.base + sz[2]]) {
+      const z = (cx - ax.point[0]) * ax.dir[0] + (cy - ax.point[1]) * ax.dir[1] + (cz - ax.point[2]) * ax.dir[2];
+      zLoS = Math.min(zLoS, z);
+      zHiS = Math.max(zHiS, z);
+    }
+    const u1 = (v) => [v[0] / (Math.hypot(...v) || 1), v[1] / (Math.hypot(...v) || 1), v[2] / (Math.hypot(...v) || 1)];
+    // Two ways square to the axis, to go round it.
+    const ref = Math.abs(ax.dir[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+    const lean = ref[0] * ax.dir[0] + ref[1] * ax.dir[1] + ref[2] * ax.dir[2];
+    const p1 = u1([ref[0] - ax.dir[0] * lean, ref[1] - ax.dir[1] * lean, ref[2] - ax.dir[2] * lean]);
+    const p2 = [ax.dir[1] * p1[2] - ax.dir[2] * p1[1], ax.dir[2] * p1[0] - ax.dir[0] * p1[2], ax.dir[0] * p1[1] - ax.dir[1] * p1[0]];
+    const ANGLES = 24;
+    const metalAt = (r, z) => {
+      for (let k = 0; k < ANGLES; k++) {
+        const t = (2 * Math.PI * k) / ANGLES;
+        const c = Math.cos(t) * r, sn = Math.sin(t) * r;
+        const x = ax.point[0] + ax.dir[0] * z + p1[0] * c + p2[0] * sn;
+        const y = ax.point[1] + ax.dir[1] * z + p1[1] * c + p2[1] * sn;
+        const zz = ax.point[2] + ax.dir[2] * z + p1[2] * c + p2[2] * sn;
+        if (stock.inside(x, y, zz)) return [x, y, zz];
+      }
+      return null;
+    };
+    const span = Math.min(bar.w1, bar.w0 + 400);
+    const step = Math.max((span - bar.w0) / 60, 2);
+    let worst = null;
+    for (let w = bar.w0 + 0.05; w <= span; w += step) {
+      // The bar's section at this height: its radii, from its corners and
+      // the middle of its faces.
+      let rLo = Infinity, rHi = 0, zMid = 0;
+      for (const [uu, yy] of [[bar.u0, 0], [bar.u1, 0], [bar.u0, bar.thick / 2], [bar.u0, -bar.thick / 2], [bar.u1, bar.thick / 2], [(bar.u0 + bar.u1) / 2, 0]]) {
+        const q = [tip[0] + a[0] * uu + b[0] * yy + dir[0] * w, tip[1] + a[1] * uu + b[1] * yy + dir[1] * w, tip[2] + a[2] * uu + b[2] * yy + dir[2] * w];
+        const ww = [q[0] - ax.point[0], q[1] - ax.point[1], q[2] - ax.point[2]];
+        const z = ww[0] * ax.dir[0] + ww[1] * ax.dir[1] + ww[2] * ax.dir[2];
+        const r = Math.hypot(ww[0] - z * ax.dir[0], ww[1] - z * ax.dir[1], ww[2] - z * ax.dir[2]);
+        rLo = Math.min(rLo, r);
+        rHi = Math.max(rHi, r);
+        zMid = z;
+      }
+      if (rLo > reach || zMid < zLoS - 1 || zMid > zHiS + 1) continue;
+      // Across the band, a millimetre or so at a time: where there is metal
+      // round it, and how far into the bar it comes from the side the bar
+      // faces the part — its inner face outside, its outer face inside.
+      const top = Math.min(rHi, reach + 0.05);
+      const n = Math.min(48, Math.max(4, Math.ceil((top - rLo) / 1)));
+      const id = f.outline.side === 'ID';
+      let deepest = null;
+      for (let k = 0; k <= n; k++) {
+        const r = rLo + 0.05 + ((top - rLo - 0.1) * k) / n;
+        const hit = metalAt(r, zMid);
+        if (!hit) continue;
+        const depth = id ? rHi - r : r - rLo;
+        if (!deepest || (id ? depth > deepest.depth : depth > deepest.depth)) deepest = { depth: Math.max(depth, 0.05), point: hit };
+      }
+      if (deepest && (!worst || deepest.depth > worst.depth)) worst = deepest;
+    }
+    return worst;
+  }
+
+  /**
+   * The turning tool against fixtures turning with the part — the jaws of
+   * a chuck: points of the insert and the bar, carried round the axis.
+   */
+  turnFixtureHit(tip, dir, slot) {
+    const ax = this.turnAxis;
+    const f = this.turnFrame(tip, slot.built);
+    if (!ax || !f || !this.fixtures || !this.fixtures.length) return null;
+    const a = f.across;
+    const bar = f.outline.bar;
+    const pts = f.outline.insert.map(([uu, ww]) => [uu, 0, ww]);
+    for (let w = bar.w0; w <= Math.min(bar.w1, bar.w0 + 200); w += 10) {
+      for (const uu of [bar.u0, bar.u1]) for (const yy of [-bar.thick / 2, bar.thick / 2]) pts.push([uu, yy, w]);
+    }
+    const b = [dir[1] * a[2] - dir[2] * a[1], dir[2] * a[0] - dir[0] * a[2], dir[0] * a[1] - dir[1] * a[0]];
+    const d = ax.dir;
+    for (const [uu, yy, ww] of pts) {
+      const q = [tip[0] + a[0] * uu + b[0] * yy + dir[0] * ww, tip[1] + a[1] * uu + b[1] * yy + dir[1] * ww, tip[2] + a[2] * uu + b[2] * yy + dir[2] * ww];
+      const w0 = [q[0] - ax.point[0], q[1] - ax.point[1], q[2] - ax.point[2]];
+      const z = w0[0] * d[0] + w0[1] * d[1] + w0[2] * d[2];
+      const rv = [w0[0] - z * d[0], w0[1] - z * d[1], w0[2] - z * d[2]];
+      const r = Math.hypot(...rv);
+      if (r < 1e-6) continue;
+      const e = rv.map((v) => v / r);
+      const g = [d[1] * e[2] - d[2] * e[1], d[2] * e[0] - d[0] * e[2], d[0] * e[1] - d[1] * e[0]];
+      for (let k = 0; k < 36; k++) {
+        const t = (2 * Math.PI * k) / 36;
+        const c = Math.cos(t) * r, sn = Math.sin(t) * r;
+        const x = ax.point[0] + d[0] * z + e[0] * c + g[0] * sn;
+        const y = ax.point[1] + d[1] * z + e[1] * c + g[1] * sn;
+        const zz = ax.point[2] + d[2] * z + e[2] * c + g[2] * sn;
+        for (const fx of this.fixtures) {
+          if (fx.ignore || !fx.inverse) continue;
+          const l = m4.transformPoint([0, 0, 0], fx.inverse, [x, y, zz]);
+          if (Math.abs(l[0] - fx.centre[0]) <= fx.half[0] && Math.abs(l[1] - fx.centre[1]) <= fx.half[1] && Math.abs(l[2] - fx.centre[2]) <= fx.half[2]) {
+            return { fixture: fx, point: q };
+          }
+        }
+      }
+    }
+    return null;
   }
 
   /** True when the tool stands close enough to vertical to sweep normally. */
@@ -1218,6 +1459,12 @@ export class Simulator {
     const stock = this.stock;
 
     if (!slot) return { active: false, stepSize: Infinity };
+
+    // Turning: the metal is all the way round, wherever the tip is, so the
+    // tiles under the tip say nothing about it. The cut is exact over a
+    // whole chunk; chunks are kept short only so the bar and the jaws are
+    // asked about often enough on the way.
+    if (mv.turning || slot.built.turning) return { active: true, stepSize: 25 };
 
     // On a 5-axis machine the programmed point is not the tool tip, so the
     // rejection box is built from the tip and padded for the lean: the
@@ -1350,7 +1597,98 @@ export class Simulator {
     const [x, y, z] = poseB.tip;
     const poses = this.probePoses(poseA, poseB, mv, from, to, u0, u1);
 
-    if (stock) {
+    // Turning: the table spins the part and the tool stands still. The
+    // cut is the insert turned round the axis, and nothing about a
+    // spinning milling cutter applies — so the milling carve, its probes
+    // and the checks that assume a still part are passed by.
+    const turningTool = !!slot.built.turning;
+    const turningHere = !!mv.turning || turningTool;
+    if (turningHere && stock) {
+      if (mv.turning && turningTool) {
+        const opts = { target: this.target && this.target.map ? this.target : null, tolerance: this.gougeTolerance };
+        const r = this.turnCut(mv, from, to, u0, u1, slot, opts);
+        removed = r.volume;
+        if (r.gouge3) {
+          this.report('gouge', {
+            line: mv.line,
+            message: (d) => `Turned ${d.toFixed(3)} mm into the reference part — this is gouging, not stock removal.`,
+            position: [r.gouge3.x, r.gouge3.y, r.gouge3.z],
+            depth: r.gouge3.depth,
+          });
+        }
+        const tipB = this.poseAt(mv, to, u1, true).tip;
+        if (removed > 0) {
+          this.removedVolume += removed;
+          this.moveStats[mv.i] += removed;
+          if (mv.kind === 'rapid' && (!this.checks || this.checks.rapidIntoStock !== false)) {
+            this.report('rapid', {
+              line: mv.line,
+              message: 'G0 rapid turned material away. On the machine this is a crash, not a cut.',
+              position: tipB,
+              volume: removed,
+            });
+          }
+          if (mv.spindleDir === 0) {
+            this.report('spindle', {
+              line: mv.line,
+              message: 'Material turned while the table is not spinning (no M3/M4 active).',
+              position: tipB,
+            });
+          }
+        }
+        // The bar and the jaws, every 5 mm along the chunk: the cut is
+        // exact over all of it, but these are asked at points.
+        const tipA = this.poseAt(mv, from, u0, true).tip;
+        const steps = Math.max(1, Math.ceil(Math.hypot(tipB[0] - tipA[0], tipB[1] - tipA[1], tipB[2] - tipA[2]) / 5));
+        for (let k = 1; k <= steps && !this.halted; k++) {
+          const t = k / steps;
+          const tip = [tipA[0] + (tipB[0] - tipA[0]) * t, tipA[1] + (tipB[1] - tipA[1]) * t, tipA[2] + (tipB[2] - tipA[2]) * t];
+          const bar = this.turnBarHit(tip, poseB.dir, slot);
+          if (bar) {
+            this.report('holder', {
+              line: mv.line,
+              message: (d) => `The turning bar of ${slot.built.tool.def.name} runs ${d.toFixed(2)} mm into the spinning part.`,
+              position: bar.point,
+              depth: bar.depth,
+            });
+          }
+          const jaw = this.turnFixtureHit(tip, poseB.dir, slot);
+          if (jaw) {
+            this.report('fixture', {
+              line: mv.line,
+              message: `${slot.built.tool.def.name} is in the way of "${jaw.fixture.name}" as it turns with the part.`,
+              position: jaw.point,
+              depth: 0,
+            });
+          }
+        }
+      } else if (mv.turning) {
+        this.report('turning', {
+          line: mv.line,
+          message: `${slot.built.tool.def.name} is a milling cutter, in the spindle while the table turns: turning needs a turning tool.`,
+          position: poseB.tip.slice(),
+        });
+      } else {
+        // A turning tool moving while the table is still: fine through
+        // air, a crash if it meets metal — nothing turns to make it a cut.
+        const f = this.turnFrame(this.poseAt(mv, to, u1, true).tip, slot.built);
+        if (f) {
+          const tip = this.poseAt(mv, to, u1, true).tip;
+          const d = poseB.dir;
+          const a = f.across;
+          const hit = f.outline.insert.some(([uu, ww]) => stock.inside(tip[0] + a[0] * uu + d[0] * ww, tip[1] + a[1] * uu + d[1] * ww, tip[2] + a[2] * uu + d[2] * ww));
+          if (hit) {
+            this.report('turning', {
+              line: mv.line,
+              message: `${slot.built.tool.def.name} is a turning tool and it meets the stock while the table is not turning — CYCLE800 "DREHEN" is not on.`,
+              position: tip,
+            });
+          }
+        }
+      }
+    }
+
+    if (stock && !turningHere) {
       // The carve compares on the stock's grid; a part the stock does not
       // reach has no grid of its own and is measured by its surface only.
       const opts = { target: this.target && this.target.map ? this.target : null, tolerance: this.gougeTolerance };
@@ -1463,7 +1801,7 @@ export class Simulator {
 
     for (const [tip, dir, point, u] of poses) {
       if (this.halted) break;
-      if (this.fixtures && this.fixtures.length) {
+      if (this.fixtures && this.fixtures.length && !turningHere) {
         const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
         if (f && f.gap < 0) {
           this.report('fixture', {
@@ -1488,7 +1826,7 @@ export class Simulator {
       // the cutter itself is measured against the part, and inside it by
       // more than the tolerance is a gouge. Where it did cut, the carve
       // has already measured what it took.
-      if (this.referenceOn() && !(removed > 0) && this.target.closed !== false) {
+      if (this.referenceOn() && !turningHere && !(removed > 0) && this.target.closed !== false) {
         const cut = checkReference(slot.spheres, tip, dir, this.target.surface, {
           skipAbove: slot.built.fluteLength,
           closed: true,
@@ -1505,7 +1843,7 @@ export class Simulator {
         }
       }
 
-      if (this.referenceOn()) {
+      if (this.referenceOn() && !turningHere) {
         const hit = checkReference(slot.spheres, tip, dir, this.target.surface, {
           skipBelow: slot.built.fluteLength,
           clearance,
