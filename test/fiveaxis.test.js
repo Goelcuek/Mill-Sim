@@ -871,3 +871,31 @@ test('each kind of finding has its own room: a run full of one kind still lists 
   assert.ok(sim.collisions.some((c) => c.type === 'gouge'));
   assert.equal(sim.collisionsDropped, 50);
 });
+
+test('a crash stops the run where it is found, and going on passes over the rest of that block', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  const surface = buildSurfaceIndex([boxToTriangles([100, -300, -80], [400, 300, 300])], 2);
+  const sim = new Simulator();
+  sim.load({
+    program: interpret('G90\nG0 X0 Y0 Z500\nG1 X200 Z280 F1000\nG1 X210\nG0 Z500\nM30', { kinematics: kin }),
+    stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE,
+    target: { surface, closed: true, map: null, grid: null },
+  });
+  sim.haltOnCollision = true;
+  sim.quietKinds = ['limit', 'table'];
+  for (let n = 0; n < 1000 && !sim.finished && !sim.halted; n++) sim.run(Infinity, 50);
+  assert.ok(sim.halted, 'the run stopped');
+  assert.equal(sim.halted.line, 3);
+  assert.equal(sim.halted.type, 'gouge');
+  const at = sim.moveIndex;
+  sim.skipBlock();
+  assert.equal(sim.halted, null);
+  assert.ok(sim.moveIndex > at && sim.program.moves[sim.moveIndex].line === 4, 'on to the next block');
+  near(sim.pos[0], 200, 1e-9, 'where line 3 would have left the tool');
+  // The next block is in the part too: it stops there in its turn.
+  for (let n = 0; n < 1000 && !sim.finished && !sim.halted; n++) sim.run(Infinity, 50);
+  assert.equal(sim.halted && sim.halted.line, 4);
+});

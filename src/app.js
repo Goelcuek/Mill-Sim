@@ -203,6 +203,8 @@ export class App {
         rapidIntoStock: true,
         /** The holder, shank and spindle against the reference part. */
         reference: true,
+        /** Playing stops at a crash; ▶ passes over the rest of that block. */
+        stopOnCollision: true,
       },
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
@@ -2217,6 +2219,9 @@ export class App {
       return;
     }
     if (this.simulator.finished) this.simulator.reset();
+    // Stopped at a crash: what is left of that block is passed over, and
+    // the run goes on from the next one.
+    if (this.simulator.halted) this.simulator.skipBlock();
     this.state.playing = true;
     this.playBtn.textContent = '⏸';
     this.clearHalt();
@@ -2495,6 +2500,10 @@ export class App {
 
     if (this.state.seekTarget !== null) {
       const target = this.state.seekTarget;
+      // Scrubbing and running to the end go through a crash and list it:
+      // stopping there would leave no way past it.
+      sim.haltOnCollision = false;
+      sim.halted = null;
       sim.seek(target, 26);
       worked = true;
       if (sim.finished || sim.time >= target - 1e-6) {
@@ -2515,9 +2524,17 @@ export class App {
       // would take the run: go exactly as far as it and no further.
       const ahead = this.nextStop();
       if (ahead && sim.time + step >= ahead.stop.time) step = Math.max(0, ahead.stop.time - sim.time);
+      sim.haltOnCollision = this.state.checks.stopOnCollision !== false;
+      sim.quietKinds = this.state.findingsHidden;
       const r = sim.run(step, 14);
+      sim.haltOnCollision = false;
       worked = true;
-      if (ahead && !r.done && sim.time >= ahead.stop.time - 1e-6) {
+      if (sim.halted) {
+        const h = sim.halted;
+        this.pause();
+        this.refreshResults();
+        this.notify(`Stopped at line ${h.line}: ${h.message} Press ▶ to pass over the rest of this block and go on.`, 'error');
+      } else if (ahead && !r.done && sim.time >= ahead.stop.time - 1e-6) {
         this.haltAt(ahead);
       } else if (r.done) {
         this.pause();

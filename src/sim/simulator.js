@@ -192,6 +192,10 @@ export class Simulator {
     this.fallbackSlot = null;
     /** Reference-part surface on the stock grid; cutting below it gouges. */
     this.target = null;
+    /** Stop the run at an error finding; the app asks for it while playing. */
+    this.haltOnCollision = false;
+    /** Kinds of finding that do not stop it: those switched off in the list. */
+    this.quietKinds = [];
     this.gougeTolerance = 0.02;
     /**
      * Columns a single swept chunk may touch, which sets the chunk length.
@@ -258,6 +262,8 @@ export class Simulator {
     this.segPos = 0;            // mm travelled into the current segment
     this.time = 0;              // simulated seconds
     this.distance = 0;
+    /** The finding the run stopped at, while it waits; see haltOnCollision. */
+    this.halted = null;
     this.finished = !this.program || !this.program.moves.length;
     this.collisions = [];
     this.collisionKeys = new Map();
@@ -309,12 +315,55 @@ export class Simulator {
     return this.fallbackSlot;
   }
 
+  /**
+   * Stop the run at a crash, when asked to: an error of a kind not left
+   * out stops it where it is found, before another chunk is worked out —
+   * a holder buried deep in the part costs a great deal to follow, chunk
+   * after chunk, and following it is not what anybody wants by then.
+   */
+  haltFor(type, severity, data) {
+    if (!this.haltOnCollision || this.halted || severity !== 'error') return;
+    if (this.quietKinds && this.quietKinds.includes(type)) return;
+    const label = (COLLISION_TYPES[type] || { label: type }).label;
+    const message = typeof data.message === 'function' ? data.message(data.depth || 0) : data.message;
+    this.halted = { type, label, line: data.line, message, moveIndex: this.moveIndex };
+  }
+
+  /**
+   * Go on from a stop: what is left of the block that stopped the run is
+   * passed over — not cut, not checked — and the run picks up at the
+   * block after it, the tool where that block would have left it.
+   */
+  skipBlock() {
+    const moves = this.program ? this.program.moves : [];
+    // The block is the one the crash was found in — which the run may have
+    // finished already, when it was found on its last stretch: then there
+    // is nothing of it left to pass over.
+    const at = this.halted ? this.halted.moveIndex : this.moveIndex;
+    const mv = moves[at];
+    this.halted = null;
+    if (!mv || this.finished) return;
+    const same = (m) => m && (m.source || null) === (mv.source || null) && m.line === mv.line;
+    if (this.moveIndex > at && !same(moves[this.moveIndex])) return;
+    this._dwelt = 0;
+    while (!this.finished && same(moves[this.moveIndex])) {
+      this.pos = moves[this.moveIndex].to.slice();
+      this.nextMove();
+    }
+    // The clock where the next block starts, as a seek would count it.
+    let t = 0;
+    for (let i = 0; i < this.moveIndex && i < moves.length; i++) t += moves[i].time;
+    this.time = this.finished ? this.totalTime || t : t;
+    this.u = 0;
+  }
+
   report(type, data) {
     const meta = COLLISION_TYPES[type] || { label: type, severity: 'error' };
     const key = `${type}:${data.line}`;
     const existing = this.collisionKeys.get(key);
     if (existing) {
       existing.count++;
+      this.haltFor(type, meta.severity, data);
       if ((data.depth || 0) > (existing.depth || 0)) {
         existing.depth = data.depth;
         existing.position = data.position || existing.position;
@@ -329,6 +378,7 @@ export class Simulator {
       return null;
     }
     this.collisionKinds.set(type, kept + 1);
+    this.haltFor(type, meta.severity, data);
     const entry = {
       type,
       label: meta.label,
@@ -362,7 +412,7 @@ export class Simulator {
     let advanced = 0;
 
     while (remaining > 1e-12 && !this.finished) {
-      if (performance.now() > deadline) break;
+      if (this.halted || performance.now() > deadline) break;
 
       const mv = moves[this.moveIndex];
       if (!mv) { this.finished = true; break; }
@@ -1342,6 +1392,7 @@ export class Simulator {
     const nearMachine = this.machineNear(poses, mv, clearance);
 
     for (const [tip, dir, point, u] of poses) {
+      if (this.halted) break;
       if (this.fixtures && this.fixtures.length) {
         const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
         if (f && f.gap < 0) {

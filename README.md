@@ -736,6 +736,14 @@ same measure gives the reading under the pointer.
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
 | **No tool assembly loaded** | The program selected a `T` number the library has no assembly for. |
 
+**Playing stops at a collision.** The first crash, gouge or travel limit —
+of the kinds not switched off on Results › Findings — stops the run where it
+is found, before another chunk is worked out, so a deep crash cannot bog the
+page down following it. ▶ then passes over the rest of that block, uncut and
+unchecked, with the tool where the block would have left it, and the run
+goes on from the next. Scrubbing and ⏭⏭ go through and list what they meet.
+Setup › Checks can turn the stopping off.
+
 **Results › Findings** has a switch for each kind of finding the run turned
 up, with how many: turn travel limits off, say, and they leave the list, the
 count and the badge on the viewport while the crashes are looked at. They

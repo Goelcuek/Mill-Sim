@@ -128,6 +128,8 @@ export class SetupPanel extends Panel {
           ? `Anything that passes within ${units.lenU(c.nearMiss, 2)} of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
           : 'Off: only metal in metal is reported. Ask for room and the run also tells you where it came close, which is what you want before the first part rather than after it.'),
         checkbox('Report rapids that touch material', c.rapidIntoStock !== false, (v) => app.setChecks({ rapidIntoStock: v })),
+        checkbox('Stop playing at a collision', c.stopOnCollision !== false, (v) => app.setChecks({ stopOnCollision: v })),
+        el('div.hint', {}, 'Playing stops at the first crash, gouge or travel limit — of the kinds not switched off on Results › Findings — where it is found. ▶ then passes over the rest of that block, uncut and unchecked, and goes on from the next. Scrubbing and running to the end go through and list them.'),
         el('div.hint', {}, 'A G0 that removes material is a crash on the machine. Some posts rapid to the surface on purpose, so this can be turned off.'),
       ]),
       section('What is checked', [
