@@ -643,9 +643,11 @@ export class App {
       this.panelHost.appendChild(panel.root);
       panel.render();
     }
-    // The jog page has the machine while it is open, and only while it is.
+    // The jog page has the machine while it is open, and only while it is;
+    // the Travels page parks it at home with the spindle empty.
     if (tabId === 'machine' && panel.page === 'jog') this.startJog();
     else this.stopJog();
+    this.setTravelView(tabId === 'machine' && panel.page === 'limits');
     this.buildRibbon();
   }
 
@@ -999,7 +1001,7 @@ export class App {
       || patch.spindleDiameter !== undefined || patch.spindleLength !== undefined;
     Object.assign(this.state.machine, patch);
     this.machineView.setConfig(this.state.machine);
-    this.machineView.setLimitsVisible(this.state.display.showLimits);
+    this.machineView.setLimitsVisible(this.state.display.showLimits || !!this.travelView);
     if (presetChanged) {
       // A different chain means different castings; nothing hung on the old
       // axes belongs on the new ones.
@@ -1452,7 +1454,7 @@ export class App {
     this.state.machine.home = [...savedHome];
     this.state.machine.limits = normaliseLimits((def.settings && def.settings.limits) || null, savedHome);
     this.machineView.setConfig(this.state.machine);
-    this.machineView.setLimitsVisible(this.state.display.showLimits);
+    this.machineView.setLimitsVisible(this.state.display.showLimits || !!this.travelView);
 
     // Macro bodies live in their own files so they can be read and edited
     // outside this program; a machine.json on its own still carries the
@@ -1544,7 +1546,7 @@ export class App {
       space: 'world',
       bodies: true,
       title: 'Machine home',
-      hints: ['Click where the tool tip stands at home'],
+      hints: ['Click where the spindle face stands at home'],
       onDone: ([p]) => {
         this.setHome(p);
         this.notify(`Machine zero is now ${units.triple(p, 2)} ${units.lengthLabel()}. G53, G28 and the travel limits all measure from there.`, 'ok');
@@ -1626,7 +1628,8 @@ export class App {
   setHome(v) {
     this.state.machine.home = [0, 1, 2].map((i) => Number(Number(v[i] || 0).toFixed(4)));
     this.machineView.setConfig(this.state.machine);
-    this.machineView.setLimitsVisible(this.state.display.showLimits);
+    if (this.travelView) this.machineView.setHomeMarker(homeOf(this.state.machine));
+    this.machineView.setLimitsVisible(this.state.display.showLimits || !!this.travelView);
     this.simulator.retune({ machine: this.state.machine });
     if (this.panels && this.panels.machine) this.panels.machine.refresh();
     if (this.panels && this.panels.setup) this.panels.setup.refresh();
@@ -1677,13 +1680,13 @@ export class App {
     this.stockView.setVisible(d.stock);
     this.stockView.setStockColor(d.stockColor);
     this.stockView.setShowToolColors(d.toolColors);
-    this.toolView.setVisible(d.tool);
+    this.toolView.setVisible(d.tool && !this.travelView);
     this.toolView.setHolderVisible(d.holder);
     this.toolView.setOpacity(d.toolOpacity);
     this.toolpathView.setVisible(d.toolpath);
     this.toolpathView.setShowRapids(d.rapids);
     this.toolpathView.setMode(d.backplot);
-    this.machineView.setLimitsVisible(d.showLimits);
+    this.machineView.setLimitsVisible(d.showLimits || !!this.travelView);
     this.viewer.setOutlines(d.edges !== false);
     this.stockView.setDeviationMode(!!d.deviation, d.devRange);
     this.models.hideRole('reference', !!d.deviation);
@@ -2159,6 +2162,8 @@ export class App {
 
   play() {
     this.stopJog();
+    // Pressing play is asking to watch the run: the tool goes back in.
+    this.setTravelView(false);
     this.setStepCursor(null);
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
@@ -2505,9 +2510,11 @@ export class App {
       this.machineView.setGaugeLength(sim.activeSlot.built.gaugeLength);
     }
     if (this.originView && this.state.display.origins) this.originView.update(this.viewer.camera);
-    const pose = this.jog
-      ? this.jogPose()
-      : (this.state.program ? sim.currentPose() : this.parkPose());
+    const pose = this.travelView
+      ? this.homePose()
+      : this.jog
+        ? this.jogPose()
+        : (this.state.program ? sim.currentPose() : this.parkPose());
     const placed = this.machineView.update(pose);
     this.toolView.setPose(placed.tip, placed.dir);
     this.toolpathView.setProgress(sim.progress);
@@ -2559,6 +2566,96 @@ export class App {
     this.jog = null;
     this.viewer.invalidate();
     if (this.panels && this.panels.machine) this.panels.machine.refresh();
+  }
+
+  /**
+   * The Travels page: the machine parked at home with nothing in the
+   * spindle, the envelope drawn and machine zero marked, so what the page
+   * describes is what is on screen — the spindle face standing on the home
+   * point, inside the box its travels make.
+   */
+  setTravelView(on) {
+    const next = !!on;
+    if (next === !!this.travelView) return;
+    this.travelView = next;
+    if (next) {
+      this.pause();
+      if (this.state.machine.mode !== 'machine') this.setMachine({ mode: 'machine' });
+    }
+    this.toolView.setVisible(this.state.display.tool && !next);
+    this.machineView.setLimitsVisible(this.state.display.showLimits || next);
+    this.machineView.setHomeMarker(next ? homeOf(this.state.machine) : null);
+    // The whole machine in view: the page is about where it can go.
+    if (next) this.viewer.fit(this.machineView.boundingBox());
+    this.updateHud();
+    this.viewer.invalidate();
+  }
+
+  /** The machine at home: every rotary at zero, the spindle face on machine zero, no tool. */
+  homePose() {
+    const kin = this.machineView.kinematics;
+    const home = homeOf(this.state.machine);
+    const zero = {};
+    for (const n of kin.extras()) zero[n.letter] = 0;
+    const axes = kin.linearsForTip(home, zero, 0) || { X: home[0], Y: home[1], Z: home[2] };
+    const values = { ...zero, ...axes };
+    const r = kin.toolInWork(values, 0);
+    return { values, axes: values, gauge: 0, tip: r.tip, dir: r.axis, rot: zero };
+  }
+
+  /**
+   * Where the spindle face is, measured from home: machine X, Y and Z as a
+   * control reads them out. The tool in the spindle does not come into it.
+   */
+  machinePosition() {
+    if (this.travelView) return [0, 0, 0];
+    if (this.jog) return this.gaugeFromHome(this.jog);
+    const home = homeOf(this.state.machine);
+    const p = this.simulator.program ? this.simulator.machinePoint() : null;
+    if (!p) return null;
+    return [p[0] - home[0], p[1] - home[1], p[2] - home[2]];
+  }
+
+  /**
+   * How a jogged axis reads. X, Y and Z under the envelope read in machine
+   * coordinates — the spindle face from home, the numbers on the Travels
+   * page — so home is 0 and the slider runs from the travel's minimum to
+   * its maximum. Any other axis reads its own position.
+   *
+   * @returns {{machine:boolean, value:number, min:number, max:number, index?:number, slope?:number, base?:number}}
+   */
+  jogReading(letter) {
+    const kin = this.machineView.kinematics;
+    const node = kin.axes().find((n) => n.letter === letter);
+    const own = () => {
+      const r = this.jogRange(letter) || { min: -1000, max: 1000 };
+      return { machine: false, value: Number((this.jog && this.jog[letter]) || 0), min: r.min, max: r.max };
+    };
+    if (!node || !this.envelopeGoverned(node)) return own();
+    const jog = { ...(this.jog || {}) };
+    const p0 = this.gaugeFromHome({ ...jog, [letter]: 0 });
+    const p1 = this.gaugeFromHome({ ...jog, [letter]: 1 });
+    const slope = p1.map((v, i) => v - p0[i]);
+    let index = 0;
+    for (let i = 1; i < 3; i++) if (Math.abs(slope[i]) > Math.abs(slope[index])) index = i;
+    if (Math.abs(slope[index]) < 1e-9) return own();
+    const l = this.state.machine.limits;
+    const value = this.gaugeFromHome(jog)[index];
+    return {
+      machine: true, index, slope: slope[index], base: p0[index],
+      value: Number(value.toFixed(4)),
+      min: Number(l.min[index]) || 0,
+      max: Number(l.max[index]) || 0,
+    };
+  }
+
+  /** Jog an axis to a reading as jogReading gives it; returns where it got to. */
+  setJogReading(letter, value) {
+    const r = this.jogReading(letter);
+    if (!r.machine) return this.setJog(letter, value);
+    const want = clamp(Number(value) || 0, Math.min(r.min, r.max), Math.max(r.min, r.max));
+    this.setJog(letter, (want - r.base) / r.slope);
+    return this.jogReading(letter).value;
   }
 
   /** Move one axis to a value, clamped to the travel that axis really has. */
@@ -2799,6 +2896,11 @@ export class App {
         cell('span.hud-unit', units.lengthLabel()),
       ]),
       extraRow,
+      // Machine coordinates: the spindle face from home, as the control
+      // reads them — the same numbers G53 and the travels use.
+      el('div.hud-row.dim', { title: 'Machine coordinates: the spindle face, measured from home' }, [
+        cell('span', 'MCS'), dim('mx'), dim('my'), dim('mz'),
+      ]),
       el('div.hud-row.dim', {}, [dim('tool'), dim('toolName'), dim('feed'), dim('rpm')]),
       el('div.hud-row.dim', {}, [cell('span', 'removed'), val('removed')]),
       // What the cutter is meeting on this move, when it is cutting.
@@ -2842,11 +2944,18 @@ export class App {
     if (!this.hudFields) this.buildHud();
     const f = this.hudFields;
     const set = (node, text) => { if (node.textContent !== text) node.textContent = text; };
-    // Jogging, the readout is the axes as jogged; otherwise it is the run.
+    // Jogging, the readout is where the jogged tip is; otherwise the run.
     const at = this.jog || null;
-    set(f.x, units.len(at ? at.X || 0 : sim.pos[0], 3));
-    set(f.y, units.len(at ? at.Y || 0 : sim.pos[1], 3));
-    set(f.z, units.len(at ? at.Z || 0 : sim.pos[2], 3));
+    const tip = this.travelView ? this.homePose().tip : at ? this.jogPose().tip : sim.pos;
+    set(f.x, units.len(tip[0], 3));
+    set(f.y, units.len(tip[1], 3));
+    set(f.z, units.len(tip[2], 3));
+    const mcs = this.machinePosition();
+    if (f.mx) {
+      set(f.mx, mcs ? `X${units.len(mcs[0], 3)}` : '');
+      set(f.my, mcs ? `Y${units.len(mcs[1], 3)}` : '');
+      set(f.mz, mcs ? `Z${units.len(mcs[2], 3)}` : '');
+    }
     if (this.hudExtras && this.hudExtras.length) {
       const values = at || sim.currentPose().values || {};
       for (const L of this.hudExtras) {
@@ -2856,8 +2965,8 @@ export class App {
         if (node) set(node, (this.hudRotaries && this.hudRotaries.has(L)) ? fmt(values[L] || 0, 3) : units.len(values[L] || 0, 3));
       }
     }
-    set(f.tool, `T${sim.currentTool || '–'}`);
-    set(f.toolName, slot ? slot.built.tool.def.name : 'no tool');
+    set(f.tool, this.travelView ? 'T–' : `T${sim.currentTool || '–'}`);
+    set(f.toolName, this.travelView ? 'spindle empty' : slot ? slot.built.tool.def.name : 'no tool');
     // The feed is shown in what the reader works in, which is not
     // necessarily the F word in the file.
     set(f.feed, mv ? (mv.kind === 'rapid' ? 'G0 rapid' : `F${units.feed(mv.feed, 0)}`) : '');

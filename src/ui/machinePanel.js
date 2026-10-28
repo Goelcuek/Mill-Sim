@@ -70,6 +70,8 @@ export class MachinePanel extends Panel {
   setPage(id) {
     if (id === 'jog' && this.page !== 'jog') this.app.startJog();
     else if (id && id !== 'jog' && this.page === 'jog') this.app.stopJog();
+    // Travels parks the machine at home with the spindle empty.
+    if (id) this.app.setTravelView(id === 'limits' && this.app.activeTab === 'machine');
     super.setPage(id);
   }
 
@@ -174,11 +176,13 @@ export class MachinePanel extends Panel {
     const rows = [];
     for (const node of axes) {
       const rotary = node.kind === 'rotary';
-      const range = app.jogRange(node.letter) || { min: rotary ? -360 : -1000, max: rotary ? 360 : 1000 };
-      const lo = Math.max(range.min, rotary ? -100000 : -1e5);
-      const hi = Math.min(range.max, rotary ? 100000 : 1e5);
-      const value = Number(jog[node.letter] || 0);
-      const step = rotary ? 1 : 1;
+      // X, Y and Z read in machine coordinates — the spindle face from
+      // home — so home is 0 and the slider spans the travels as typed.
+      const reading = app.jogReading(node.letter);
+      const lo = Math.max(reading.min, -1e5);
+      const hi = Math.min(reading.max, 1e5);
+      const value = reading.value;
+      const step = 1;
 
       // A rotary reads in degrees whatever lengths are shown in.
       const say = (v) => (rotary ? `${fmt(v, 3)} °` : units.lenU(v, 3));
@@ -192,7 +196,7 @@ export class MachinePanel extends Panel {
         // Dragging redraws the machine on every frame and nothing else, so
         // it is cheap enough to follow the handle rather than the release.
         oninput: (e) => {
-          const v = app.setJog(node.letter, parseFloat(e.target.value));
+          const v = app.setJogReading(node.letter, parseFloat(e.target.value));
           // The handle goes back to where the axis actually got to. Left to
           // itself it stays under the pointer and reads a position the
           // machine never reached.
@@ -203,7 +207,7 @@ export class MachinePanel extends Panel {
         },
       });
       const nudge = (d) => {
-        const v = app.setJog(node.letter, (Number(app.jog[node.letter]) || 0) + d);
+        const v = app.setJogReading(node.letter, app.jogReading(node.letter).value + d);
         slider.value = String(v);
         readout.textContent = say(v);
         if (typed) typed.setValue(v);
@@ -213,7 +217,7 @@ export class MachinePanel extends Panel {
         step,
         unit: rotary ? '°' : 'mm',
         onChange: (v) => {
-          const next = app.setJog(node.letter, v || 0);
+          const next = app.setJogReading(node.letter, v || 0);
           slider.value = String(next);
           readout.textContent = say(next);
           showAlarm();
@@ -223,7 +227,7 @@ export class MachinePanel extends Panel {
       rows.push(el('div.jog-axis', {}, [
         el('div.jog-head', {}, [
           el(`span.axis-badge.${node.kind}`, {}, node.letter),
-          el('span.jog-name', {}, node.name),
+          el('span.jog-name', {}, reading.machine ? `${node.name} · machine` : node.name),
           readout,
         ]),
         slider,
@@ -254,10 +258,10 @@ export class MachinePanel extends Panel {
         }).join(', ')}.`)
         : null,
       actionRow([
-        { label: 'All to zero', variant: 'primary', onClick: () => { for (const n of axes) app.setJog(n.letter, 0); this.render(); } },
+        { label: 'All to home', variant: 'primary', hint: 'Every slide to machine zero, every rotary to 0', onClick: () => { for (const n of axes) app.setJogReading(n.letter, 0); this.render(); } },
         { label: 'Back to the program', onClick: () => { app.stopJog(); this.app.setPage('machine', 'axes'); } },
       ]),
-      el('div.hint', {}, 'A linear slider spans the machine\u2019s travels \u2014 the envelope on the Travels page, measured from home and solved back onto the joint — and a rotary spans its own stops from the Axes page. Change either and the sliders follow. The end of a slider is exactly where the warning starts, because both ask the same question: the gauge line, measured from home, against the envelope.'),
+      el('div.hint', {}, 'X, Y and Z read in machine coordinates: where the spindle face is, measured from home, whatever tool is in it — 0 at home, and each slider running from that axis\u2019s minimum to its maximum on the Travels page. A rotary reads its own angle and spans its stops from the Axes page. The end of a slider is exactly where the over-travel warning starts.'),
     ])];
   }
 
@@ -1096,7 +1100,7 @@ export class MachinePanel extends Panel {
       // from here — so it is one section with the envelope that hangs off
       // it rather than a lone field on another tab.
       section('Home position', [
-        el('div.hint', {}, 'Machine zero: where the tip stands with every axis at its home switch. G53 and G28 are measured from here, and so are the travels below — move it and the envelope goes with the machine rather than staying behind in the scene.'),
+        el('div.hint', {}, 'Machine zero: the point where the spindle face — the gauge line, where the holder seats — stands with every axis at its home switch. Give it as a point in the scene, measured from part zero. Machine coordinates are the spindle face measured from here, whatever tool is in it: G53, G28 and the travels below all use them. The machine is shown parked here with the spindle empty, the blue mark on the point and the box the spindle face can travel in.'),
         row(TRAVEL_AXES.map((a, i) => field(`Home ${a}`, home[i], {
           step: 10, unit: 'mm',
           onChange: (v) => {
@@ -1106,7 +1110,7 @@ export class MachinePanel extends Panel {
           },
         }))),
         actionRow([
-          { label: 'Pick a point…', variant: 'primary', hint: 'Click where the tip stands at home', onClick: () => app.pickHome() },
+          { label: 'Pick a point…', variant: 'primary', hint: 'Click where the spindle face stands at home', onClick: () => app.pickHome() },
           { label: 'Above the stock', hint: 'Over the middle of the block, clear of it', onClick: () => app.homeAboveStock() },
         ]),
         el('div.hint', {}, `${wcsKey} zero reads ${TRAVEL_AXES.map((a, i) => `${a} ${units.len(wcs[i] - home[i], 3)}`).join('  ')} ${units.lengthLabel()} in machine coordinates — the numbers that go on the setup sheet.`),
@@ -1118,7 +1122,7 @@ export class MachinePanel extends Panel {
         }),
         m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} min`, m.limits.min[i], {
           step: 10, unit: 'mm',
-          title: `How far the tip can go in −${a} from home`,
+          title: `How far the spindle face can go in −${a} from home`,
           onChange: (v) => {
             const min = [...m.limits.min];
             min[i] = v || 0;
@@ -1127,7 +1131,7 @@ export class MachinePanel extends Panel {
         }))) : null,
         m.limits.enabled ? row(TRAVEL_AXES.map((a, i) => field(`${a} max`, m.limits.max[i], {
           step: 10, unit: 'mm',
-          title: `How far the tip can go in +${a} from home`,
+          title: `How far the spindle face can go in +${a} from home`,
           onChange: (v) => {
             const max = [...m.limits.max];
             max[i] = v || 0;
@@ -1135,7 +1139,7 @@ export class MachinePanel extends Panel {
           },
         }))) : null,
         m.limits.enabled ? el('div.hint', {}, `Travel: ${TRAVEL_AXES.map((a, i) => `${a} ${units.len(m.limits.max[i] - m.limits.min[i], 1)}`).join(' · ')} ${units.lengthLabel()}.`) : null,
-        el('div.hint', {}, 'Machine coordinates, measured from home, which is how a control reads them out and a manual writes them down: at home the tip is at 0, 0, 0 and these say how far it goes from there. Each rotary has its own travel on the Axes page, and both are checked. View \u203a Show draws the envelope in the viewport.'),
+        el('div.hint', {}, 'Machine coordinates of the spindle face, measured from home, which is how a control reads them out and a manual writes them down: at home the spindle face is at 0, 0, 0 and these say how far it goes from there. A tool hangs its own length below them. Each rotary has its own travel on the Axes page, and both are checked.'),
       ]),
       section('Table and spindle', [
         checkbox('Check the table surface', m.table.enabled, (v) => app.setMachine({ table: { ...m.table, enabled: v } })),

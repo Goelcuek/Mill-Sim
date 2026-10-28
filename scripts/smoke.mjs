@@ -1588,6 +1588,46 @@ try {
     await page.evaluate(() => window.millsim.setMachine({ preset: 'vmc3', castingsCheck: true }));
   }
 
+  // ---- Travels: home is where the spindle face stands --------------------
+  //
+  // The page parks the machine at home with nothing in the spindle, so the
+  // point typed in as home is where the spindle face is drawn; and machine
+  // coordinates — the HUD's MCS line, the jog sliders — read the spindle
+  // face from there, whatever tool is loaded.
+  {
+    const tv = await page.evaluate(async () => {
+      const app = window.millsim;
+      app.setMachine({ preset: 'tableTable' });
+      await new Promise((r) => setTimeout(r, 300));
+      app.setHome([10, -20, 300]);
+      app.setPage('machine', 'limits');
+      await new Promise((r) => setTimeout(r, 300));
+      const kin = app.machineView.kinematics;
+      const face = kin.toolInWork(app.homePose().values, 0).tip;
+      const out = {
+        face: face.map((v) => +v.toFixed(3)),
+        tool: app.toolView.group.visible,
+        mark: !!app.machineView.homeMarker,
+        box: !!(app.machineView.limitBox && app.machineView.limitBox.visible),
+      };
+      app.setPage('machine', 'jog');
+      for (const L of ['X', 'Y', 'Z']) app.setJogReading(L, 0);
+      out.home = app.machinePosition().map((v) => +v.toFixed(3));
+      app.setJogReading('Z', -50);
+      out.down = app.machinePosition().map((v) => +v.toFixed(3));
+      app.setPage('machine', 'layout');
+      out.back = app.toolView.group.visible;
+      app.setHome([0, 0, 250]);
+      app.setMachine({ preset: 'vmc3' });
+      return out;
+    });
+    console.log('travels:', JSON.stringify(tv));
+    check(tv.face.join() === '10,-20,300', `the spindle face should stand on home: ${tv.face}`);
+    check(!tv.tool && tv.mark && tv.box, `Travels should show an empty spindle, the home mark and the envelope: ${JSON.stringify(tv)}`);
+    check(tv.home.join() === '0,0,0' && tv.down.join() === '0,0,-50', `machine coordinates should be the spindle face from home: ${JSON.stringify(tv)}`);
+    check(tv.back, 'leaving Travels should put the tool back');
+  }
+
   // ---- a machine built from nothing looks like nothing ------------------
   //
   // Stand-in castings are how a preset describes itself; on a machine you

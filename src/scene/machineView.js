@@ -361,24 +361,59 @@ export class MachineView {
     }
     const l = limitsInScene(this.config);
     if (!l || !l.enabled) return;
-    // The envelope is how far the *axis* goes, read at the gauge line, so
-    // the box drawn for it is that envelope with the tool hung below —
-    // which is the question anybody looking at it is asking: can this tool
-    // reach there. It moves down as a longer tool goes in, because on the
-    // machine it does.
-    const drop = this.gaugeLength || 0;
+    // The envelope is how far the axes go, read at the spindle face — the
+    // gauge line — and drawn there: the box the spindle face can be
+    // anywhere inside, whatever tool is in it. Machine coordinates are
+    // measured the same way, from home, so the box's corners are the
+    // numbers on the Travels page.
     const b = new THREE.Box3(
-      new THREE.Vector3(l.min[0], l.min[1], l.min[2] - drop),
-      new THREE.Vector3(l.max[0], l.max[1], l.max[2] - drop),
+      new THREE.Vector3(l.min[0], l.min[1], l.min[2]),
+      new THREE.Vector3(l.max[0], l.max[1], l.max[2]),
     );
     this.limitBox = new THREE.Box3Helper(b, 0x0a84ff);
     this.limitBox.material.transparent = true;
     this.limitBox.material.opacity = 0.35;
-    this.limitBox.visible = false;
+    // A rebuild — a new preset, a body hung on an axis — makes a new box,
+    // which shows if the old one was showing.
+    this.limitBox.visible = !!this.limitsShown;
     this.group.add(this.limitBox);
   }
 
-  setLimitsVisible(v) { if (this.limitBox) this.limitBox.visible = v; }
+  setLimitsVisible(v) {
+    this.limitsShown = !!v;
+    if (this.limitBox) this.limitBox.visible = this.limitsShown;
+  }
+
+  /**
+   * Mark machine zero — where the spindle face stands at home — or take
+   * the mark away with null. Drawn in the same frame as the envelope.
+   */
+  setHomeMarker(point) {
+    if (this.homeMarker) {
+      this.homeMarker.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      this.group.remove(this.homeMarker);
+      this.homeMarker = null;
+    }
+    if (!point) return;
+    const g = new THREE.Group();
+    g.name = 'machine home';
+    const ball = new THREE.Mesh(
+      new THREE.SphereGeometry(6, 20, 12),
+      new THREE.MeshBasicMaterial({ color: 0x0a84ff, depthTest: false, transparent: true, opacity: 0.9 }),
+    );
+    ball.renderOrder = 10;
+    g.add(ball);
+    const arm = 60;
+    for (const [dir, color] of [[[1, 0, 0], 0xff3b30], [[0, 1, 0], 0x34c759], [[0, 0, 1], 0x0a84ff]]) {
+      const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(dir[0] * arm, dir[1] * arm, dir[2] * arm)]);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
+      line.renderOrder = 10;
+      g.add(line);
+    }
+    g.position.set(point[0], point[1], point[2]);
+    this.homeMarker = g;
+    this.group.add(g);
+  }
 
   /**
    * How far the tip hangs below the gauge line for the tool in the

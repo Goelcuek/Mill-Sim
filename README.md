@@ -183,6 +183,18 @@ film. The starting shape cannot hold an undercut: what hides beneath the
 top surface of the model is taken to be solid. Undercuts the program cuts
 are kept.
 
+**Home, travels and machine coordinates.** Machine zero is a point you give
+— typed, or picked — where the spindle face (the gauge line, where the holder
+seats) stands with every axis at its home switch, measured from part zero.
+Machine coordinates are the spindle face measured from there, whatever tool
+is in it: at home they read 0, 0, 0; `G53`, `G28` and the travel limits all
+use them, and a tool hangs its own length below. **Machine › Travels** parks
+the machine at home with the spindle empty, marks the home point and draws
+the box the spindle face can travel in, so the numbers on the page are the
+picture on screen. The readout's **MCS** line and the **Jog** sliders read
+in the same terms: a slider runs from that axis's minimum to its maximum,
+and *All to home* is every slide at 0.
+
 **Collision checking.** Not just the cutter: the shank, the neck, the
 holder and the spindle nose are all part of the crash model, along with
 imported fixtures, the table surface, the travel limits and the machine

@@ -978,6 +978,18 @@ export class Simulator {
   }
 
   /**
+   * Where the spindle face is in machine terms right now — the point the
+   * travels are measured at, for the slides as they stand. Subtract home
+   * and it is what the control reads out as machine X, Y and Z.
+   */
+  machinePoint() {
+    const mv = this.program && this.program.moves[this.moveIndex];
+    const pose = this.currentPose();
+    if (!mv) return this.gaugePoint(pose.tip, pose.dir);
+    return this.envelopePoint(mv, pose.tip, pose.dir, this.pos, Math.max(0, Math.min(1, this.u || 0)));
+  }
+
+  /**
    * Where the machine is right now: axis positions for the rig, and the
    * tool on the part for the viewport.
    *
