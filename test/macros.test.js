@@ -264,3 +264,19 @@ test('M00 and M01 are stops, with the line they are on and what it says', () => 
   const stops = p.events.filter((e) => e.type === 'stop').map((e) => [e.code, e.line, e.moveIndex, e.comment || null]);
   assert.deepEqual(stops, [[0, 3, 1, 'TURN THE PART OVER'], [1, 5, 2, null]]);
 });
+
+test('M06 for the tool already in the spindle does nothing: no macro, no tool change', () => {
+  const opts = {
+    machineZero: [0, 0, 250],
+    parameters: { toolChangeX: -320, toolChangeY: 210 },
+    macros: [macro('M6', 'G91 G28 Z0\nG90 G53 G0 X#toolChangeX Y#toolChangeY')],
+  };
+  const p = run(['G90 G21 G54', 'T4 M06', 'G0 X10 Y10 Z5', 'T4 M06', 'G0 Z2', 'T5 M6', 'T5', 'M6', 'M30'], opts);
+  assert.deepEqual(errs(p), []);
+  assert.deepEqual(p.toolChanges.map((c) => c.tool), [4, 5], 'T4 again and T5 again are not changes');
+  assert.equal(p.moves.filter((m) => m.source && m.toolChange).length, 4, 'the macro ran twice, not four times');
+  assert.ok(p.events.some((e) => /T4 is already in the spindle/.test(e.text)));
+  // The moves of the block with the repeated M6 are not let past the travel limits.
+  const again = p.moves.find((m) => m.line === 5);
+  assert.ok(!again.toolChange);
+});

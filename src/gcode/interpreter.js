@@ -339,6 +339,22 @@ function dist3(a, b) {
   return Math.sqrt(dx * dx + dy * dy + dz * dz);
 }
 
+/** T7 or T="FACE MILL", as the program wrote it. */
+const toolLabel = (tool) => (typeof tool === 'string' ? `T="${tool}"` : `T${tool}`);
+
+/**
+ * Whether a tool asked for is the one already in the spindle: the same
+ * pot, or the same name however it is capitalised. No tool yet is never
+ * the same as one asked for.
+ */
+function sameToolAs(asked, current) {
+  if (!asked || !current) return false;
+  if (typeof asked === 'string' || typeof current === 'string') {
+    return String(asked).trim().toLowerCase() === String(current).trim().toLowerCase();
+  }
+  return asked === current;
+}
+
 /**
  * Flatten an arc into a polyline.
  * Returns points as a flat array [x,y,z, x,y,z, ...] including both ends.
@@ -1515,8 +1531,6 @@ export function interpret(text, config = {}) {
       }
     }
 
-    m6Block = m.includes(6);
-
     // A control that writes its pot number after a decimal point — T0.07,
     // T.05, T0.7 are pots 7, 5 and 7 — means the same thing by it as T7
     // does elsewhere. Read from the digits rather than from the value: 0.7
@@ -1532,6 +1546,11 @@ export function interpret(text, config = {}) {
         t = whole > 0 ? whole : Number(parts[2] || 0);
       }
     }
+
+    // M6 for the tool already in the spindle: the control has nothing to
+    // change, so its change macro does not run and the machine stays put.
+    const sameTool = m.includes(6) && sameToolAs(t !== undefined ? t : st.pendingTool, st.tool);
+    m6Block = m.includes(6) && !sameTool;
 
     // ---- Non-modal and modal G codes -------------------------------------
     const motionBefore = st.motion;
@@ -1758,6 +1777,10 @@ export function interpret(text, config = {}) {
       // What this machine does at this code, if its builder said. It runs
       // after the block, so the control has already recorded the tool
       // change or the spindle state the macro is there to carry out.
+      if (code === 6 && sameTool) {
+        events.push({ line: b.line, type: 'cycle', moveIndex: moves.length, text: `${toolLabel(st.tool)} is already in the spindle: no tool change` });
+        continue;
+      }
       const mac = macroByCode.get(`M${code}`);
       if (mac && !macroRunning(`M${code}`)) {
         pendingMacros.push({
@@ -1802,7 +1825,7 @@ export function interpret(text, config = {}) {
           if (!next) { warn(b.line, 'M06 without a T word.', 'error'); break; }
           st.tool = next;
           toolChanges.push({ line: b.line, tool: next, moveIndex: moves.length });
-          events.push({ line: b.line, type: 'toolchange', moveIndex: moves.length, tool: next, text: `Tool change ${typeof next === 'string' ? `T="${next}"` : `T${next}`}` });
+          events.push({ line: b.line, type: 'toolchange', moveIndex: moves.length, tool: next, text: `Tool change ${toolLabel(next)}` });
           break;
         }
         case 7: st.coolant = 'mist'; break;

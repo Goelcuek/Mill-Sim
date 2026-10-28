@@ -789,7 +789,8 @@ comments, `/` block delete
   size) times the speed; `CYCLE86` lifts off the wall by `RPA/RPO/RPAP`.
   In a swivelled plane they drill down the plane's own Z.
 - *Tools* — `T` comes before `M6`, by number or by name (`T="10 flat"`),
-  and `M6` alone changes to it. A name is matched against the assemblies'
+  and `M6` alone changes to it. `M6` for the tool already in the spindle
+  changes nothing: the change macro does not run and the machine stays put. A name is matched against the assemblies'
   names, with or without their `T1 · ` in front, and their tools' names.
 - *Fixed point* — `G75 FP=1 Z1` sends the slides it names home at rapid,
   straight there, whatever the head or table is turned to and whatever

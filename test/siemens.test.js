@@ -337,3 +337,8 @@ test('AR= opens the arc by an angle; I=AC() puts the centre in work coordinates'
   assert.deepEqual(arc.center.slice(0, 2), [20, 10]);
   assert.deepEqual(errors(ac), []);
 });
+
+test('M6 for the named tool already in the spindle does nothing', () => {
+  const p = run('T="FACE MILL"\nM6\nG0 X10\nT="face mill"\nM6\nT="DRILL"\nM6\nM30');
+  assert.deepEqual(p.toolChanges.map((c) => c.tool), ['FACE MILL', 'DRILL']);
+});
