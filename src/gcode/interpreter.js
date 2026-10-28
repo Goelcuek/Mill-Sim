@@ -578,9 +578,70 @@ export function interpret(text, config = {}) {
   };
   const namedTarget = (name) => (name === null ? undefined : byName.get(nameKey(name)));
 
+  /**
+   * A work offset that turns a rotary — G55 C60 — turns the part and not
+   * the coordinates the program is written in. Without TCP that is so
+   * already, X Y Z being the slides. With it, a point is a point on the
+   * part, so it is carried round by the offset's turn: the same place in
+   * the machine as it would be with the rotaries at their programmed
+   * angles, which on the part is 60° further round. Six slots from one
+   * programmed slot and six offsets, as on the machine.
+   *
+   * @returns {null | ((p:number[], u:number) => number[])}
+   */
+  const turnFor = (move) => {
+    const kin = cfg.kinematics;
+    const off = cfg.wcsRotary && cfg.wcsRotary[move.wcs];
+    if (!move.tcp || !kin || !off || typeof kin.solve !== 'function') return null;
+    const letters = Object.keys(off).filter((L) => Number(off[L]));
+    if (!letters.length) return null;
+    const at = (rot, programmed) => {
+      const values = { ...rot, X: 0, Y: 0, Z: 0 };
+      if (programmed) for (const L of letters) values[L] = (Number(values[L]) || 0) - Number(off[L]);
+      kin.solve(values);
+      return m4.copy(m4.create(), kin.matrixOf(kin.workNode));
+    };
+    // Machine angle u of the way along, programmed the same less the offset.
+    const between = (u) => {
+      const r = {};
+      for (const L of Object.keys({ ...move.rotFrom, ...move.rotTo })) {
+        const a = Number((move.rotFrom || {})[L]) || 0;
+        const b = Number((move.rotTo || {})[L]) || 0;
+        r[L] = a + (b - a) * u;
+      }
+      return r;
+    };
+    const turnAt = (u) => {
+      const rot = between(u);
+      return m4.multiply(m4.create(), m4.invertRigid(m4.create(), at(rot, false)), at(rot, true));
+    };
+    const t0 = turnAt(0);
+    const t1 = turnAt(1);
+    const same = t0.every((v, i) => Math.abs(v - t1[i]) < 1e-12);
+    const o = kin.tableOffset || [0, 0, 0];
+    return (p, u) => {
+      const M = same ? t0 : turnAt(u);
+      const q = m4.transformPoint([0, 0, 0], M, [p[0] + o[0], p[1] + o[1], p[2] + o[2]]);
+      return [q[0] - o[0], q[1] - o[1], q[2] - o[2]];
+    };
+  };
+
   const push = (move) => {
     move.i = moves.length;
     if (curSrc) move.source = curSrc;
+    const turn = turnFor(move);
+    if (turn) {
+      move.from = turn(move.from, 0);
+      move.to = turn(move.to, 1);
+      if (move.center) move.center = turn(move.center, 0.5);
+      if (move.path) {
+        const n = move.path.length / 3;
+        for (let i = 0; i < n; i++) {
+          const q = turn([move.path[i * 3], move.path[i * 3 + 1], move.path[i * 3 + 2]], n > 1 ? i / (n - 1) : 1);
+          move.path[i * 3] = q[0]; move.path[i * 3 + 1] = q[1]; move.path[i * 3 + 2] = q[2];
+        }
+      }
+    }
     // A tool change: the M6 macro's moves, and any on the block with M6.
     // The changer usually sits past the travels a program may use, so the
     // simulator holds these to the machine's reach, not to the envelope.
@@ -665,10 +726,12 @@ export function interpret(text, config = {}) {
     const after = tcpNow();
     const kin = cfg.kinematics;
     if (!!before === !!after || !kin || typeof kin.linearsForTip !== 'function') return;
-    if (!turning.some((L) => Math.abs(st.rot[L] || 0) > 1e-9)) return;
+    if (!turning.some((L) => Math.abs((st.rot[L] || 0) - rotaryOffset(L)) > 1e-9)) return;
     const g = cfg.gaugeLength || 0;
+    // Under TCP a point is counted with the rotaries at their programmed
+    // angles — the work offset's turn of them left out; see turnFor.
     const rot = {};
-    for (const L of turning) rot[L] = st.rot[L] || 0;
+    for (const L of turning) rot[L] = (st.rot[L] || 0) - rotaryOffset(L);
     const zero = {};
     for (const L of turning) zero[L] = 0;
     const axes = after

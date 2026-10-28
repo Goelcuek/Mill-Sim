@@ -899,3 +899,29 @@ test('a crash stops the run where it is found, and going on passes over the rest
   for (let n = 0; n < 1000 && !sim.finished && !sim.halted; n++) sim.run(Infinity, 50);
   assert.equal(sim.halted && sim.halted.line, 4);
 });
+
+test('a work offset that turns C turns the part, not the program: six slots from one, under TRAORI too', () => {
+  const kin = buildPreset('tableTable');
+  const slots = [0, 1, 2, 3, 4, 5].map((i) => `G${54 + i}`);
+  const wcsRotary = Object.fromEntries(slots.map((w, i) => [w, { C: 60 * i }]));
+  const body = (w) => [w, 'G0 A0 C0', 'G1 X50 Y0 Z0 F500'];
+  for (const tcp of [true, false]) {
+    const src = ['G90 G17', tcp ? 'TRAORI' : 'TRAFOOF', ...slots.flatMap(body), 'M30'].join('\n');
+    const p = interpret(src, { kinematics: kin, controller: { flavour: 'siemens', dialect: 'siemens' }, wcsRotary });
+    const cuts = p.moves.filter((m) => m.kind === 'feed');
+    assert.equal(cuts.length, 6);
+    cuts.forEach((m, i) => {
+      // The machine goes to the same place every time, the table 60° on…
+      // (a TCP move is a point on the part; one without is the slides, as
+      // the tip would be with the rotaries at zero).
+      const lin = kin.linearsForTip(m.to, m.tcp ? m.rotTo : { A: 0, C: 0 }, 0);
+      near(lin.X, 50, 1e-6, `${slots[i]} X`);
+      near(lin.Y, 0, 1e-6, `${slots[i]} Y`);
+      near(m.rotTo.C, 60 * i, 1e-9, `${slots[i]} C`);
+      // …so on the part it is the next slot round.
+      const onPart = kin.toolInWork({ ...m.rotTo, ...lin }, 0).tip;
+      const angle = (Math.atan2(onPart[1], onPart[0]) * 180) / Math.PI;
+      near(((angle + 60 * i + 540) % 360) - 180, 0, 1e-6, `${slots[i]} on the part, ${tcp ? 'TRAORI' : 'no TCP'}`);
+    });
+  }
+});

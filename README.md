@@ -558,7 +558,10 @@ where it should go:
   rotaries** — A and C, B and C, whatever the machine has. It is added to
   every rotary position the program gives in that offset, as the control
   does (G54 C12.5: `C0` is 12.5 on the dial), and not to a move by an
-  amount or one in machine coordinates.
+  amount or one in machine coordinates. The offset turns the part, not the
+  program: X Y Z go where they would with the rotaries at their programmed
+  angles, with TRAORI on or off, so six offsets 60° apart cut six slots
+  from one programmed slot.
 - **Set by bore centre** takes three points on a bore's wall and puts the
   work origin on its centre: X and Y for a bore along Z, with Z left where
   it was, as a probe would; all three for a bore on a tilted face.
