@@ -352,7 +352,17 @@ try {
     await page.waitForTimeout(300);
     const canvas = await page.$('canvas');
     const box = await canvas.boundingBox();
-    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    // The middle of the stock's top, wherever the view has put it — with
+    // the whole machine drawn, that is not the middle of the window.
+    const onStock = await page.evaluate(() => {
+      const app = window.millsim;
+      const bb = app.stockView.boundingBox();
+      const c = bb.getCenter(bb.min.clone());
+      c.z = bb.max.z;
+      c.project(app.viewer.camera);
+      return [c.x, c.y];
+    });
+    await page.mouse.click(box.x + ((onStock[0] + 1) / 2) * box.width, box.y + ((1 - onStock[1]) / 2) * box.height);
     await page.waitForTimeout(400);
     check(await page.evaluate(() => window.millsim.stockGizmo.attached),
       'clicking the stock did not put the handles on it');

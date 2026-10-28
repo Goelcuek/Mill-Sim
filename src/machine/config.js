@@ -114,7 +114,8 @@ export const DEFAULT_MACHINE = {
    * on this machine can call them.
    */
   subprograms: [],
-  mode: 'part',
+  /** What the view draws: the whole machine, moving as it does, or the part alone. */
+  mode: 'machine',
   visible: true,
 };
 
