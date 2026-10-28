@@ -707,6 +707,15 @@ sits on is the entire difference between the three families:
 | **head-table** | one on each — the classic 5-axis conversion of a VMC |
 | **table-table** | both on the table path — a trunnion |
 
+Each joint slides along, or turns about, a direction that is any vector in
+the frame of what carries it — not only ±X, ±Y or ±Z. Machine › Axes keeps
+the six as quick picks and takes **Custom vector** as three components: a
+nutating head's B, 45° between Y and Z, is `0 1 1`. The vector is kept as
+typed and used as its unit vector, so a slide at 45° still moves a
+millimetre along itself for every millimetre commanded, and every solve
+downstream — TCP, CYCLE800, tool vectors, collisions — goes through the
+same chain and needs nothing special for it.
+
 There is no separate code for the three, only different trees. What the
 simulator asks for is the tool expressed in the workpiece's frame,
 `inverse(workChain) · toolChain`, which gives a tip and a direction and

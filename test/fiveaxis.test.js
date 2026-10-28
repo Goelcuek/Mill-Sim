@@ -930,3 +930,62 @@ test('a work offset that turns C turns the part, not the program: six slots from
     });
   }
 });
+
+test('an axis that lies along no machine axis: a 45° nutating B head, and a slide at 45°', () => {
+  // The head-table machine with its B turned to lie 45° between Y and Z,
+  // as on a nutating head. Written as typed, 0 1 1, not as a unit vector.
+  const nutating = () => {
+    const k = buildPreset('headTable');
+    k.byId.get('b').axis = [0, 1, 1];
+    k.rebuild();
+    return k;
+  };
+  const k = nutating();
+  const n = [0, Math.SQRT1_2, Math.SQRT1_2];
+  // Rodrigues: the tool's (0, 0, 1) turned by B about n.
+  const turned = (deg) => {
+    const t = (deg * Math.PI) / 180;
+    const v = [0, 0, 1];
+    const d = n[0] * v[0] + n[1] * v[1] + n[2] * v[2];
+    const c = [n[1] * v[2] - n[2] * v[1], n[2] * v[0] - n[0] * v[2], n[0] * v[1] - n[1] * v[0]];
+    return v.map((x, i) => x * Math.cos(t) + c[i] * Math.sin(t) + n[i] * d * (1 - Math.cos(t)));
+  };
+  for (const b of [0, 45, 90, 180, -120]) {
+    const got = k.toolAxis({ B: b }, 0);
+    const want = turned(b);
+    for (let i = 0; i < 3; i++) assert.ok(Math.abs(got[i] - want[i]) < 1e-9, `B${b}: ${got} vs ${want}`);
+  }
+  // Half a turn lays the tool flat: 45° each way makes 90°.
+  const flat = k.toolAxis({ B: 180 }, 0);
+  assert.ok(Math.abs(flat[2]) < 1e-9 && Math.abs(Math.abs(flat[1]) - 1) < 1e-9, `B180 lies flat: ${flat}`);
+
+  // The solvers find poses for it like any other machine.
+  const want = [0.5, 0.5, Math.SQRT1_2];
+  const sol = k.rotariesForToolAxis(want, {}, 0);
+  assert.ok(sol, 'a pose for a leaned tool');
+  const at = k.toolAxis(sol, 0);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(at[i] - want[i]) < 1e-8, `solved ${JSON.stringify(sol)}: ${at}`);
+  // A CYCLE800 plane 60° about X: the head swings to put the tool on it.
+  const p = interpret('G0 X0 Y0 Z50\nCYCLE800(0,"",0,57,0,0,0,60,0,0,0,0,0,1)\nG1 Z10 F500\nM30',
+    { kinematics: k, controller: { flavour: 'siemens', dialect: 'siemens' } });
+  assert.deepEqual(p.warnings.filter((w) => w.severity === 'error').map((w) => w.message), []);
+  const swung = p.moves.filter((m) => m.line === 2).pop().rotTo;
+  const tool = k.toolAxis(swung, 0);
+  const plane = [0, -Math.sin(Math.PI / 3), Math.cos(Math.PI / 3)];
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(tool[i] - plane[i]) < 1e-8, `CYCLE800 tool ${tool} vs plane ${plane}`);
+
+  // A slide at 45° goes a millimetre along its own line for each one
+  // commanded, however its direction was written.
+  const slide = new Kinematics({
+    name: 'slant', toolNode: 'w', workNode: 'base',
+    nodes: [
+      { id: 'base', kind: 'carrier', parent: null, origin: [0, 0, 0] },
+      { id: 'w', letter: 'W', kind: 'linear', axis: [1, 0, 1], parent: 'base', origin: [0, 0, 0] },
+    ],
+  });
+  const tip = slide.toolInWork({ W: 10 }, 0).tip;
+  const home = slide.toolInWork({}, 0).tip;
+  const moved = tip.map((x, i) => x - home[i]);
+  assert.ok(Math.abs(Math.hypot(...moved) - 10) < 1e-9, `W10 moves 10 mm: ${moved}`);
+  assert.ok(Math.abs(moved[0] - moved[2]) < 1e-9 && Math.abs(moved[1]) < 1e-9, `along 1 0 1: ${moved}`);
+});

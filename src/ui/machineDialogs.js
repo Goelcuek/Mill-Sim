@@ -8,6 +8,7 @@
 
 import { el, field, select, row, pickFile } from './dom.js';
 import { Dialog } from './dialog.js';
+import { directionField } from './directionField.js';
 import { AXIS_LETTERS } from '../machine/kinematics.js';
 import { PRESETS } from '../machine/presets.js';
 import { CONTROLS, DIALECTS, FLAVOUR_DIALECT } from '../gcode/dialects.js';
@@ -18,14 +19,6 @@ const KINDS = [
   { value: 'carrier', label: 'Carrier — a bracket that does not move' },
 ];
 
-const DIRECTIONS = [
-  { value: '1,0,0', label: '+X' },
-  { value: '-1,0,0', label: '−X' },
-  { value: '0,1,0', label: '+Y' },
-  { value: '0,-1,0', label: '−Y' },
-  { value: '0,0,1', label: '+Z' },
-  { value: '0,0,-1', label: '−Z' },
-];
 
 /**
  * @param {object} app
@@ -60,9 +53,8 @@ export function openAxisDialog(app, panel) {
   const drawTravel = () => {
     const unit = spec.kind === 'rotary' ? '°' : 'mm';
     travel.replaceChildren(
+      directionField(spec.axis, (v) => { spec.axis = v; }),
       row([
-        select('Direction', DIRECTIONS, `${spec.axis[0]},${spec.axis[1]},${spec.axis[2]}`,
-          (v) => { spec.axis = v.split(',').map(Number); }),
         field('Travel from', spec.limits.min, { unit, step: 10, onChange: (v) => { spec.limits.min = Number(v) || 0; } }),
         field('to', spec.limits.max, { unit, step: 10, onChange: (v) => { spec.limits.max = Number(v) || 0; } }),
       ]),

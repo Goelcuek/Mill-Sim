@@ -6,6 +6,7 @@
 // casting starts from nothing, so each gets a window.
 
 import { el, field, select, checkbox, button, row, section, clear, pickFile, download } from './dom.js';
+import { directionField, directionLabel } from './directionField.js';
 import { Panel, addBar, actionRow } from './panel.js';
 import { icon } from './icons.js';
 import { openAxisDialog, openBodyDialog, openNewMachineDialog } from './machineDialogs.js';
@@ -34,18 +35,8 @@ const BRANCH_LABEL = {
   other: 'detached',
 };
 
-const DIRECTIONS = [
-  { value: '1,0,0', label: '+X' },
-  { value: '-1,0,0', label: '−X' },
-  { value: '0,1,0', label: '+Y' },
-  { value: '0,-1,0', label: '−Y' },
-  { value: '0,0,1', label: '+Z' },
-  { value: '0,0,-1', label: '−Z' },
-];
-
 const TRAVEL_AXES = ['X', 'Y', 'Z'];
 
-const dirKey = (v) => `${v[0]},${v[1]},${v[2]}`;
 
 export class MachinePanel extends Panel {
   constructor(app) {
@@ -347,7 +338,7 @@ export class MachinePanel extends Panel {
         : el('span.axis-badge.carrier', {}, '•');
 
       const sub = [];
-      sub.push(node.kind === 'carrier' ? 'carrier' : `${node.kind} · ${dirLabel(node.axis)}`);
+      sub.push(node.kind === 'carrier' ? 'carrier' : `${node.kind} · ${directionLabel(node.axis)}`);
       sub.push(BRANCH_LABEL[branch] || branch);
       if (master) sub.push(`slaved to ${master.letter || master.name}${node.slaveRatio !== 1 ? ` × ${fmt(node.slaveRatio, 3)}` : ''}`);
       if (part) sub.push(part.name);
@@ -501,10 +492,8 @@ export class MachinePanel extends Panel {
     }
 
     if (node.kind !== 'carrier') {
-      body.push(row([
-        select('Direction', DIRECTIONS, dirKey(node.axis), (v) => set({ axis: v.split(',').map(Number) })),
-        checkbox('Reverse', node.invert, (v) => set({ invert: v })),
-      ]));
+      body.push(directionField(node.axis, (v) => set({ axis: v })));
+      body.push(row([checkbox('Reverse', node.invert, (v) => set({ invert: v }))]));
       // A slide along X, Y or Z is the thing the Travels page describes, so
       // its stops are read from there rather than typed again here. Two
       // places to say the same number is two numbers that disagree, and it
@@ -1177,7 +1166,3 @@ function emptyChainNote(kin, app) {
   return `Off: ${empty} of the ${kin.order.length} places in this chain ${empty === 1 ? 'has' : 'have'} no body yet, and ${empty === 1 ? 'it is' : 'they are'} drawn as nothing. Bring the castings in on Assembly.`;
 }
 
-function dirLabel(v) {
-  const found = DIRECTIONS.find((d) => d.value === dirKey(v));
-  return found ? found.label : units.triple(v, 2);
-}

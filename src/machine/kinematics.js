@@ -70,7 +70,10 @@ export function makeAxis(patch = {}) {
     name: patch.name || (letter ? `${letter} axis` : 'Carrier'),
     letter,
     kind: patch.kind || (spec ? spec.kind : 'carrier'),
-    axis: patch.axis || (spec ? spec.axis.slice() : [0, 0, 1]),
+    // Any direction, not only along X, Y or Z: a vector in the frame of
+    // whatever carries the axis, unit or not. One of zero length has no
+    // direction at all and takes the letter's own.
+    axis: patch.axis && Math.hypot(...patch.axis) > 1e-12 ? patch.axis.map(Number) : (spec ? spec.axis.slice() : [0, 0, 1]),
     origin: patch.origin || [0, 0, 0],
     parent: patch.parent ?? null,
     limits: patch.limits || { min: -1e6, max: 1e6 },
@@ -311,7 +314,9 @@ export class Kinematics {
       m4.fromTranslation(t, node.origin);
 
       if (node.kind === 'linear') {
-        const v = this.valueOf(node, values);
+        // The direction is kept as it was typed — 1, 0, 1 for 45° — so a
+        // millimetre on the axis is a millimetre along its unit vector.
+        const v = this.valueOf(node, values) / (Math.hypot(node.axis[0], node.axis[1], node.axis[2]) || 1);
         m4.fromTranslation(j, [node.axis[0] * v, node.axis[1] * v, node.axis[2] * v]);
         m4.multiply(local, t, j);
       } else if (node.kind === 'rotary') {

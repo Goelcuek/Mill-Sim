@@ -335,15 +335,17 @@ export class MachineView {
       // clearly pointing the way the axis moves.
       const len = Math.max(node.limits.max - node.limits.min, 120) * 0.9;
       const gap = Math.max(Math.min(tw, td) * 0.34, 90);
-      const a = node.axis;
-      const along = Math.abs(a[0]) > 0.5 ? 0 : Math.abs(a[1]) > 0.5 ? 1 : 2;
-      const across = along === 2 ? 0 : 1;
+      // Laid along the axis's own direction, whatever that is, and spread
+      // across it in the most nearly horizontal way that is square to it.
+      const a = new THREE.Vector3(...node.axis).normalize();
+      const across = new THREE.Vector3(0, 0, 1).cross(a);
+      if (across.lengthSq() < 1e-6) across.set(1, 0, 0);
+      across.normalize();
+      const turn = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), a);
       for (const sign of [-1, 1]) {
-        const dim = [40, 40, 40];
-        dim[along] = len;
-        const rail = add(box(dim[0], dim[1], dim[2], this.tone('slide')));
-        rail.position.set(0, 0, -20);
-        rail.position.setComponent(across, (sign * gap) / 2);
+        const rail = add(box(len, 40, 40, this.tone('slide')));
+        rail.quaternion.copy(turn);
+        rail.position.set(0, 0, -20).addScaledVector(across, (sign * gap) / 2);
         rail.name = `${node.letter || ''} way`;
       }
     } else {
