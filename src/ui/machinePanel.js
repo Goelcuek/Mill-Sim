@@ -1138,6 +1138,9 @@ export class MachinePanel extends Panel {
             app.setMachine({ limits: { ...m.limits, max } });
           },
         }))) : null,
+        m.limits.enabled ? checkbox('Tool changes may go past them', m.toolChangeFree !== false, (v) => app.setMachine({ toolChangeFree: v }), {
+          title: 'The M6 macro, and any move on a block with M6, is not held to the travels: the changer sits in travel the program may not use. Collisions are still checked.',
+        }) : null,
         m.limits.enabled ? el('div.hint', {}, `Travel: ${TRAVEL_AXES.map((a, i) => `${a} ${units.len(m.limits.max[i] - m.limits.min[i], 1)}`).join(' · ')} ${units.lengthLabel()}.`) : null,
         el('div.hint', {}, 'Machine coordinates of the spindle face, measured from home, which is how a control reads them out and a manual writes them down: at home the spindle face is at 0, 0, 0 and these say how far it goes from there. A tool hangs its own length below them. Each rotary has its own travel on the Axes page, and both are checked.'),
       ]),

@@ -553,6 +553,10 @@ export function interpret(text, config = {}) {
   const push = (move) => {
     move.i = moves.length;
     if (curSrc) move.source = curSrc;
+    // A tool change: the M6 macro's moves, and any on the block with M6.
+    // The changer usually sits past the travels a program may use, so the
+    // simulator holds these to the machine's reach, not to the envelope.
+    if (m6Block || callStack.some((f) => f.macro === 'M6')) move.toolChange = true;
     moves.push(move);
     // Every move ends where the rotaries now are, so the next one starts
     // there. Leaving this to the blocks that carry an A/B/C word would make
@@ -1063,6 +1067,8 @@ export function interpret(text, config = {}) {
   };
 
   const callStack = [];
+  /** Is the block being read a tool change? See push. */
+  let m6Block = false;
   let pc = 0;
   let executed = 0;
   let ended = false;
@@ -1199,6 +1205,7 @@ export function interpret(text, config = {}) {
     const b = blocks[pc];
     pc++;
     curSrc = b.src || null;
+    m6Block = false;
     // Single block stops after every block that does something — a move,
     // a spindle start, an assignment — so each one goes in the record. So
     // does a block the reader could not make sense of: the control would
@@ -1489,6 +1496,8 @@ export function interpret(text, config = {}) {
         default: break;
       }
     }
+
+    m6Block = m.includes(6);
 
     // A control that writes its pot number after a decimal point — T0.07,
     // T.05, T0.7 are pots 7, 5 and 7 — means the same thing by it as T7

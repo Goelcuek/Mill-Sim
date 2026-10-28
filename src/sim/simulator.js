@@ -643,6 +643,15 @@ export class Simulator {
     return worst;
   }
 
+  /**
+   * Are the travels the rule for this move? Not during a tool change, by
+   * default: a machine's changer sits past what a program may use — Z
+   * above its top, X out to the carousel — and the macro goes there.
+   */
+  limitsApply(mv) {
+    return !(mv && mv.toolChange && !(this.machine && this.machine.toolChangeFree === false));
+  }
+
   /** Is the castings check on, with anything to check? */
   get castingsOn() {
     return !!(this.kinematics && this.castings.length && !(this.machine && this.machine.castingsCheck === false));
@@ -1356,7 +1365,9 @@ export class Simulator {
         // is the gauge line, a gauge length up the tool from the tip, which
         // is the same point G53 reads: an envelope is how far the axis goes,
         // and it does not move when a longer tool goes in the spindle.
-        const lim = checkLimits(this.envelopePoint(mv, tip, dir, point, u), limitsInScene(this.machine), homeOf(this.machine));
+        const lim = this.limitsApply(mv)
+          ? checkLimits(this.envelopePoint(mv, tip, dir, point, u), limitsInScene(this.machine), homeOf(this.machine))
+          : null;
         if (lim) {
           this.report('limit', {
             line: mv.line,
@@ -1372,7 +1383,7 @@ export class Simulator {
     // C400 or a trunnion past its stop is just as stopped as one that runs
     // the table off its ways. Reading them straight off the move costs
     // nothing, so it is checked on every chunk.
-    if (this.fiveAxis) {
+    if (this.fiveAxis && this.limitsApply(mv)) {
       const rot = this.rotaryAt(mv, u1);
       for (const n of this.kinematics.extras()) {
         const v = rot[n.letter];

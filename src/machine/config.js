@@ -19,7 +19,7 @@ import { defaultMacros, DEFAULT_PARAMETERS } from './macros.js';
 export const MACHINE_SETTINGS = [
   'home', 'tableSize', 'tableZ', 'spindleDiameter', 'spindleLength',
   'limits', 'table', 'rapidRate', 'rotaryRapid', 'maxFeed', 'proxies', 'accent',
-  'castingsCheck',
+  'castingsCheck', 'toolChangeFree',
 ];
 
 export const DEFAULT_MACHINE = {
@@ -55,6 +55,11 @@ export const DEFAULT_MACHINE = {
    * MachineView.collisionBodies.
    */
   castingsCheck: true,
+  /**
+   * A tool change may go past the travel limits: the changer is reached
+   * with travel a program is not allowed. Collisions are still checked.
+   */
+  toolChangeFree: true,
   rapidRate: 15000,
   /** How fast the rotaries turn at rapid, °/min — their top speed. */
   rotaryRapid: 7200,

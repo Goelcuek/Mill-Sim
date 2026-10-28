@@ -806,3 +806,27 @@ test('the head is checked against the machine: the trunnion ram swung into its t
   // Upright and high, nothing.
   assert.deepEqual(run('G90 G0 X0 Y0 Z150\nX100 Y50\nM30').map((c) => c.message), []);
 });
+
+test('a tool change may use travel the program may not: the M6 macro is not held to the envelope', () => {
+  const kin = buildPreset('vmc3');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  // Z max is +80 from home: the changer is 100 up.
+  const macros = [{ id: 'm6', code: 'M6', enabled: true, body: 'G53 G0 Z100\nG53 G0 Z0' }];
+  const run = (code, machine = DEFAULT_MACHINE) => {
+    const p = interpret(code, { kinematics: kin, macros, machineZero: [0, 0, 250], gaugeLength: tool.gaugeLength });
+    const sim = new Simulator();
+    sim.load({ program: p, stock: null, slots: new Map([[1, slot]]), fallbackSlot: slot, kinematics: kin, machine });
+    sim.runAll();
+    return { p, limits: sim.collisions.filter((c) => c.type === 'limit') };
+  };
+  const change = run('G90 G0 X0 Y0 Z50\nT1 M6\nG0 X10\nM30');
+  assert.ok(change.p.moves.some((m) => m.toolChange), 'the macro\'s moves are marked as the tool change');
+  assert.deepEqual(change.limits.map((c) => c.message), [], 'the changer is past Z max, and that is allowed');
+  const program = run('G90 G0 X0 Y0 Z50\nG53 G0 Z100\nM30');
+  assert.equal(program.limits.length, 1, 'the same move in the program is over travel');
+  const strict = run('G90 G0 X0 Y0 Z50\nT1 M6\nG0 X10\nM30', { ...DEFAULT_MACHINE, toolChangeFree: false });
+  // Both of the macro's moves, up to the changer and back down from it.
+  assert.equal(strict.limits.length, 2, 'with the switch off, the tool change is held to the travels too');
+});

@@ -191,7 +191,11 @@ is in it: at home they read 0, 0, 0; `G53`, `G28` and the travel limits all
 use them, and a tool hangs its own length below. **Machine › Travels** parks
 the machine at home with the spindle empty, marks the home point and draws
 the box the spindle face can travel in, so the numbers on the page are the
-picture on screen. The readout's **MCS** line and the **Jog** sliders read
+picture on screen. A tool change may go past the travels — the changer
+sits in travel a program is not allowed — so the M6 macro's moves, and any
+move on a block with `M6`, are not held to them (collisions still are);
+**Tool changes may go past them** on the same page turns that off. The
+readout's **MCS** line and the **Jog** sliders read
 in the same terms: a slider runs from that axis's minimum to its maximum,
 and *All to home* is every slide at 0.
 
