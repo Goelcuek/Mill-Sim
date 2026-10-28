@@ -76,6 +76,27 @@ function depthAlong(inside, v) {
   return 0;
 }
 
+/**
+ * The part of a convex [r, z] outline on one side of the axis: r ≥ 0 for
+ * side 1, r ≤ 0 for side −1. Still convex, and still [r, z].
+ */
+function clipHalf(poly, side) {
+  const out = [];
+  const m = poly.length;
+  for (let k = 0; k < m; k++) {
+    const p = poly[k];
+    const q = poly[(k + 1) % m];
+    const sp = side * p[0];
+    const sq = side * q[0];
+    if (sp >= 0) out.push(p);
+    if ((sp >= 0) !== (sq >= 0) && sp !== sq) {
+      const t = sp / (sp - sq);
+      out.push([0, p[1] + (q[1] - p[1]) * t]);
+    }
+  }
+  return out;
+}
+
 /** A cell size that keeps the three grids within the line budget. */
 function cellFor(size, requested, maxRays) {
   let h = Math.max(requested || 0.4, 0.02);
@@ -1012,6 +1033,220 @@ export class TriDexelStock extends Stock {
       lo[b] = ob + ti0 * db; hi[b] = ob + (ti1 + 1) * db;
       lo[c] = oc + tj0 * dc; hi[c] = oc + (tj1 + 1) * dc;
       this.markDirty3(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+    }
+    return total;
+  }
+
+  // ---- turning -----------------------------------------------------------
+
+  /**
+   * Remove an outline turned round an axis: what a turning tool takes from
+   * a part spinning under it.
+   *
+   * The tool is fixed and the part turns, so everything the tool's outline
+   * passes through, at any angle round the axis, is gone. `poly` is that
+   * outline — the insert swept along its move — as [r, z] pairs: r how far
+   * from the axis, z how far along it from `axis.point`. It has to be
+   * convex, which an insert and its sweep along a straight line are.
+   *
+   * Every line is solved exactly. Along a line, z moves in proportion and
+   * r² is a quadratic, so where it crosses each edge of the outline is a
+   * quadratic's roots, and between two crossings it is inside throughout or
+   * not at all. An outline reaching across the axis — facing past centre —
+   * is the part on each side turned round on its own.
+   *
+   * @param {number[][]} poly convex, [r, z] pairs, either way round
+   * @param {{point:number[], dir:number[]}} axis
+   * @param {number} [toolIndex]
+   * @param {{target?:object, tolerance?:number}} [opts] as carveLinear
+   * @returns {{volume:number, gouge:null, gouge3:null|object}}
+   */
+  carveRevolved(poly, axis, toolIndex = 0, opts = {}) {
+    if (!poly || poly.length < 3) return { volume: 0, gouge: null, gouge3: null };
+    // Across the axis: each side on its own, the far one folded over.
+    const near = clipHalf(poly, 1);
+    const far = clipHalf(poly, -1).map(([r, z]) => [-r, z]);
+    const flag = Math.min(255, toolIndex + 1);
+    const t = opts.target;
+    this.gougeOpts = t ? opts : null;
+    this.partLines = t && t.closed && t.surface ? t : null;
+    if (this.partLines && this.partCache.target !== t) this.partCache = this.newPartCache(t);
+    this.candidates = [];
+    let volume = 0;
+    for (const part of [near, far]) {
+      if (part.length < 3) continue;
+      for (const F of this.fam) {
+        const len = this.revolveFamily(F, part, axis, flag);
+        if (F.a === 2) volume += len * F.db * F.dc;
+      }
+    }
+    const gouge3 = this.measureCandidates(opts.tolerance || 0);
+    this.gougeOpts = null;
+    this.partLines = null;
+    if (volume <= 0) return { volume: 0, gouge: null, gouge3 };
+    this.version++;
+    this.removedVolume += volume;
+    return { volume, gouge: null, gouge3 };
+  }
+
+  /** One family's share of a turned cut, in mm along its lines. */
+  revolveFamily(F, poly, axis, flag) {
+    const { a, b, c, nb, nc, db, dc } = F;
+    const oa = this.o3[a], ob = this.o3[b], oc = this.o3[c];
+    const d = axis.dir;
+    const P = axis.point;
+    let rMin = Infinity, rMax = 0, zMin = Infinity, zMax = -Infinity;
+    for (const [r, z] of poly) {
+      if (r < rMin) rMin = r;
+      if (r > rMax) rMax = r;
+      if (z < zMin) zMin = z;
+      if (z > zMax) zMax = z;
+    }
+    // The edges as n·(r, z) ≤ k, normals pointing out, whichever way round
+    // the outline was given.
+    const m = poly.length;
+    let area = 0;
+    for (let k = 0; k < m; k++) {
+      const [r0, z0] = poly[k];
+      const [r1, z1] = poly[(k + 1) % m];
+      area += r0 * z1 - r1 * z0;
+    }
+    const turn = area >= 0 ? 1 : -1;
+    const edges = [];
+    for (let k = 0; k < m; k++) {
+      const [r0, z0] = poly[k];
+      const [r1, z1] = poly[(k + 1) % m];
+      const nr = turn * (z1 - z0);
+      const nz = -turn * (r1 - r0);
+      const l = Math.hypot(nr, nz);
+      if (l < 1e-12) continue;
+      edges.push({ nr: nr / l, nz: nz / l, k: (nr * r0 + nz * z0) / l, r0, z0, r1, z1 });
+    }
+    const inside = (r, z) => {
+      for (const e of edges) if (e.nr * r + e.nz * z > e.k + 1e-9) return false;
+      return true;
+    };
+
+    // The box round the turned outline: a drum along the axis.
+    const lo = [0, 0, 0];
+    const hi = [0, 0, 0];
+    for (let q = 0; q < 3; q++) {
+      const e0 = P[q] + d[q] * zMin;
+      const e1 = P[q] + d[q] * zMax;
+      const pad = rMax * Math.sqrt(Math.max(0, 1 - d[q] * d[q]));
+      lo[q] = Math.min(e0, e1) - pad;
+      hi[q] = Math.max(e0, e1) + pad;
+    }
+    const i0 = Math.max(0, Math.ceil((lo[b] - ob) / db - 0.5));
+    const i1 = Math.min(nb - 1, Math.floor((hi[b] - ob) / db - 0.5));
+    const j0 = Math.max(0, Math.ceil((lo[c] - oc) / dc - 0.5));
+    const j1 = Math.min(nc - 1, Math.floor((hi[c] - oc) / dc - 0.5));
+    if (i0 > i1 || j0 > j1) return 0;
+
+    // Along a line, p(t) = base + t·e: z(t) = z0 + t·da, and the part of
+    // p − P square to the axis is q0 + t·q1.
+    const da = d[a];
+    const q1 = [-da * d[0], -da * d[1], -da * d[2]];
+    q1[a] += 1;
+    const A2 = q1[0] * q1[0] + q1[1] * q1[1] + q1[2] * q1[2];
+    const parallel = A2 < 1e-18;
+    const square = Math.abs(da) < 1e-12;
+    const ts = [];
+    const ins = [];
+    let total = 0;
+    let ti0 = Infinity, tj0 = Infinity, ti1 = -1, tj1 = -1;
+    let aLo = Infinity, aHi = -Infinity;
+    const w0 = [0, 0, 0];
+
+    for (let j = j0; j <= j1; j++) {
+      const pc = oc + (j + 0.5) * dc;
+      for (let i = i0; i <= i1; i++) {
+        const r = j * nb + i;
+        if (F.cnt[r] === 0) continue;
+        const pb = ob + (i + 0.5) * db;
+        w0[a] = oa - P[a]; w0[b] = pb - P[b]; w0[c] = pc - P[c];
+        const z0 = w0[0] * d[0] + w0[1] * d[1] + w0[2] * d[2];
+        const q0x = w0[0] - z0 * d[0], q0y = w0[1] - z0 * d[1], q0z = w0[2] - z0 * d[2];
+        const C2 = q0x * q0x + q0y * q0y + q0z * q0z;
+        const B2 = 2 * (q0x * q1[0] + q0y * q1[1] + q0z * q1[2]);
+        // Too far from the axis anywhere on the line, or a line square to
+        // the axis at a height the outline does not reach.
+        const nearest = parallel ? C2 : C2 - (B2 * B2) / (4 * A2);
+        if (nearest > rMax * rMax + 1e-9) continue;
+        if (square && (z0 < zMin - 1e-9 || z0 > zMax + 1e-9)) continue;
+        if (parallel && (Math.sqrt(C2) < rMin - 1e-9)) continue;
+
+        // Where it crosses each edge's line, kept if on the edge itself.
+        ts.length = 0;
+        for (const e of edges) {
+          // nr·r(t) = k − nz·z(t) = g0 + g1·t, squared.
+          const g0 = e.k - e.nz * z0;
+          const g1 = -e.nz * da;
+          const qa = e.nr * e.nr * A2 - g1 * g1;
+          const qb = e.nr * e.nr * B2 - 2 * g0 * g1;
+          const qc = e.nr * e.nr * C2 - g0 * g0;
+          const roots = [];
+          if (Math.abs(qa) < 1e-14) {
+            if (Math.abs(qb) > 1e-14) roots.push(-qc / qb);
+          } else {
+            const disc = qb * qb - 4 * qa * qc;
+            if (disc >= 0) {
+              const sq = Math.sqrt(disc);
+              roots.push((-qb - sq) / (2 * qa), (-qb + sq) / (2 * qa));
+            }
+          }
+          for (const tt of roots) {
+            if (!Number.isFinite(tt)) continue;
+            const rr = Math.sqrt(Math.max(0, A2 * tt * tt + B2 * tt + C2));
+            const zz = z0 + da * tt;
+            // On this edge, not on the far side of its line.
+            const len2 = (e.r1 - e.r0) ** 2 + (e.z1 - e.z0) ** 2;
+            const s = len2 > 0 ? ((rr - e.r0) * (e.r1 - e.r0) + (zz - e.z0) * (e.z1 - e.z0)) / len2 : 0;
+            if (s < -1e-6 || s > 1 + 1e-6) continue;
+            if (Math.abs(e.nr * rr + e.nz * zz - e.k) > 1e-6 * (1 + Math.abs(e.k))) continue;
+            ts.push(tt);
+          }
+        }
+        // The line's own span bounds it, and a line that crosses nothing
+        // is inside throughout or not at all.
+        ts.push(0, F.len);
+        ts.sort((u, v) => u - v);
+        ins.length = 0;
+        for (let k = 0; k + 1 < ts.length; k++) {
+          const s0 = Math.max(0, ts[k]);
+          const s1 = Math.min(F.len, ts[k + 1]);
+          if (!(s1 > s0 + 1e-9)) continue;
+          const mid = (s0 + s1) / 2;
+          const rr = Math.sqrt(Math.max(0, A2 * mid * mid + B2 * mid + C2));
+          if (!inside(rr, z0 + da * mid)) continue;
+          if (ins.length && Math.abs(ins[ins.length - 1] - s0) < 1e-9) ins[ins.length - 1] = s1;
+          else ins.push(s0, s1);
+        }
+        for (let k = 0; k < ins.length; k += 2) {
+          const removed = this.subtract(F, r, ins[k], ins[k + 1], flag);
+          if (removed <= 0) continue;
+          total += removed;
+          if (i < ti0) ti0 = i;
+          if (i > ti1) ti1 = i;
+          if (j < tj0) tj0 = j;
+          if (j > tj1) tj1 = j;
+          if (ins[k] < aLo) aLo = ins[k];
+          if (ins[k + 1] > aHi) aHi = ins[k + 1];
+          if (a === 2) this.topChanged(F, r, i, j);
+          if (this.partLines) this.gougeAlong(F, r, i, j, this.gougeOpts.tolerance || 0);
+        }
+      }
+    }
+
+    if (ti1 >= 0) {
+      F.version++;
+      if (a === 2) this.markDirtyRect(ti0, tj0, ti1, tj1);
+      const lo3 = [0, 0, 0];
+      const hi3 = [0, 0, 0];
+      lo3[a] = oa + Math.max(0, aLo); hi3[a] = oa + Math.min(F.len, aHi);
+      lo3[b] = ob + ti0 * db; hi3[b] = ob + (ti1 + 1) * db;
+      lo3[c] = oc + tj0 * dc; hi3[c] = oc + (tj1 + 1) * dc;
+      this.markDirty3(lo3[0], lo3[1], lo3[2], hi3[0], hi3[1], hi3[2]);
     }
     return total;
   }
