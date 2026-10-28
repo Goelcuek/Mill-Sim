@@ -809,8 +809,13 @@ diameter and the rpm with its cutting speed.
 T, S or round, with nose radius and lead angle κr, outside or inside),
 *Grooving / parting blade* (width, depth, corner radius) and *Threading
 insert* (flank angle). Each is an outline in the plane through the
-part's axis on a bar, its programmed point the imaginary tip where the
-nose's tangents meet. The bar stands beside the tip; the spindle is placed on the bar's middle,
+part's axis on a bar. **Zeroed to** says which point of it the program
+moves — the point the tool was set to: the *imaginary tip*, where the
+nose's tangents meet, or the *nose radius centre*, for programs written
+to the centre of the corner radius (the reference corner's on a grooving
+blade, the tip radius on a threading insert, the middle of a round
+insert). Nothing is compensated either way: the part is the insert's own
+outline, wherever that puts it. The bar stands beside the tip; the spindle is placed on the bar's middle,
 so the head is drawn and checked where it is. The starter library has
 T11–T14 (on a library you already have: Tools › Library › *Put the
 built-in tools back*).
@@ -826,7 +831,7 @@ fixtures turning with the part, and the machine's castings, the table
 and the travels as for milling. A milling cutter in the spindle while
 the table turns, and a turning tool meeting metal while it does not, are
 findings of their own. Not yet: threads cut as helices (a threading pass
-turns a plain ring), the turning cycles, and nose-radius compensation.
+turns a plain ring) and the turning cycles.
 
 ### What the crash model catches
 

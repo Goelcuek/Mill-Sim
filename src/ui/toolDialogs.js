@@ -54,7 +54,7 @@ export function openToolDialog(app, toolId = null) {
     preview.show(built);
     clear(stats);
     stats.appendChild(el('div.stat-value.dim', {}, built.turning
-      ? `${draft.side === 'ID' ? 'Inside' : 'Outside'} turning · tip ${units.lenU(built.turning.axisU, 1)} off the spindle axis · ${units.lenU(built.tool.length, 1)} long`
+      ? `${draft.side === 'ID' ? 'Inside' : 'Outside'} turning · zeroed to the ${built.turning.tracking === 'centre' ? 'nose radius centre' : 'imaginary tip'} · ${units.lenU(built.turning.axisU, 1)} off the spindle axis · ${units.lenU(built.tool.length, 1)} long`
       : `Max cutting Ø ${units.lenU(built.cutRadius * 2, 3)} · flute ${units.lenU(built.fluteLength, 2)} · OAL ${units.lenU(built.tool.length, 1)}`));
     for (const w of built.warnings) {
       stats.appendChild(el('div.inline-warning', {}, w));

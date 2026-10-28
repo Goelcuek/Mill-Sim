@@ -40,7 +40,7 @@ function roundCorner(c, a, b, rn, steps = 8) {
   const ua = norm([a[0] - c[0], a[1] - c[1]]);
   const ub = norm([b[0] - c[0], b[1] - c[1]]);
   const half = Math.acos(Math.max(-1, Math.min(1, ua[0] * ub[0] + ua[1] * ub[1]))) / 2;
-  if (!(rn > 0) || half < 1e-6) return [c];
+  if (!(rn > 0) || half < 1e-6) return Object.assign([c], { centre: c.slice() });
   const tangent = rn / Math.tan(half);
   const bis = norm([ua[0] + ub[0], ua[1] + ub[1]]);
   const centre = [c[0] + bis[0] * (rn / Math.sin(half)), c[1] + bis[1] * (rn / Math.sin(half))];
@@ -51,11 +51,19 @@ function roundCorner(c, a, b, rn, steps = 8) {
   // The short way round, which is the way the corner goes.
   while (a1 - a0 > Math.PI) a1 -= 2 * Math.PI;
   while (a0 - a1 > Math.PI) a1 += 2 * Math.PI;
-  const out = [];
-  for (let k = 0; k <= steps; k++) {
-    const t = a0 + ((a1 - a0) * k) / steps;
-    out.push([centre[0] + rn * Math.cos(t), centre[1] + rn * Math.sin(t)]);
+  // Evenly round, and through every point square to u or w the arc
+  // passes — the points the tangents that set a tool are taken at.
+  const angles = [];
+  for (let k = 0; k <= steps; k++) angles.push(a0 + ((a1 - a0) * k) / steps);
+  const lo = Math.min(a0, a1);
+  const hi = Math.max(a0, a1);
+  for (let q = Math.ceil(lo / (Math.PI / 2)); q * (Math.PI / 2) <= hi; q++) {
+    const t = q * (Math.PI / 2);
+    if (t > lo + 1e-9 && t < hi - 1e-9) angles.push(t);
   }
+  angles.sort((x, y) => (a1 >= a0 ? x - y : y - x));
+  const out = angles.map((t) => [centre[0] + rn * Math.cos(t), centre[1] + rn * Math.sin(t)]);
+  out.centre = centre;
   return out;
 }
 
@@ -80,6 +88,9 @@ export function turningOutline(t) {
   const length = Math.max(num(t.overallLength, 100), 10);
   const bar = Math.max(num(t.shankWidth, 20), 2);
   let insert;
+  // The centre of the nose's radius, in the same frame: the other point a
+  // tool can be measured to.
+  let centre = [0, 0];
 
   if (t.type === 'groove') {
     // A blade plunging in along −u: its cutting edge is the end at u = 0,
@@ -88,6 +99,8 @@ export function turningOutline(t) {
     const depth = Math.max(num(t.grooveDepth, 10), 0.5);
     const rc = Math.min(Math.max(num(t.cornerRadius, 0.2), 0), width / 2 - 1e-3);
     const box = [[0, 0], [depth, 0], [depth, width], [0, width]];
+    // The reference corner is the one at the origin, and its radius's centre.
+    centre = [rc, rc];
     insert = [
       ...roundCorner(box[0], box[3], box[1], rc, 4),
       box[1], box[2],
@@ -103,10 +116,12 @@ export function turningOutline(t) {
     const tip = [0, 0];
     const a = [h, -spread];
     const b = [h, spread];
-    insert = [...roundCorner(tip, b, a, Math.min(rn, h * 0.2), 4), a, b];
+    const arc = roundCorner(tip, b, a, Math.min(rn, h * 0.2), 4);
+    insert = [...arc, a, b];
     // The point of the tip, rounded or not, is the reference.
     const lowest = insert.reduce((m, p) => (p[0] < m[0] ? p : m), insert[0]);
     insert = moveTo(insert, [lowest[0], 0]);
+    centre = [arc.centre[0] - lowest[0], 0];
   } else {
     const shape = INSERT_SHAPES[t.insertShape] || INSERT_SHAPES.C;
     const L = Math.max(num(t.insertSize, 12), 1);
@@ -114,6 +129,7 @@ export function turningOutline(t) {
     if (shape.round) {
       // A round insert: a circle, the imaginary tip its lowest, innermost corner.
       const r = L / 2;
+      centre = [r, r];
       insert = [];
       for (let k = 0; k < 32; k++) {
         const th = (2 * Math.PI * k) / 32;
@@ -142,6 +158,7 @@ export function turningOutline(t) {
         if (w < wMin) wMin = w;
       }
       insert = moveTo(insert, [uMin, wMin]);
+      centre = [noseArc.centre[0] - uMin, noseArc.centre[1] - wMin];
     }
   }
 
@@ -158,13 +175,20 @@ export function turningOutline(t) {
   const u0 = t.type === 'groove' ? uMax : Math.max(uMax * 0.35, 1);
   const w0 = t.type === 'thread' ? wMax : t.type === 'groove' ? wMin : Math.max(wMax * 0.5, wMin + 1);
   if (length <= w0 + 5) warnings.push('The tool is shorter than its insert; lengthened.');
+  // What the tool was zeroed to, and so the point the program moves: the
+  // imaginary tip, or the centre of the nose radius — the whole tool
+  // moved so that is the origin.
+  const at = t.trackingPoint === 'centre' ? centre : [0, 0];
   return {
     kind: t.type,
     side,
-    insert,
-    bar: { u0, u1: u0 + bar, w0, w1: Math.max(length, w0 + 5), thick: bar },
+    insert: moveTo(insert, at),
+    bar: { u0: u0 - at[0], u1: u0 + bar - at[0], w0: w0 - at[1], w1: Math.max(length, w0 + 5) - at[1], thick: bar },
     // The spindle's own axis runs up the middle of the bar.
-    axisU: u0 + bar / 2,
+    axisU: u0 + bar / 2 - at[0],
+    tracking: at[0] || at[1] ? 'centre' : 'tip',
+    // Where the other point is, from this one.
+    noseCentre: [centre[0] - at[0], centre[1] - at[1]],
     warnings,
   };
 }

@@ -328,7 +328,7 @@ export class ToolsPanel extends Panel {
         swatch: t.color || '#c8ccd4',
         title: t.name,
         sub: TOOL_TYPES[t.type] && TOOL_TYPES[t.type].turning
-          ? `${TOOL_TYPES[t.type].label} · ${t.side === 'ID' ? 'ID' : 'OD'}${t.type === 'turn' ? ` · ${t.insertShape} R${t.noseRadius}` : t.type === 'groove' ? ` · ${units.lenU(t.grooveWidth, 2)} wide` : ` · ${t.threadAngle}°`}`
+          ? `${TOOL_TYPES[t.type].label} · ${t.side === 'ID' ? 'ID' : 'OD'}${t.trackingPoint === 'centre' ? ' · centre' : ''}${t.type === 'turn' ? ` · ${t.insertShape} R${t.noseRadius}` : t.type === 'groove' ? ` · ${units.lenU(t.grooveWidth, 2)} wide` : ` · ${t.threadAngle}°`}`
           : `${TOOL_TYPES[t.type] ? TOOL_TYPES[t.type].label : t.type} · Ø${units.lenU(t.diameter, 2)} · ${t.fluteCount}F`,
       }));
     }

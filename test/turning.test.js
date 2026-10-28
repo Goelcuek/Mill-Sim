@@ -158,3 +158,17 @@ test('the turning tool faces the way CYCLE800 turns it round the spindle, on any
   // Turned all the way round all the same: the corner is gone to r 42.
   near(b.stock.stretchesAt(0, [0, 29.875, -10.125])[0][1], Math.sqrt(42 * 42 - 29.875 ** 2), 0.05, 'turned from the −X side');
 });
+
+test('a tool zeroed to its nose radius centre: the program is the centre, the part a radius inside it', () => {
+  const centred = { ...od, id: 'tool_centre', trackingPoint: 'centre' };
+  const { stock, found } = turnRun(
+    [...DREHEN, 'G0 X100 Z5', 'G0 Z-0.2', 'G1 X-1.6', 'G0 Z5', 'G0 X85.6', 'G1 Z-20', 'G1 X100', 'G0 Z5', 'M30'],
+    { 11: slotOf(centred, 0) },
+  );
+  assert.deepEqual(found, []);
+  // Ø85.6 for the centre of an R0.8 nose is Ø84 on the part: the block's
+  // corners turned to r42.
+  near(stock.stretchesAt(0, [0, 29.875, -10.125])[0][1], Math.sqrt(42 * 42 - 29.875 ** 2), 0.02, 'turned to Ø84');
+  // …and a face with the centre at Z-0.2 is at Z-1.
+  near(stock.stretchesAt(2, [10.125, 0.125, -10])[0][1], -1, 0.01, 'faced to Z-1');
+});

@@ -50,17 +50,17 @@ export const TOOL_TYPES = {
   turn: {
     label: 'Turning insert (OD/ID)',
     turning: true,
-    fields: ['side', 'insertShape', 'insertSize', 'noseRadius', 'leadAngle', 'shankWidth', 'overallLength'],
+    fields: ['side', 'trackingPoint', 'insertShape', 'insertSize', 'noseRadius', 'leadAngle', 'shankWidth', 'overallLength'],
   },
   groove: {
     label: 'Grooving / parting blade',
     turning: true,
-    fields: ['side', 'grooveWidth', 'grooveDepth', 'cornerRadius', 'shankWidth', 'overallLength'],
+    fields: ['side', 'trackingPoint', 'grooveWidth', 'grooveDepth', 'cornerRadius', 'shankWidth', 'overallLength'],
   },
   thread: {
     label: 'Threading insert',
     turning: true,
-    fields: ['side', 'threadAngle', 'insertSize', 'noseRadius', 'shankWidth', 'overallLength'],
+    fields: ['side', 'trackingPoint', 'threadAngle', 'insertSize', 'noseRadius', 'shankWidth', 'overallLength'],
   },
 };
 
@@ -80,6 +80,13 @@ export const TOOL_FIELDS = {
   overallLength: { label: 'Overall length (OAL)', unit: 'mm', min: 1, step: 1 },
   side: {
     label: 'Cuts', options: [{ value: 'OD', label: 'Outside (OD)' }, { value: 'ID', label: 'Inside (ID, boring)' }],
+  },
+  trackingPoint: {
+    label: 'Zeroed to',
+    options: [
+      { value: 'tip', label: 'Imaginary tip (P)' },
+      { value: 'centre', label: 'Nose radius centre' },
+    ],
   },
   insertShape: {
     label: 'Insert', options: Object.entries(INSERT_SHAPES).map(([value, s]) => ({ value, label: s.label })),
@@ -131,6 +138,8 @@ export const DEFAULT_TOOL = {
   cutting: { rpm: 6000, feed: 900, plunge: 300, doc: 2, woc: 4 },
   // Turning tools only; see turningDefs.js.
   side: 'OD',
+  /** The point the tool was zeroed to, which the program moves: 'tip' or 'centre'. */
+  trackingPoint: 'tip',
   insertShape: 'C',
   insertSize: 12,
   noseRadius: 0.8,
