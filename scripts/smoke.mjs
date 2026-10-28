@@ -1710,8 +1710,12 @@ try {
       // as those two turns about fixed axes, Z's last.
       app.addPrimitiveFixture('clamp');
       const m = app.models.models[app.models.models.length - 1];
-      app.models.turnAbout(m, 0, 90);
+      const at = m.object.position.toArray();
       app.models.turnAbout(m, 2, 90);
+      app.models.turnAbout(m, 0, 90);
+      // Turning never moves it, and the angles read what was asked.
+      out.still = m.object.position.toArray().every((v, i) => Math.abs(v - at[i]) < 1e-9);
+      out.angles = [m.object.rotation.x, m.object.rotation.y, m.object.rotation.z].map((r) => Math.round((r * 180) / Math.PI * 1e6) / 1e6);
       m.object.updateMatrixWorld(true);
       const q = m.object.quaternion;
       // Its own X axis should now point along machine Y, its own Y along machine Z.
@@ -1725,7 +1729,9 @@ try {
     console.log('ortho, bore, turns:', JSON.stringify(r));
     check(r.ortho, 'the viewport camera should be orthographic');
     check(r.bore.got.every((v, i) => Math.abs(v - r.bore.want[i]) < 1e-6), `zero on a bore: ${JSON.stringify(r.bore)}`);
-    check(r.turn.x.join() === '0,1,0' && r.turn.y.join() === '0,0,1', `turning about machine X then Z: ${JSON.stringify(r.turn)}`);
+    check(r.turn.x.join() === '0,1,0' && r.turn.y.join() === '0,0,1', `RX 90 and RZ 90 are about machine X, then machine Z, whatever order they were set in: ${JSON.stringify(r.turn)}`);
+    check(r.still, 'turning a fixture moved it');
+    check(r.angles.join() === '90,0,90', `the angles should read what was set: ${r.angles}`);
   }
 
   // ---- a machine built from nothing looks like nothing ------------------

@@ -481,11 +481,12 @@ export class SetupPanel extends Panel {
       app.models.setTransform(m, { position: p });
       app.refreshFixtures();
     };
-    // A new angle is a turn about that machine axis by the difference —
-    // the axis stays the machine's, whatever the other two say.
+    // The angle as typed: each about the machine's own axis, applied X
+    // then Y then Z, round the model's origin.
     const setRot = (i, deg) => {
-      const was = ([o.rotation.x, o.rotation.y, o.rotation.z][i] * 180) / Math.PI;
-      app.models.turnAbout(m, i, (deg || 0) - was);
+      const r = [o.rotation.x, o.rotation.y, o.rotation.z];
+      r[i] = ((deg || 0) * Math.PI) / 180;
+      app.models.setTransform(m, { rotation: r });
       app.refreshFixtures();
       this.refresh();
     };
@@ -522,10 +523,10 @@ export class SetupPanel extends Panel {
           onChange: (v) => { this.turnStep = Math.abs(Number(v)) || 90; },
         }),
         ...['X', 'Y', 'Z'].flatMap((a, i) => [-1, 1].map((sign) => button(`${a}${sign < 0 ? '−' : '+'}`, () => turn(i, sign), {
-          title: `Turn about the machine's ${a} axis, ${sign < 0 ? 'clockwise' : 'anticlockwise'} seen from its + end, round the middle of the model`,
+          title: `R${a} ${sign < 0 ? '−' : '+'} the step: about the machine's ${a} axis, ${sign < 0 ? 'clockwise' : 'anticlockwise'} seen from its + end, round the model's origin`,
         }))),
       ]),
-      el('div.hint', {}, 'Every turn is about the machine\u2019s own X, Y and Z, round the middle of the model — never about an axis an earlier turn has tipped over. Typing a new RX, RY or RZ turns it about that machine axis by the difference; the three numbers then say where it ended up.'),
+      el('div.hint', {}, 'The model turns about its origin — the point X, Y and Z give — so turning it never moves it. RX, RY and RZ are turns about the machine\u2019s own axes, applied X first, then Y, then Z, whatever order they were typed in: RX 90 and RZ 45 is laid over about X, then swung 45° about the machine\u2019s Z. The buttons add the step to that angle.'),
       row([
         field('Scale', Number(o.scale.x.toFixed(4)), {
           min: 0.001, step: 0.1,

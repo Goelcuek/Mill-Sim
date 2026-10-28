@@ -555,10 +555,12 @@ where it should go:
 - **Set by bore centre** takes three points on a bore's wall and puts the
   work origin on its centre: X and Y for a bore along Z, with Z left where
   it was, as a probe would; all three for a bore on a tilted face.
-- A fixture or part **turns about the machine's own X, Y and Z** — never
-  about an axis an earlier turn has tipped over. The ± buttons turn it by
-  the step round its middle; typing a new RX, RY or RZ turns it about that
-  machine axis by the difference.
+- A fixture or part **turns about its own origin** — the point its X, Y
+  and Z give — so turning it never moves it. RX, RY and RZ are turns about
+  the machine's own axes, applied X first, then Y, then Z, whatever order
+  they were typed in: RX 90 and RZ 45 is laid over about X, then swung 45°
+  about the machine's Z. The ± buttons add the step to that angle. A
+  project saved before this keeps its parts where they were.
 
 Points snap. Everything near the cursor is projected to the screen and the
 closest candidate within a few pixels wins, ranked so a corner beats an edge

@@ -20,6 +20,22 @@ export const MODEL_ROLES = {
   decor: { label: 'Decoration only', color: 0xa8aeba, collide: false },
 };
 
+/**
+ * The order a model's three angles are applied in: X, then Y, then Z, each
+ * about the machine's own axis. Three.js names an order by its matrix,
+ * which reads the other way round. Applied Z first, as three.js does by
+ * default, the X angle tipped the part over an axis the Z angle had already
+ * swung, and no angle meant what it said once two were set.
+ */
+export const MODEL_ROTATION_ORDER = 'ZYX';
+
+/** An angle in degrees, brought into (−180, 180]. */
+function wrapDeg(d) {
+  let a = ((d + 180) % 360 + 360) % 360 - 180;
+  if (a === -180) a = 180;
+  return Math.round(a * 1e6) / 1e6;
+}
+
 export class ModelsView {
   /** @param {import('./viewer.js').Viewer} viewer */
   constructor(viewer) {
@@ -82,6 +98,7 @@ export class ModelsView {
     mesh.visible = !this.hiddenRoles.has(role);
 
     const holder = new THREE.Group();
+    holder.rotation.order = MODEL_ROTATION_ORDER;
     holder.name = `model:${mesh.name}`;
     holder.add(mesh);
     this.group.add(holder);
@@ -149,44 +166,38 @@ export class ModelsView {
   }
 
   /**
-   * Turn a model about one of the machine's own axes — X, Y or Z as they
-   * stand, not as the model's earlier turns have tipped them — round the
-   * middle of the model, so it turns where it is.
-   *
-   * Three angles applied one after another are each about an axis the
-   * others have already moved, and typing a second one turned the part
-   * somewhere nobody could work out. A turn about a fixed axis is the
-   * same turn whatever was done before it.
+   * Turn a model by a step about one of the machine's axes: the step goes
+   * on that angle, and the model turns about its own origin — the point
+   * its X, Y and Z say — so where it stands does not change.
    *
    * @param {0|1|2} axis
    * @param {number} degrees
    */
   turnAbout(model, axis, degrees) {
     if (!degrees) return;
-    const o = model.object;
-    const parent = o.parent;
-    if (parent) parent.updateWorldMatrix(true, false);
-    o.updateWorldMatrix(false, true);
-    const centre = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
-    if (parent) parent.worldToLocal(centre);
-    const dir = new THREE.Vector3(axis === 0 ? 1 : 0, axis === 1 ? 1 : 0, axis === 2 ? 1 : 0);
-    const q = new THREE.Quaternion().setFromAxisAngle(dir, (degrees * Math.PI) / 180);
-    o.position.sub(centre).applyQuaternion(q).add(centre);
-    o.quaternion.premultiply(q);
-    // A whole turn of a quarter comes out as 89.99999999 otherwise.
-    for (const k of ['x', 'y', 'z']) {
-      const r = o.rotation[k];
-      const snapped = Math.round((r * 180) / Math.PI * 1e6) / 1e6;
-      o.rotation[k] = (snapped * Math.PI) / 180;
-    }
+    const r = model.object.rotation;
+    const k = ['x', 'y', 'z'][axis];
+    const deg = wrapDeg((r[k] * 180) / Math.PI + degrees);
+    r[k] = (deg * Math.PI) / 180;
     model.dirty = true;
     this.viewer.invalidate();
     this.onChange('transform', model);
   }
 
-  setTransform(model, { position, rotation, scale }) {
+  /**
+   * @param {{position?:number[], rotation?:number[], rotationOrder?:string,
+   *          scale?:number[]}} t rotation in radians, in rotationOrder —
+   *   this one's when not said; a project saved before the order changed
+   *   says XYZ, and its angles are turned into this order's.
+   */
+  setTransform(model, { position, rotation, rotationOrder, scale }) {
     if (position) model.object.position.set(position[0], position[1], position[2]);
-    if (rotation) model.object.rotation.set(rotation[0], rotation[1], rotation[2]);
+    if (rotation) {
+      const from = rotationOrder || MODEL_ROTATION_ORDER;
+      const e = new THREE.Euler(rotation[0], rotation[1], rotation[2], from);
+      if (from !== MODEL_ROTATION_ORDER) e.reorder(MODEL_ROTATION_ORDER);
+      model.object.rotation.set(e.x, e.y, e.z, MODEL_ROTATION_ORDER);
+    }
     if (scale) model.object.scale.set(scale[0], scale[1], scale[2]);
     model.dirty = true;
     this.viewer.invalidate();
@@ -297,6 +308,7 @@ export class ModelsView {
       visible: m.visible,
       position: m.object.position.toArray(),
       rotation: [m.object.rotation.x, m.object.rotation.y, m.object.rotation.z],
+      rotationOrder: MODEL_ROTATION_ORDER,
       scale: m.object.scale.toArray(),
       source: m.source || null,
       triangles: m.triangles,

@@ -78,6 +78,7 @@ export async function writeProject(app) {
       file,
       position: [o.position.x, o.position.y, o.position.z],
       rotation: [o.rotation.x, o.rotation.y, o.rotation.z],
+      rotationOrder: o.rotation.order,
       scale: [o.scale.x, o.scale.y, o.scale.z],
       ignore: !!m.ignore,
       clearance: Number.isFinite(m.clearance) ? m.clearance : null,
@@ -221,7 +222,9 @@ export async function readProject(app, entries) {
     if (!data) continue;
     const stl = parseSTL(asBuffer(data));
     const model = app.models.add({ name: m.name, positions: stl.positions, role: m.role, recentre: false });
-    app.models.setTransform(model, { position: m.position, rotation: m.rotation, scale: m.scale });
+    // Saved before the angles were applied X first, a project's angles
+    // are in three.js's own order, and are turned into the new one.
+    app.models.setTransform(model, { position: m.position, rotation: m.rotation, rotationOrder: m.rotationOrder || 'XYZ', scale: m.scale });
     model.ignore = !!m.ignore;
     model.clearance = Number.isFinite(m.clearance) ? m.clearance : null;
     if (m.visible === false) app.models.setVisible(model, false);
