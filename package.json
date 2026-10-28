@@ -9,7 +9,8 @@
     "serve": "node scripts/serve.mjs",
     "test": "node --test \"test/*.test.js\"",
     "smoke": "node scripts/smoke.mjs",
-    "build": "node scripts/build-standalone.mjs"
+    "build": "node scripts/build-standalone.mjs",
+    "desktop": "npm --prefix desktop start"
   },
   "engines": {
     "node": ">=20"

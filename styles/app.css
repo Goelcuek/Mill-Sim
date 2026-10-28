@@ -1459,3 +1459,6 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   margin-right: 6px; padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 600;
   color: #fff; background: var(--accent); vertical-align: middle; white-space: nowrap;
 }
+
+/* The machines folder's list: few rows, and Load is the point of it. */
+.machine-library .list-actions { opacity: 1; }

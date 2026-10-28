@@ -49,6 +49,7 @@ import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
 import { fmt, fmtDuration, clamp, uid, clone, wrapAngle, deg2rad, rad2deg } from './core/util.js';
 import { variableTimeline, formatVariable } from './gcode/variableTimeline.js';
 import { loadWatch, saveWatch } from './ui/watch.js';
+import { openMachineSaveDialog, openMachineLibrary } from './ui/machineLibrary.js';
 import { blockAt, moveAfter, blockBeforeMove, blockOfMove } from './gcode/blockLog.js';
 
 /** Cell sizes offered for the simulation grid, coarse to fine. */
@@ -109,8 +110,20 @@ function referenceOnly(parts) {
   return surface ? { surface, closed: parts.every((p) => isClosed(p.positions)), map: null, grid: null } : null;
 }
 
+/** A desktop call's error, without Electron's wrapping round it. */
+function desktopMessage(err) {
+  return String((err && err.message) || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+}
+
 export class App {
   constructor(root) {
+    /**
+     * The desktop program's calls (desktop/preload.cjs), or null in a
+     * browser. With them, machines live in a folder on disk.
+     */
+    this.desktop = (typeof window !== 'undefined' && window.millsimDesktop) || null;
+    /** The file in the machines folder the machine came from or went to. */
+    this.machineFile = null;
     this.root = root;
     this.state = {
       stock: {
@@ -279,6 +292,7 @@ export class App {
       this.notify(`The stored library had no ${this.libraryRepaired.join(' and no ')}, so the built-in ${this.libraryRepaired.length === 1 ? 'set was' : 'sets were'} put back. Anything else you had saved is untouched.`, 'info');
     }
     this.notify('Pick an example in the Program tab, or open your own G-code.', 'info');
+    if (this.desktop) this.restoreLastMachine();
   }
 
   // ---- layout ------------------------------------------------------------
@@ -1220,6 +1234,7 @@ export class App {
    * @param {string} [preset] one of the shapes a mill comes in, or nothing
    */
   newMachine(name, control, preset) {
+    this.setMachineFile(null);
     const flavour = FLAVOUR_DIALECT[control] ? control : this.state.machine.controller.flavour;
     this.state.machine.name = name || 'New machine';
     this.state.machine.controller = {
@@ -1348,6 +1363,21 @@ export class App {
    *   README.txt        what the above is, for whoever opens it in a year
    */
   async exportMachine() {
+    if (this.desktop) {
+      openMachineSaveDialog(this);
+      return;
+    }
+    try {
+      const { stem, bits, bytes } = await this.machineZip();
+      download(`${stem}.zip`, bytes, 'application/zip');
+      this.notify(`Saved ${stem}.zip — the chain, ${bits}.`, 'ok');
+    } catch (err) {
+      this.notify(`Could not write the machine: ${err.message}`, 'error');
+    }
+  }
+
+  /** The machine zipped, with a word on what went in. */
+  async machineZip() {
     const kin = this.machineView.kinematics;
     const stem = (kin.name || 'machine').replace(/\s+/g, '-').toLowerCase();
     const { def, files } = this.machineFiles();
@@ -1369,18 +1399,74 @@ export class App {
         '',
       ].join('\n'),
     });
+    const bits = [
+      `${def.macros.length} ${def.macros.length === 1 ? 'macro' : 'macros'}`,
+      def.subprograms.length ? `${def.subprograms.length} ${def.subprograms.length === 1 ? 'subprogram' : 'subprograms'}` : null,
+      `${def.bodies.length} ${def.bodies.length === 1 ? 'body' : 'bodies'}`,
+    ].filter(Boolean).join(', ');
+    return { stem, bits, bytes: await writeZip(files) };
+  }
 
+  /**
+   * Desktop: put the machine in the machines folder under the name given,
+   * and make it the one that opens next time.
+   *
+   * @returns {Promise<boolean>} whether it was written
+   */
+  async saveMachineToFolder(name) {
     try {
-      download(`${stem}.zip`, await writeZip(files), 'application/zip');
-      const bits = [
-        `${def.macros.length} ${def.macros.length === 1 ? 'macro' : 'macros'}`,
-        def.subprograms.length ? `${def.subprograms.length} ${def.subprograms.length === 1 ? 'subprogram' : 'subprograms'}` : null,
-        `${def.bodies.length} ${def.bodies.length === 1 ? 'body' : 'bodies'}`,
-      ].filter(Boolean);
-      this.notify(`Saved ${stem}.zip — the chain, ${bits.join(', ')}.`, 'ok');
+      const { bits, bytes } = await this.machineZip();
+      const { file, path } = await this.desktop.machines.save(name, bytes);
+      this.setMachineFile(file);
+      this.notify(`Saved ${file} — the chain, ${bits} — to ${path}.`, 'ok');
+      return true;
     } catch (err) {
-      this.notify(`Could not write the machine: ${err.message}`, 'error');
+      this.notify(`Could not save the machine: ${desktopMessage(err)}`, 'error');
+      return false;
     }
+  }
+
+  /**
+   * Desktop: load a machine from the machines folder by its file name.
+   *
+   * @returns {Promise<boolean>} whether it loaded
+   */
+  async loadMachineFromFolder(file, { quiet = false } = {}) {
+    try {
+      const bytes = await this.desktop.machines.read(file);
+      await this.machineFromBytes(file, bytes);
+      this.setMachineFile(file);
+      return true;
+    } catch (err) {
+      if (!quiet) this.notify(`Could not load ${file}: ${desktopMessage(err)}`, 'error');
+      return false;
+    }
+  }
+
+  /** Desktop: the machine that was open last time, back where it was. */
+  async restoreLastMachine() {
+    try {
+      const file = await this.desktop.machines.last();
+      if (!file) return;
+      if (await this.loadMachineFromFolder(file, { quiet: true })) {
+        this.notify(`Opened ${file} from the machines folder, as it was last saved.`, 'ok');
+      }
+    } catch (err) {
+      console.warn('Could not reopen the last machine:', err);
+    }
+  }
+
+  /**
+   * Which file in the machines folder the machine on screen is. The
+   * desktop remembers it to open on the next start; anything that puts a
+   * different machine up clears it.
+   */
+  setMachineFile(file) {
+    const was = this.machineFile;
+    this.machineFile = file || null;
+    if (!this.desktop) return;
+    this.desktop.machines.setLast(this.machineFile).catch(() => {});
+    if (was !== this.machineFile && this.panels && this.panels.machine) this.panels.machine.render();
   }
 
   /**
@@ -1423,23 +1509,37 @@ export class App {
     }
   }
 
-  /** Load a machine: the whole folder, or a bare chain saved before. */
+  /** Load a machine: from the machines folder on the desktop, a file otherwise. */
   async importMachine() {
+    if (this.desktop) {
+      openMachineLibrary(this);
+      return;
+    }
+    await this.importMachineFile();
+  }
+
+  /** Load a machine from a file picked anywhere: the zip, or a bare chain. */
+  async importMachineFile() {
     const [file] = await pickFile('.zip,.json');
     if (!file) return;
     try {
-      if (/\.json$/i.test(file.name)) {
-        await this.applyMachineDefinition(JSON.parse(await file.text()), null, file.name);
-        return;
-      }
-      const entries = await readZip(await file.arrayBuffer());
-      const jsonEntry = entries.get('machine.json')
-        || [...entries.keys()].filter((k) => k.endsWith('machine.json')).map((k) => entries.get(k))[0];
-      if (!jsonEntry) throw new Error('there is no machine.json in it.');
-      await this.applyMachineDefinition(JSON.parse(new TextDecoder().decode(jsonEntry)), entries, file.name);
+      await this.machineFromBytes(file.name, new Uint8Array(await file.arrayBuffer()));
     } catch (err) {
       this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
     }
+  }
+
+  /** A machine file's bytes, whichever kind it is, put in place. */
+  async machineFromBytes(name, bytes) {
+    if (/\.json$/i.test(name)) {
+      await this.applyMachineDefinition(JSON.parse(new TextDecoder().decode(bytes)), null, name);
+      return;
+    }
+    const entries = await readZip(bytes);
+    const jsonEntry = entries.get('machine.json')
+      || [...entries.keys()].filter((k) => k.endsWith('machine.json')).map((k) => entries.get(k))[0];
+    if (!jsonEntry) throw new Error('there is no machine.json in it.');
+    await this.applyMachineDefinition(JSON.parse(new TextDecoder().decode(jsonEntry)), entries, name);
   }
 
   /**
@@ -1452,6 +1552,8 @@ export class App {
    */
   async applyMachineDefinition(def, entries, filename) {
     if (!def || !Array.isArray(def.nodes) || !def.nodes.length) throw new Error('that file has no axes in it.');
+    // Whoever loaded it from the machines folder says so afterwards.
+    this.setMachineFile(null);
     this.machineView.setKinematics(new Kinematics(def));
     this.state.machine.preset = 'custom';
     // The control the machine was saved with, whole: a machine does not

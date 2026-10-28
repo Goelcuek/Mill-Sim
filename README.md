@@ -33,6 +33,41 @@ script.
 
 Open the page, pick an example from the **Program** tab, and press play.
 
+### As a Windows program
+
+`desktop/` wraps the same page in Electron, and adds the one thing a browser
+cannot do: keep machines in a folder.
+
+- **Save machine** asks for a name and writes `<name>.zip` into the machines
+  folder, `Documents\Mill-Sim\Machines` unless you pick another. The zip is
+  the same one the browser downloads, so it opens in either.
+- **Load machine** lists that folder (newest first) to load or delete from,
+  with **Other file…** for a machine anywhere else, **Open folder**, and
+  **Change folder…**.
+- The machine last saved or loaded from the folder opens again on the next
+  start. A new machine, or one opened from elsewhere, clears that.
+- Settings (the folder, the last machine, the window size) are in
+  `%APPDATA%\Mill-Sim\settings.json`; the tool library and the rest of what
+  the browser keeps in local storage stay there too, between starts.
+
+Building it:
+
+```bash
+npm i --no-save esbuild        # the page build, at the root
+cd desktop
+npm install
+npm start                      # run it from source
+npm run dist:win               # release/Mill-Sim-<version>-win-x64.exe (installer) and .zip (portable)
+xvfb-run node test/desktop.smoke.cjs   # save, list, load, restart; needs playwright
+```
+
+`dist:win` runs on Windows as it is. On Linux it needs wine, 32-bit as well
+(`wine64` and `wine32:i386`); without it, `npm run dist:win-unsigned` makes
+the portable zip, though the exe keeps Electron's icon. The
+**Desktop (Windows)** GitHub workflow builds both on a Windows runner and
+keeps them as the run's artifacts. The installer is not code-signed, so
+Windows SmartScreen asks once before running it: **More info → Run anyway**.
+
 ![The dome example after a full run](assets/dome.png)
 
 ---

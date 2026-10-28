@@ -1,0 +1,49 @@
+{
+  "name": "mill-sim-desktop",
+  "productName": "Mill-Sim",
+  "version": "1.0.0",
+  "description": "Mill-Sim CNC mill simulator as a desktop program, with its machines kept in a folder on disk.",
+  "author": "Mill-Sim",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "page": "node prepare.cjs",
+    "start": "node prepare.cjs && electron .",
+    "dist:win": "node prepare.cjs && electron-builder --win nsis zip --x64 --publish never",
+    "dist:win-unsigned": "node prepare.cjs && electron-builder --win zip --x64 --publish never -c.win.signAndEditExecutable=false"
+  },
+  "devDependencies": {
+    "electron": "44.7.2",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "com.millsim.desktop",
+    "productName": "Mill-Sim",
+    "copyright": "Mill-Sim",
+    "artifactName": "Mill-Sim-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "app/**",
+      "build/icon.png"
+    ],
+    "win": {
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mill-Sim",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": null
+  }
+}

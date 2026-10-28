@@ -1,0 +1,51 @@
+# The Windows desktop program: an installer and a portable zip, built on
+# Windows so the exe carries its icon, and kept as the run's artifacts.
+#
+# Runs when the page or the desktop shell changes, and from the Actions tab
+# with "Run workflow".
+
+name: Desktop (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'src/**'
+      - 'styles/**'
+      - 'examples/**'
+      - 'vendor/**'
+      - 'scripts/build-standalone.mjs'
+      - 'desktop/**'
+      - '.github/workflows/desktop-windows.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests
+        run: npm test
+
+      - name: esbuild for the single-file page
+        run: npm i --no-save esbuild@0.28.2
+
+      - name: Desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Installer and portable zip
+        working-directory: desktop
+        run: npm run dist:win
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mill-Sim-Windows
+          path: |
+            desktop/release/*.exe
+            desktop/release/*.zip
+          if-no-files-found: error

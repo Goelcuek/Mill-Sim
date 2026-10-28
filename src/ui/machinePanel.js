@@ -321,9 +321,12 @@ export class MachinePanel extends Panel {
         { label: 'New machine…', variant: 'primary', onClick: () => openNewMachineDialog(app), hint: 'Start from a bare base and build the chain yourself' },
       ]),
       actionRow([
-        { label: 'Save machine…', onClick: () => app.exportMachine(), hint: 'A zip holding the chain, the controller, the macros and every body as STL' },
-        { label: 'Load machine…', onClick: () => app.importMachine(), hint: 'A machine folder saved earlier, or a bare chain as JSON' },
+        { label: 'Save machine…', onClick: () => app.exportMachine(), hint: app.desktop ? 'Into the machines folder, under a name: the chain, the controller, the macros and every body' : 'A zip holding the chain, the controller, the macros and every body as STL' },
+        { label: 'Load machine…', onClick: () => app.importMachine(), hint: app.desktop ? 'One of the machines in the machines folder, or a file from anywhere else' : 'A machine folder saved earlier, or a bare chain as JSON' },
       ]),
+      app.desktop ? el('div.hint', {}, app.machineFile
+        ? ['This is ', el('b', {}, app.machineFile), ' from the machines folder; it opens again on the next start.']
+        : 'Saved machines go to the machines folder, and the last one saved or loaded opens again on the next start.') : null,
     ]);
   }
 
