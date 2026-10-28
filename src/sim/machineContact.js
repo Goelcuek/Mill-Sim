@@ -17,7 +17,7 @@
 
 import * as m4 from '../core/mat4.js';
 import { pointConeDistance, meshDistance } from './collision.js';
-import { nearestWithin } from './surfaceIndex.js';
+import { nearestWithin, insideSolid } from './surfaceIndex.js';
 
 /** Samples across an overlap, each way. */
 const SAMPLES = 24;
@@ -298,6 +298,8 @@ export function solidIntoReference(P, index, inside, fromScene, toScene) {
     // just in, and a deep one is found by the longer look.
     let d = nearestWithin(index, q[0], q[1], q[2], 0.5);
     if (!Number.isFinite(d)) d = nearestWithin(index, q[0], q[1], q[2], 50);
+    // Near a wall the column may be across it from the point: ask exactly.
+    if (d < 0.2 && !insideSolid(index, q[0], q[1], q[2])) return false;
     const depth = Number.isFinite(d) ? d : 50;
     if (depth > 0.01 && (!best || depth > best.depth)) best = { depth, point: q.slice() };
     return false;

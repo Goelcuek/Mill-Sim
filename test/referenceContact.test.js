@@ -82,3 +82,29 @@ test('the simulator reports a holder in the reference part, and nothing when it 
   assert.equal(runWith(away).collisions.filter((c) => c.type === 'part').length, 0);
   assert.equal(runWith(beside, { reference: false }).collisions.filter((c) => c.type === 'part').length, 0, 'and it can be turned off');
 });
+
+import { latheToTriangles } from '../src/io/mesh.js';
+
+test('a cutter just clear of a bore is not a gouge; one just oversize is, by its oversize', () => {
+  // A Ø.336 in cutter plunged in a Ø.342 in bore has .003 in a side to spare.
+  const R = (0.342 * 25.4) / 2;
+  const ring = latheToTriangles([{ r: R, z: -10 }, { r: 30, z: -10 }, { r: 30, z: 0 }, { r: R, z: 0 }, { r: R, z: -10 }], { segments: 256 });
+  const surface = buildSurfaceIndex([{ positions: ring.positions }], 2);
+  const gouges = (inches) => {
+    const built = buildAssembly({ stickout: 40 }, makeTool({ type: 'flat', diameter: inches * 25.4, fluteLength: 30 }), defaultHolders()[0],
+      { spindleDiameter: 90, spindleLength: 80 });
+    const slot = { built, index: 0, spheres: silhouetteSpheres([...built.toolPoints, ...built.holderPoints]) };
+    const sim = new Simulator();
+    sim.load({
+      program: interpret('G90 G21\nT1 M6\nS3000 M3\nG0 X0 Y0 Z10\nG1 Z-8 F300\nG0 Z10\nM30'),
+      stock: null, slots: new Map([[1, slot]]), fallbackSlot: slot, fixtures: [],
+      target: { surface, closed: true, map: null, grid: null },
+    });
+    sim.gougeTolerance = 0.0008 * 25.4;
+    sim.runAll();
+    return sim.collisions.filter((c) => c.type === 'gouge');
+  };
+  assert.deepEqual(gouges(0.336).map((c) => c.message), []);
+  const over = gouges(0.346);
+  assert.ok(over.length && Math.abs(over[0].depth - 0.002 * 25.4) < 0.005, JSON.stringify(over.map((c) => c.depth)));
+});

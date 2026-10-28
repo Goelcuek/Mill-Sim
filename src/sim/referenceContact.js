@@ -18,6 +18,8 @@ import { insideSolid, nearestWithin, lineInside } from './surfaceIndex.js';
 
 /** Column spacing of the part's inside, mm; see insideColumns. */
 const COLUMN = 0.25;
+/** How far from a wall a column can misjudge a point: half its diagonal. */
+export const COLUMN_REACH = COLUMN * Math.SQRT1_2 + 1e-6;
 /** Columns kept before the cache starts again: a few hundred MB at most. */
 const COLUMN_CAP = 1500000;
 
@@ -161,6 +163,18 @@ export function checkReference(spheres, tip, dir, index, { skipBelow = 0, skipAb
     // long search.
     let d = nearestWithin(index, x, y, z, into ? Math.min(NEAR, reach) : Math.max(want, 1e-9));
     if (into && !Number.isFinite(d)) d = nearestWithin(index, x, y, z, Math.max(reach, DEEP));
+    // The column a point stands in can be across a wall from the point
+    // itself, and a distance does not say which side of the wall it is:
+    // a cutter running 0.08 clear of a bore read as 0.08 into it. Near a
+    // wall the point is asked exactly.
+    if (into && inside && d < COLUMN_REACH && !insideSolid(index, x, y, z)) {
+      if (quick) return;
+      d = nearestWithin(index, x, y, z, Math.max(want, 1e-9));
+      if (!(d < want)) return;
+      const gap = d;
+      if (!worst || gap < worst.gap) worst = { gap, depth: 0, clearance: want, point: [x, y, z] };
+      return;
+    }
     if (!into && !(d < want)) return;
     const gap = into ? -(Number.isFinite(d) ? d : Math.max(reach, DEEP)) : d;
     if (!worst || gap < worst.gap) worst = { gap, depth: Math.max(-gap, 0), clearance: want, point: [x, y, z] };
