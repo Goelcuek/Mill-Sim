@@ -95,6 +95,19 @@ export const DEFAULT_CONFIG = {
 
 const MOTION_CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 88, 89]);
 
+/**
+ * The rotary axes in the order a Siemens swivel data record counts them:
+ * those that turn the tool first, then those that turn the part, each from
+ * the machine outwards.
+ */
+function swivelAxes(kin) {
+  const rot = kin.rotaries();
+  const depth = (n) => (typeof kin.depth === 'function' ? kin.depth(n.id) : 0);
+  const head = rot.filter((n) => kin.branchOf(n.id) === 'tool').sort((a, b) => depth(a) - depth(b));
+  const table = rot.filter((n) => kin.branchOf(n.id) !== 'tool').sort((a, b) => depth(a) - depth(b));
+  return [...head, ...table];
+}
+
 /** The Siemens drilling cycles this reader turns into moves. */
 const IGNORED_CALLS = new Set(['CYCLE832', 'MSG', 'WORKPIECE', 'SETMS', 'G_SETTINGS', 'CYCLE800_RESET']);
 const DRILL_CYCLES = new Set(['CYCLE81', 'CYCLE82', 'CYCLE83', 'CYCLE84', 'CYCLE840', 'CYCLE85', 'CYCLE86', 'CYCLE87', 'CYCLE88', 'CYCLE89']);
@@ -2241,13 +2254,19 @@ export function interpret(text, config = {}) {
         warn(line, 'CYCLE800 with rotary positions needs a machine with rotary axes.', 'error');
         return;
       }
+      // _A is rotary axis 1 and _B rotary axis 2, the way Siemens counts
+      // them: the head's axes before the table's, each from the machine
+      // outwards — A then C on a trunnion, B then C on a head and table,
+      // C then B on a fork head.
       direct = {};
-      kin.rotaries().forEach((node, k) => { if (k < 3) direct[node.letter] = angles[k]; });
-      const axisV = m4.normalize(kin.toolAxis({ ...st.rot, ...direct }, cfg.gaugeLength || 0));
-      // The turn that stands Z up along the tool, by the shortest way.
-      const zc = Math.max(-1, Math.min(1, axisV[2]));
-      const about = Math.hypot(axisV[0], axisV[1]) > 1e-12 ? [-axisV[1], axisV[0], 0] : [1, 0, 0];
-      m4.multiply(rot, rot, m4.fromRotation(m4.create(), about, Math.acos(zc)));
+      swivelAxes(kin).forEach((node, k) => { if (k < 3) direct[node.letter] = angles[k]; });
+      // The plane is the tool's own frame as the part sees it with the
+      // rotaries there: Z up the tool, and X and Y turned with whatever
+      // turned — so a C turn of the table turns the plane, which the
+      // direction of the tool alone could never say.
+      const frame = kin.toolInWork({ ...st.rot, ...direct }, cfg.gaugeLength || 0).matrix;
+      m4.copy(rot, frame);
+      rot[12] = 0; rot[13] = 0; rot[14] = 0;
     }
     const shift0 = [n(4), n(5), n(6)].map((x) => toMM(x, st.metric));
     const shift1 = [n(10), n(11), n(12)].map((x) => toMM(x, st.metric));

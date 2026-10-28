@@ -207,3 +207,30 @@ test('An address with a bracket after it is not a call: M00 (CHECK) stops', () =
   assert.ok(p.events.some((e) => e.type === 'stop' && e.code === 0), JSON.stringify(p.events.map((e) => e.text)));
   assert.ok(!said(p).some((w) => /M00 is not simulated/.test(w)), said(p).join('\n'));
 });
+
+test('CYCLE800 mode 192: the angles are the rotary positions, _A axis 1 and _B axis 2, with arithmetic in them', () => {
+  // A/C trunnion: axis 1 is A, axis 2 is C. The C slot written as a sum,
+  // the way a shop offsets a fixture's turn: (30 + R20) with R20 = 15.
+  const ac = run('R20=15\nDEF REAL TILT=-15\nG0 X0 Y0 Z50\nCYCLE800(0, "", 0, 192, 0, 0, 0, (TILT*2), (30+R20), 0, 0, 0, 0, -1)\nG1 X10 Y0 Z0 F500\nM30',
+    { kinematics: buildPreset('tableTable') });
+  assert.deepEqual(errors(ac), []);
+  const swing = ac.moves[1];
+  near(swing.rotTo.A, -30, 1e-9, 'A from _A, worked out');
+  near(swing.rotTo.C, 45, 1e-9, 'C from _B, worked out');
+  // The plane turns with the table: X in it is the part's X turned back by
+  // the 45 the table went round, so the tool still runs along the machine.
+  const x10 = ac.moves[2].to;
+  near(x10[0], 7.071, 1e-3, 'plane X, on the part');
+  near(x10[1], -7.071, 1e-3, 'turned by C');
+  near(x10[2], 0, 1e-9, 'A turns about X, so X stays level');
+
+  // Head and table: axis 1 is the head's B, axis 2 the table's C.
+  const bc = run('G0 X0 Y0 Z50\nCYCLE800(0, "", 0, 192, 0, 0, 0, 90, 0, 0, 0, 0, 0, -1)\nG1 X0 Y0 Z20 F500\nM30',
+    { kinematics: buildPreset('headTable') });
+  assert.deepEqual(errors(bc), []);
+  near(bc.moves[1].rotTo.B, 90, 1e-9, '_A is the head');
+  near(bc.moves[1].rotTo.C, 0, 1e-9, '_B is the table');
+  const z20 = bc.moves[2].to;
+  near(z20[0], 20, 1e-9, 'the plane\'s Z is along the tool, now lying along X');
+  near(z20[2], 0, 1e-9, 'and level');
+});

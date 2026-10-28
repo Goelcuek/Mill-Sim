@@ -759,8 +759,13 @@ comments, `/` block delete
   named and not applied.
 - *Swivel* — `CYCLE800(_FR, _TC, _ST, _MODE, _X0, _Y0, _Z0, _A, _B, _C,
   _X1, _Y1, _Z1, _DIR, …)`: angles axis by axis (`_MODE` gives the order, 57
-  being X then Y then Z), as a solid angle, or as the rotary positions
-  themselves; shifts before and after the turn; `_ST 1` adds to the plane
+  being X then Y then Z), as a solid angle, or — `_MODE` 192 — as the rotary
+  positions themselves, `_A` rotary axis 1 and `_B` axis 2 the way Siemens
+  counts them (the head's axes before the table's, each from the machine
+  out: A then C on a trunnion, B then C on a head and table), the plane
+  then turning with them, C included. Any argument may be arithmetic —
+  `(30+R20)`, `(TILT*2)` — worked out when the cycle runs; shifts before
+  and after the turn; `_ST 1` adds to the plane
   already there; `_FR` retracts Z (and X, Y) first; `_DIR 0` turns the
   plane without swinging. The retract and the swing are made with the
   slides, as the cycle does, and inside the swivelled plane the tip is
