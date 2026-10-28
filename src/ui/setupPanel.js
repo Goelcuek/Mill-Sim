@@ -327,6 +327,10 @@ export class SetupPanel extends Panel {
     const app = this.app;
     const wcs = app.state.wcs;
     const editing = app.state.wcsEdit;
+    // A five-axis machine's offsets turn its rotaries too: G54 C12.5 puts
+    // the part's C0 at 12.5 on the dial.
+    const turns = app.rotaryLetters();
+    const rot = app.state.wcsRotary || {};
 
     // One header of axis labels, then a tight row per offset — six copies
     // of "X Y Z" is noise.
@@ -335,6 +339,7 @@ export class SetupPanel extends Panel {
     const header = el('div.row.wcs-row', {}, [
       el('span.wcs-name', {}),
       ...AXES.map((a) => el('span.field-label', {}, [a, el('span.unit', {}, ` ${units.lengthLabel()}`)])),
+      ...turns.map((a) => el('span.field-label', {}, [a, el('span.unit', {}, ' °')])),
     ]);
 
     const rows = Object.keys(wcs).map((key) => {
@@ -359,11 +364,17 @@ export class SetupPanel extends Panel {
             app.setWcs(next);
           },
         })),
+        ...turns.map((a) => field('', (rot[key] && rot[key][a]) || 0, {
+          step: 1,
+          unit: '°',
+          title: `${key} ${a}: added to every ${a} the program gives in ${key}`,
+          onChange: (v) => app.setWcsRotary(key, a, v || 0),
+        })),
       ]);
     });
 
     return section('Work offsets', [
-      el('div.hint', { html: `Scene position of each work origin. <b>${editing}</b> is the one the placement tools act on — click another name to switch.` }),
+      el('div.hint', { html: `Scene position of each work origin. <b>${editing}</b> is the one the placement tools act on — click another name to switch.${turns.length ? ` ${turns.join(' and ')} are the offset\u2019s turn of the rotaries: added to every ${turns.join(' or ')} the program gives in that offset, as the control does — not to a move by an amount, or one in machine coordinates.` : ''}` }),
       header,
       ...rows,
       actionRow([

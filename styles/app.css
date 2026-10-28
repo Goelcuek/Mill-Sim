@@ -1439,3 +1439,16 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .btn-group.compact .btn:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); margin-left: 0; }
 .btn-group.compact .btn:last-child { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
 .btn-group.compact .btn, .btn.compact { padding: 2px 9px; font-size: 11.5px; min-width: 28px; }
+
+/* Results › Findings: a switch for each kind of finding. */
+.finding-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.finding-filter {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--line-strong); background: var(--surface-2); color: var(--text);
+}
+.finding-filter b { font-variant-numeric: tabular-nums; }
+.finding-filter-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.finding-filter.off { opacity: 0.55; text-decoration: line-through; background: transparent; }
+.finding-filter.off .finding-filter-dot { background: var(--text-3); }
+.finding-filter.reset { border-style: dashed; }

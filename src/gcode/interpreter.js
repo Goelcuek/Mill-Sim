@@ -894,14 +894,20 @@ export function interpret(text, config = {}) {
    * Rotaries are in degrees whatever G20/G21 says; an extra linear slide is
    * in program units like any other length, so it goes through toMM.
    */
-  const applyExtraAxes = (axis, modes = null) => {
+  const applyExtraAxes = (axis, modes = null, machineCoords = false) => {
     st.rotPrev = { ...st.rot };
     let moved = false;
     for (const L of turning) {
       if (axis[L] === undefined) continue;
       const mode = modes && modes[L];
       const cur = st.rot[L];
-      const v = axis[L];
+      // The work offset's own turn of this axis — G54 C12.5 — is added to
+      // where the program sends it, as the control does: C0 in G54 is the
+      // dial at 12.5. A move by an amount, or in machine coordinates, is
+      // not offset.
+      const incremental = mode === 'IC' || (!mode && !st.absolute);
+      const turnOff = machineCoords || incremental ? 0 : rotaryOffset(L);
+      const v = axis[L] + turnOff;
       // Where a rotary goes when the program says how: DC by the shorter
       // way round, ACP forwards, ACN backwards — each to the position v
       // reads as on the dial, 0 to 360 — and AC/IC absolute or incremental
@@ -930,6 +936,12 @@ export function interpret(text, config = {}) {
   // #1 to #33 belong to whichever macro call is running; #100 and up belong
   // to the program. Everything that reads a number can read one of these,
   // which is what makes a family of parts one program instead of twenty.
+
+  /** The active work offset's turn of a rotary axis, degrees. */
+  const rotaryOffset = (L) => {
+    const r = cfg.wcsRotary && cfg.wcsRotary[st.wcs];
+    return (r && Number(r[L])) || 0;
+  };
 
   const vars = new Vars(dialect.locals);
   /**
@@ -2101,7 +2113,7 @@ export function interpret(text, config = {}) {
       }
     }
 
-    if (hasRotaryWord) applyExtraAxes(axis, b.axisModes);
+    if (hasRotaryWord) applyExtraAxes(axis, b.axisModes, machineCoords);
 
     if (motion === 80 || (!hasAxisWord && !hasRotaryWord && !turnedByVector)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');

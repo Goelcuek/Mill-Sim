@@ -11,7 +11,7 @@ import * as m4 from '../core/mat4.js';
 import { homeOf, limitsInScene } from '../machine/config.js';
 import { gougeDepth } from './target.js';
 import { checkReference, referenceSkyline, skylineOver, insideColumns } from './referenceContact.js';
-import { placeSolid, boxesMeet, solidContact, solidIntoStock } from './machineContact.js';
+import { placeSolid, boxesMeet, solidContact, solidIntoStock, solidIntoReference } from './machineContact.js';
 
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
@@ -29,6 +29,11 @@ export const COLLISION_TYPES = {
   near: { label: 'Near miss', severity: 'warning' },
 };
 
+/**
+ * Findings kept of each kind. Of each kind, not in all: a program that runs
+ * past a travel limit on every line filled a shared 400 with those, and the
+ * gouges and crashes found after it were never written down.
+ */
 const MAX_COLLISIONS = 400;
 const UP = [0, 0, 1];
 const DEG = Math.PI / 180;
@@ -256,6 +261,10 @@ export class Simulator {
     this.finished = !this.program || !this.program.moves.length;
     this.collisions = [];
     this.collisionKeys = new Map();
+    /** How many findings of each kind are kept; see MAX_COLLISIONS. */
+    this.collisionKinds = new Map();
+    /** Findings of a kind past its cap: still counted, not listed. */
+    this.collisionsDropped = 0;
     this.removedVolume = 0;
     this.peakMrr = 0;
     this.currentTool = 0;
@@ -314,7 +323,12 @@ export class Simulator {
       if (data.volume) existing.volume = (existing.volume || 0) + data.volume;
       return existing;
     }
-    if (this.collisions.length >= MAX_COLLISIONS) return null;
+    const kept = this.collisionKinds.get(type) || 0;
+    if (kept >= MAX_COLLISIONS) {
+      this.collisionsDropped++;
+      return null;
+    }
+    this.collisionKinds.set(type, kept + 1);
     const entry = {
       type,
       label: meta.label,
@@ -560,7 +574,8 @@ export class Simulator {
       for (let i = 0; i < this.headSolids.length; i++) {
         for (let j = 0; j < this.workSolids.length; j++) if (!mates.has(i * 65536 + j)) pairs.push([i, j]);
       }
-      return { pairs, stock: this.headSolids.map((_, i) => i) };
+      const every = this.headSolids.map((_, i) => i);
+      return { pairs, stock: every, ref: this.referenceOn() ? every : [] };
     };
     const first = poses[0];
     const last = poses[poses.length - 1];
@@ -572,6 +587,7 @@ export class Simulator {
       if (!this.placeCastings(p[0], mv, p[3], [])) return all();
       const placed = this.placeMachine();
       placed.stock = this.stock ? this.stockBox(this.kinematics) : null;
+      placed.ref = this.referenceOn() ? this.partBox(this.kinematics, this.target.surface.bounds) : null;
       ends.push(placed);
     }
     const join = (a, b) => ({
@@ -586,7 +602,25 @@ export class Simulator {
     }));
     const stockBox = ends[0].stock && join(ends[0].stock, ends[1].stock);
     const stock = stockBox ? head.map((P, i) => (boxesMeet(P, stockBox, 0) ? i : -1)).filter((i) => i >= 0) : [];
-    return { pairs, stock };
+    const refBox = ends[0].ref && join(ends[0].ref, ends[1].ref);
+    const ref = refBox ? head.map((P, i) => (boxesMeet(P, refBox, 0) ? i : -1)).filter((i) => i >= 0) : [];
+    return { pairs, stock, ref };
+  }
+
+  /** A box on the part — [x0, y0, z0, x1, y1, z1] — in the scene, for the chain as posed now. */
+  partBox(k, b) {
+    const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const q = [0, 0, 0];
+    for (let c = 0; c < 8; c++) {
+      m4.transformPoint(q, part, [c & 1 ? b[3] : b[0], c & 2 ? b[4] : b[1], c & 4 ? b[5] : b[2]]);
+      for (let a = 0; a < 3; a++) {
+        if (q[a] < lo[a]) lo[a] = q[a];
+        if (q[a] > hi[a]) hi[a] = q[a];
+      }
+    }
+    return { lo, hi };
   }
 
   /** The stock's box in the scene, for the chain as posed now. */
@@ -615,7 +649,7 @@ export class Simulator {
    * worst of the pairs a chunk left to ask about.
    */
   checkMachine(tip, mv, u, clearance, near) {
-    if (!near || (!near.pairs.length && !near.stock.length)) return null;
+    if (!near || (!near.pairs.length && !near.stock.length && !(near.ref && near.ref.length))) return null;
     if (!this.placeCastings(tip, mv, u, [])) return null;
     const k = this.kinematics;
     const head = new Map();
@@ -634,6 +668,17 @@ export class Simulator {
       for (const i of near.stock) {
         const c = solidIntoStock(placeHead(i), this.stock, fromScene, part);
         if (c && (!worst || -c.depth < worst.gap)) worst = { gap: -c.depth, point: c.point, partFrame: true, head: this.headSolids[i], other: null };
+      }
+    }
+    // The machine into the reference part — its real shape, wherever it
+    // stands, stock round it or not.
+    if (near.ref && near.ref.length && this.referenceOn()) {
+      const part = m4.multiply(m4.create(), k.matrixOf(k.workNode), m4.fromTranslation(m4.create(), k.tableOffset));
+      const fromScene = m4.invertRigid(m4.create(), part);
+      const inside = insideColumns(this.target);
+      for (const i of near.ref) {
+        const c = solidIntoReference(placeHead(i), this.target.surface, inside, fromScene, part);
+        if (c && (!worst || -c.depth < worst.gap)) worst = { gap: -c.depth, point: c.point, partFrame: true, head: this.headSolids[i], other: null, reference: true };
       }
     }
     if (!worst) return null;
@@ -1406,7 +1451,7 @@ export class Simulator {
         const clash = nearMachine ? this.checkMachine(tip, mv, u, clearance, nearMachine) : null;
         if (clash) {
           const say = (b) => (b.body.letter ? `the ${b.s.name} (${b.body.letter} axis)` : `the ${b.s.name}`);
-          const what = clash.other ? say(clash.other) : 'the stock';
+          const what = clash.other ? say(clash.other) : clash.reference ? 'the reference part' : 'the stock';
           const who = say(clash.head);
           if (clash.gap < 0) {
             this.report('machine', {

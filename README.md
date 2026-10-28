@@ -552,6 +552,11 @@ where it should go:
   lands on the second.
 - **Set zero** drops the active work origin straight onto a clicked point;
   **Move G54** shifts it by the distance between two points.
+- On a five-axis machine each work offset also carries its **turn of the
+  rotaries** — A and C, B and C, whatever the machine has. It is added to
+  every rotary position the program gives in that offset, as the control
+  does (G54 C12.5: `C0` is 12.5 on the dial), and not to a move by an
+  amount or one in machine coordinates.
 - **Set by bore centre** takes three points on a bore's wall and puts the
   work origin on its centre: X and Y for a bore along Z, with Z left where
   it was, as a probe would; all three for a bore on a tilted face.
@@ -724,12 +729,20 @@ same measure gives the reading under the pointer.
 | **Holder / shank crash** | The holder or spindle nose is buried in the stock, with the depth. |
 | **Fixture collision** | Any part of the assembly reached into a fixture or clamp. |
 | **Table collision** | The assembly went below the table surface inside its footprint. |
-| **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — or a casting riding with the spindle met the table, another casting or the stock. Both parts are named, with the axes they ride on. |
+| **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — or a casting riding with the spindle met the table, another casting, the stock or the reference part (its real shape, stock round it or not). Both parts are named, with the axes they ride on. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
 | **Gouge into the reference part** | The cutter went into the reference part by more than the tolerance — measured to the part's nearest face, so a gouge in a wall or the side of a hole is as deep as it really is. Where the cutter cut no stock — air, or a blank that does not cover the part — the cutter itself is measured against the part, so a gouge shows even with no stock there. |
 | **Reference part collision** | The holder, the shank above the flutes or the spindle nose reached into the reference part — its real shape, not a box round it — with the depth to its nearest face. The cutting edge is the gouge check's. With a near-miss distance set, passing closer than that is a near miss. Off on Setup › Checks. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
 | **No tool assembly loaded** | The program selected a `T` number the library has no assembly for. |
+
+**Results › Findings** has a switch for each kind of finding the run turned
+up, with how many: turn travel limits off, say, and they leave the list, the
+count and the badge on the viewport while the crashes are looked at. They
+are still found — the switch is only what is shown, and it is remembered in
+the browser. Each kind keeps up to 400 findings of its own, so a program
+that runs past a limit on every line no longer crowds the gouges and
+crashes out of the list.
 
 The interpreter adds its own notes: a `G43 H` that does not match the
 active `T`, an arc whose end point misses the programmed radius, an

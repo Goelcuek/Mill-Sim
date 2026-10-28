@@ -830,3 +830,44 @@ test('a tool change may use travel the program may not: the M6 macro is not held
   // Both of the macro's moves, up to the changer and back down from it.
   assert.equal(strict.limits.length, 2, 'with the switch off, the tool change is held to the travels too');
 });
+
+import { buildSurfaceIndex } from '../src/sim/surfaceIndex.js';
+import { boxToTriangles } from '../src/io/mesh.js';
+
+test('the head is checked against the reference part, stock or no stock', () => {
+  const kin = buildPreset('tableTable');
+  const tool = buildAssembly({ stickout: 45 }, makeTool({ type: 'flat', diameter: 10, fluteLength: 30 }),
+    defaultHolders()[0], { spindleDiameter: 90, spindleLength: 80 });
+  const slot = { built: tool, index: 0, spheres: silhouetteSpheres(tool.toolPoints) };
+  const castings = [{ node: 'z', name: 'Z axis (ram)', letter: 'Z', side: 'tool', solids: [blockSolid('Ram', [-120, -120, 90], [120, 120, 910])] }];
+  // A tall part beside the spindle, X100 on, standing 300 over the part
+  // zero; no stock at all. The cutter at X0 is clear of it; the Ø240 ram
+  // is not, once it comes down past the part's top.
+  const surface = buildSurfaceIndex([boxToTriangles([100, -300, -80], [400, 300, 300])], 2);
+  const target = { surface, closed: true, map: null, grid: null };
+  const run = (code) => {
+    const sim = new Simulator();
+    sim.load({ program: interpret(code, { kinematics: kin }), stock: null, slots: new Map([[0, slot]]), fallbackSlot: slot, kinematics: kin, machine: DEFAULT_MACHINE, castings, target });
+    sim.runAll();
+    return sim.collisions;
+  };
+  const down = run('G90\nG0 X0 Y0 Z500\nG1 Z-20 F1000\nM30');
+  const ram = down.find((c) => c.type === 'machine' && /Ram \(Z axis\) hits the reference part/.test(c.message));
+  assert.ok(ram, JSON.stringify(down.map((c) => c.message)));
+  assert.ok(ram.depth > 15 && ram.depth < 25, `the ram is 20 into the part's side: ${ram.depth}`);
+  assert.ok(!down.some((c) => c.type === 'gouge'), 'the cutter itself stays clear');
+  // Into the part with the cutter, no stock: a gouge, as deep as it is.
+  const cut = run('G90\nG0 X200 Y0 Z500\nG1 Z280 F1000\nM30').find((c) => c.type === 'gouge');
+  assert.ok(cut && cut.depth > 15, JSON.stringify(cut));
+  assert.deepEqual(run('G90\nG0 X0 Y0 Z500\nG1 Z400 F1000\nM30').filter((c) => c.type === 'machine' || c.type === 'gouge'), []);
+});
+
+test('each kind of finding has its own room: a run full of one kind still lists the others', () => {
+  const sim = new Simulator();
+  sim.reset();
+  for (let i = 0; i < 450; i++) sim.report('limit', { line: i + 1, message: 'past the travel' });
+  sim.report('gouge', { line: 999, message: 'into the part', depth: 1 });
+  assert.equal(sim.collisions.filter((c) => c.type === 'limit').length, 400);
+  assert.ok(sim.collisions.some((c) => c.type === 'gouge'));
+  assert.equal(sim.collisionsDropped, 50);
+});

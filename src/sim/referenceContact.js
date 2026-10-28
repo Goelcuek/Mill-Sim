@@ -63,6 +63,8 @@ export function insideColumns(target) {
 const RINGS = [[1, 16], [0.5, 8]];
 /** How far round an inside point its depth is looked for first, mm. */
 const NEAR = 0.5;
+/** How far the long look for an inside point's depth goes, mm. */
+const DEEP = 50;
 
 /**
  * The reference part's skyline: the highest any of its triangles stands
@@ -158,9 +160,9 @@ export function checkReference(spheres, tip, dir, index, { skipBelow = 0, skipAb
     // within half a millimetre, and only one deeper than that needs the
     // long search.
     let d = nearestWithin(index, x, y, z, into ? Math.min(NEAR, reach) : Math.max(want, 1e-9));
-    if (into && !Number.isFinite(d) && reach > NEAR) d = nearestWithin(index, x, y, z, reach);
+    if (into && !Number.isFinite(d)) d = nearestWithin(index, x, y, z, Math.max(reach, DEEP));
     if (!into && !(d < want)) return;
-    const gap = into ? -(Number.isFinite(d) ? d : reach) : d;
+    const gap = into ? -(Number.isFinite(d) ? d : Math.max(reach, DEEP)) : d;
     if (!worst || gap < worst.gap) worst = { gap, depth: Math.max(-gap, 0), clearance: want, point: [x, y, z] };
   };
 

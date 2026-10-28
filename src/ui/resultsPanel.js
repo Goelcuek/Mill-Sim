@@ -16,7 +16,7 @@ import * as units from '../core/units.js';
 export class ResultsPanel extends Panel {
   constructor(app) {
     super(app, [
-      { id: 'findings', label: 'Findings', icon: 'report', hint: 'Collisions and gouges the run turned up', badge: () => app.simulator.collisions.length || null, render: ResultsPanel.prototype.findingsPage },
+      { id: 'findings', label: 'Findings', icon: 'report', hint: 'Collisions and gouges the run turned up', badge: () => app.findingsShown().length || null, render: ResultsPanel.prototype.findingsPage },
       { id: 'loads', label: 'Loads', icon: 'gauge', hint: 'Forces, power and deflection along the run, from the metal each move meets', render: ResultsPanel.prototype.loadsPage },
       { id: 'compare', label: 'Compare', icon: 'target', hint: 'The cut against the reference part', render: ResultsPanel.prototype.comparePage },
       { id: 'export', label: 'Export', icon: 'export', hint: 'The machined part, the report, a screenshot', render: ResultsPanel.prototype.exportPage },
@@ -209,14 +209,42 @@ export class ResultsPanel extends Panel {
 
   collisionSection() {
     const app = this.app;
-    const list = app.simulator.collisions;
+    const all = app.simulator.collisions;
+    const hidden = app.state.findingsHidden;
+    const list = app.findingsShown();
     const errors = list.filter((c) => c.severity === 'error');
 
     const body = [];
+    // One switch for each kind the run found, with how many: off leaves
+    // that kind out of the list, the count and the badge on the viewport.
+    const kinds = new Map();
+    for (const c of all) kinds.set(c.type, (kinds.get(c.type) || 0) + 1);
+    if (kinds.size) {
+      body.push(el('div.finding-filters', {}, [
+        ...[...kinds].map(([type, n]) => {
+          const off = hidden.includes(type);
+          const label = COLLISION_TYPES[type] ? COLLISION_TYPES[type].label : type;
+          return el(`button.finding-filter${off ? '.off' : ''}`, {
+            type: 'button',
+            title: off ? `Show ${label.toLowerCase()} again` : `Leave ${label.toLowerCase()} out of the list`,
+            onclick: () => { app.setFindingHidden(type, !off); this.render(); },
+          }, [el('span.finding-filter-dot'), `${label} `, el('b', {}, String(n))]);
+        }),
+        hidden.length ? el('button.finding-filter.reset', {
+          type: 'button',
+          onclick: () => { app.setFindingHidden(null); this.render(); },
+        }, 'Show all') : null,
+      ]));
+    }
+    if (app.simulator.collisionsDropped > 0) {
+      body.push(el('div.hint', {}, `The first ${400} of each kind are listed; ${app.simulator.collisionsDropped} more were found past that and are only counted.`));
+    }
     if (!list.length) {
-      body.push(el('div.verdict.ok', {}, app.simulator.finished
-        ? 'No collisions found in the whole program.'
-        : 'Nothing found so far.'));
+      body.push(el('div.verdict.ok', {}, all.length
+        ? 'Nothing of the kinds shown.'
+        : app.simulator.finished
+          ? 'No collisions found in the whole program.'
+          : 'Nothing found so far.'));
     } else {
       body.push(el('div.verdict.bad', {}, `${errors.length} problem${errors.length === 1 ? '' : 's'} found${list.length !== errors.length ? `, plus ${list.length - errors.length} warning${list.length - errors.length === 1 ? '' : 's'}` : ''}.`));
       const items = list.slice(0, 200).map((c) => el(`div.collision.sev-${c.severity}`, {
@@ -243,7 +271,7 @@ export class ResultsPanel extends Panel {
     }));
     body.push(el('div.hint', {}, 'Changing this takes effect on the next run.'));
 
-    return section(`Collisions (${list.length})`, body);
+    return section(`Collisions (${list.length}${list.length !== all.length ? ` of ${all.length}` : ''})`, body);
   }
 
   exportSection() {

@@ -118,6 +118,7 @@ export async function writeProject(app) {
     program: { name: state.programName, file: programFile, subprograms },
     stock,
     wcs: JSON.parse(JSON.stringify(state.wcs)),
+    wcsRotary: JSON.parse(JSON.stringify(state.wcsRotary || {})),
     wcsEdit: state.wcsEdit,
     /**
      * Machine zero, which is the machine's own — machine/machine.json
@@ -232,6 +233,7 @@ export async function readProject(app, entries) {
   app.refreshFixtures();
 
   if (def.wcs) app.state.wcs = JSON.parse(JSON.stringify(def.wcs));
+  app.state.wcsRotary = def.wcsRotary ? JSON.parse(JSON.stringify(def.wcsRotary)) : {};
   if (def.wcsEdit) app.state.wcsEdit = def.wcsEdit;
   // The machine folder has already been read, home included; a project that
   // states it as well is the older layout and still means it.

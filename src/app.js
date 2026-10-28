@@ -91,6 +91,18 @@ const SPEEDS = [
   { value: 'max', label: 'Max' },
 ];
 
+const HIDDEN_KEY = 'millsim.findingsHidden';
+
+/** The kinds of finding this browser was last told to leave out. */
+function readHidden() {
+  try {
+    const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]');
+    return Array.isArray(v) ? v.filter((t) => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 /** A reference part on its own, for the run: its surface, and no grid. */
 function referenceOnly(parts) {
   const surface = buildSurfaceIndex(parts, 2);
@@ -133,6 +145,8 @@ export class App {
       wcs: { G54: [0, 0, 0], G55: [0, 0, 0], G56: [0, 0, 0], G57: [0, 0, 0], G58: [0, 0, 0], G59: [0, 0, 0] },
       /** Which work offset the Setup panel and the placement tools act on. */
       wcsEdit: 'G54',
+      /** Each work offset's rotary axes, by letter, degrees: { G54: { C: 12.5 } }. */
+      wcsRotary: {},
       display: {
         // The grid and the work-offset markers are reference furniture:
         // useful when you are setting a job up, in the way while you are
@@ -192,6 +206,12 @@ export class App {
       },
       /** How far the cutter may pass the reference surface before it gouges. */
       gougeTolerance: 0.02,
+      /**
+       * Kinds of finding left out of the list, the count and the badge —
+       * travel limits, say, while the crashes are being looked at. They
+       * are still found; this is only what is shown. Kept in the browser.
+       */
+      findingsHidden: readHidden(),
       /**
        * What the cutting loads are worked out against: the stock's
        * material, and the limits a cut is judged by. Zero is "not known",
@@ -1545,6 +1565,20 @@ export class App {
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
+  /** One rotary axis of one work offset, in degrees. */
+  setWcsRotary(key, letter, degrees) {
+    const now = { ...(this.state.wcsRotary[key] || {}) };
+    now[letter] = Number(degrees) || 0;
+    this.state.wcsRotary = { ...this.state.wcsRotary, [key]: now };
+    if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
+  }
+
+  /** The machine's rotary axes, by letter, as the work offsets carry them. */
+  rotaryLetters() {
+    const extras = this.machineView ? this.machineView.kinematics.extras() : [];
+    return extras.filter((n) => n.kind === 'rotary').map((n) => n.letter);
+  }
+
   /** Point at home rather than typing it. */
   pickHome() {
     this.pick.begin({
@@ -2100,6 +2134,7 @@ export class App {
       rapidRate: this.state.machine.rapidRate,
       rotaryRapid: this.state.machine.rotaryRapid || 7200,
       wcs: this.state.wcs,
+      wcsRotary: this.state.wcsRotary,
       machineZero: homeOf(this.state.machine),
       g30: homeOf(this.state.machine),
       kinematics: this.machineView ? this.machineView.kinematics : null,
@@ -2960,7 +2995,7 @@ export class App {
     }
     const mv = this.state.program && this.state.program.moves[sim.moveIndex];
     const slot = sim.activeSlot;
-    const errors = sim.collisions.filter((c) => c.severity === 'error');
+    const errors = this.findingsShown().filter((c) => c.severity === 'error');
 
     if (!this.hudFields) this.buildHud();
     const f = this.hudFields;
@@ -3017,6 +3052,24 @@ export class App {
     } else {
       this.badge.style.display = 'none';
     }
+  }
+
+  /** The findings of the kinds not filtered out on Results › Findings. */
+  findingsShown() {
+    const hidden = this.state.findingsHidden;
+    return hidden.length ? this.simulator.collisions.filter((c) => !hidden.includes(c.type)) : this.simulator.collisions;
+  }
+
+  /** Show or leave out one kind of finding — or, with null, all of them again. */
+  setFindingHidden(type, hidden) {
+    const now = new Set(this.state.findingsHidden);
+    if (type === null) now.clear();
+    else if (hidden) now.add(type);
+    else now.delete(type);
+    this.state.findingsHidden = [...now];
+    try { localStorage.setItem(HIDDEN_KEY, JSON.stringify(this.state.findingsHidden)); } catch { /* private window: this session only */ }
+    this.updateHud();
+    this.refreshResults();
   }
 
   refreshResults() {

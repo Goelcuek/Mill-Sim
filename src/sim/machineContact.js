@@ -17,6 +17,7 @@
 
 import * as m4 from '../core/mat4.js';
 import { pointConeDistance, meshDistance } from './collision.js';
+import { nearestWithin } from './surfaceIndex.js';
 
 /** Samples across an overlap, each way. */
 const SAMPLES = 24;
@@ -259,6 +260,46 @@ export function solidIntoStock(P, stock, fromScene, toScene) {
         if (!best || depth > best.depth) best = { depth, point: q.slice() };
       }
     }
+    return false;
+  });
+  return best;
+}
+
+/**
+ * A casting into the reference part: the deepest of the casting's surface
+ * points that is inside the part, measured to the part's nearest face.
+ *
+ * @param {object} P        a placed solid
+ * @param {object} index    the part's surface index, on the part
+ * @param {(x:number, y:number, z:number) => boolean} inside  inside the part?
+ * @param {ArrayLike<number>} fromScene  scene → part
+ * @param {ArrayLike<number>} toScene    part → scene
+ */
+export function solidIntoReference(P, index, inside, fromScene, toScene) {
+  const b = index.bounds;
+  const slo = [Infinity, Infinity, Infinity];
+  const shi = [-Infinity, -Infinity, -Infinity];
+  const q = [0, 0, 0];
+  for (let c = 0; c < 8; c++) {
+    apply(toScene, c & 1 ? b[3] : b[0], c & 2 ? b[4] : b[1], c & 4 ? b[5] : b[2], q);
+    for (let k = 0; k < 3; k++) {
+      if (q[k] < slo[k]) slo[k] = q[k];
+      if (q[k] > shi[k]) shi[k] = q[k];
+    }
+  }
+  if (!boxesMeet(P, { lo: slo, hi: shi }, 0)) return null;
+  const region = overlapIn(P, slo, shi, 0);
+  if (!region) return null;
+  let best = null;
+  eachSurfacePoint(P, region, (x, y, z) => {
+    apply(fromScene, x, y, z, q);
+    if (!inside(q[0], q[1], q[2])) return false;
+    // Close by first, as everywhere: most points that are in at all are
+    // just in, and a deep one is found by the longer look.
+    let d = nearestWithin(index, q[0], q[1], q[2], 0.5);
+    if (!Number.isFinite(d)) d = nearestWithin(index, q[0], q[1], q[2], 50);
+    const depth = Number.isFinite(d) ? d : 50;
+    if (depth > 0.01 && (!best || depth > best.depth)) best = { depth, point: q.slice() };
     return false;
   });
   return best;
