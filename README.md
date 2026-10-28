@@ -738,9 +738,56 @@ says, no rotary turns faster than its rotary rapid.
 **Syntax** `%` markers, `O` numbers, `N` line numbers, `( )` and `;`
 comments, `/` block delete
 
-Not supported: macro variables and expressions (`#1`, `[ ]`), and cutter
-radius compensation as an actual path offset. Each is reported rather than
-silently ignored.
+**Siemens 840D sl**, on a machine set to read Siemens:
+
+- *Frames* — `TRANS`/`ATRANS` shift the program's zero, `ROT`/`AROT` turn it
+  (`ROT X Y Z` is Z, then Y, then X; `RPL=` turns in the working plane).
+  The plain forms replace the frame; with nothing after them they clear it,
+  which is what `ROT` on its own line is for. `SCALE` and `MIRROR` are
+  named and not applied.
+- *Swivel* — `CYCLE800(_FR, _TC, _ST, _MODE, _X0, _Y0, _Z0, _A, _B, _C,
+  _X1, _Y1, _Z1, _DIR, …)`: angles axis by axis (`_MODE` gives the order, 57
+  being X then Y then Z), as a solid angle, or as the rotary positions
+  themselves; shifts before and after the turn; `_ST 1` adds to the plane
+  already there; `_FR` retracts Z (and X, Y) first; `_DIR 0` turns the
+  plane without swinging. The retract and the swing are made with the
+  slides, as the cycle does, and inside the swivelled plane the tip is
+  what is programmed. `CYCLE800()` takes the plane away.
+- *Modes* — `TRAORI`/`TRAFOOF` tool centre point on and off, `DIAMOF`
+  (`DIAMON` is noted: diameter programming is for turning), and `SUPA`,
+  `G153`, `G500`, `G70`/`G71`, the smoothing modes and `CYCLE832` read and
+  passed over.
+- *Drilling cycles* — `CYCLE81` `CYCLE82` `CYCLE83` `CYCLE84` `CYCLE840`
+  `CYCLE85` `CYCLE86` `CYCLE87` `CYCLE88` `CYCLE89` with their positional
+  parameters (`RTP, RFP, SDIS, DP, DPR, …`, empty slots taking the default),
+  at the tool or, after `MCALL CYCLE…(…)`, at every position that follows
+  until `MCALL` alone. Deep-hole strokes shrink by `DAM` and break or clear
+  the chip by `VARI`; tapping runs at the pitch (`PIT`, or `MPIT`'s metric
+  size) times the speed; `CYCLE86` lifts off the wall by `RPA/RPO/RPAP`.
+  In a swivelled plane they drill down the plane's own Z.
+- *Tools* — `T` comes before `M6`, by number or by name (`T="10 flat"`),
+  and `M6` alone changes to it. A name is matched against the assemblies'
+  names, with or without their `T1 · ` in front, and their tools' names.
+- *Fixed point* — `G75 FP=1 Z1` sends the axes it names home at rapid,
+  straight there; `G74` the same for the reference point.
+- *Axis values with a mode* — `C=DC(90)` the shorter way round,
+  `ACP`/`ACN` forwards or backwards to the position, `X=AC(…)`/`X=IC(…)`
+  absolute or incremental whatever `G90`/`G91` says.
+- *Sections* — a label ends in a colon. `REPEAT LABEL P=n` runs the lines
+  from the label to `ENDLABEL:` (or, the label being above, down to the
+  `REPEAT`), `REPEAT START END` between two labels, `REPEATB` one block,
+  and the program carries on after the `REPEAT`.
+
+Other Siemens cycles (`POCKET3`, `CYCLE61`, …) are named once and produce no
+toolpath.
+
+**Macros** are read in each control's own spelling — Fanuc `#` variables
+and `WHILE`/`IF`, Siemens `R` parameters, `DEF` variables and
+`FOR`/`WHILE`/`REPEAT`, Heidenhain `Q`, Fidia `RG`/`PT`; see *Macros, in
+whatever the control spells* above.
+
+Not supported: cutter radius compensation as an actual path offset. It is
+reported rather than silently ignored.
 
 ---
 

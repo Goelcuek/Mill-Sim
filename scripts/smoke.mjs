@@ -593,6 +593,35 @@ try {
     check(gouge.found.every((g) => g.depth < 0.45), `nothing else should gouge: ${JSON.stringify(gouge.found)}`);
   }
 
+  // ---- Siemens 840D sl: the swivel cycle, the drilling cycles, names -----
+  //
+  // The side-hole job written as a Siemens writes it: T="NAME" before M6,
+  // a labelled section run again with REPEAT, CYCLE800 to swing the head,
+  // MCALL CYCLE83 at two positions and CYCLE81 from the top. It has to read
+  // without a word of complaint and cut the same holes.
+  {
+    await loadExample(page, 9, 'Siemens swivel');
+    await runToEnd(page);
+    const sw = await page.evaluate(() => {
+      const app = window.millsim;
+      const st = app.stock;
+      return {
+        dialect: app.state.machine.controller.dialect,
+        warnings: app.state.program.warnings.map((w) => w.message),
+        tools: app.state.program.toolChanges.map((t) => t.tool),
+        findings: app.simulator.collisions.map((c) => c.message),
+        side: st.stretchesAt(0, [150, 0.05, -15.05]).map((r) => r.map((v) => +v.toFixed(2))),
+        top: st.stretchesAt(2, [150.05, 0.05, 0]).map((r) => r.map((v) => +v.toFixed(2))),
+      };
+    });
+    console.log('siemens cycles:', JSON.stringify(sw));
+    check(sw.dialect === 'siemens', `the Siemens example should set the machine to read Siemens: ${sw.dialect}`);
+    check(sw.warnings.length === 0 && sw.findings.length === 0, `the Siemens example should run clean: ${JSON.stringify(sw)}`);
+    check(sw.tools.join('|') === '50 face mill|10 flat', `tools chosen by name: ${sw.tools}`);
+    check(sw.side.length === 1 && Math.abs(sw.side[0][1] - 145) < 0.05, `CYCLE83 through the swivelled plane should leave the side hole 15 deep: ${JSON.stringify(sw.side)}`);
+    check(sw.top.length === 1 && Math.abs(sw.top[0][1] + 20) < 0.05, `CYCLE81 should leave the top hole 20 deep: ${JSON.stringify(sw.top)}`);
+  }
+
   // ---- a program written for another control says so --------------------
   //
   // Read against the wrong one, a Fidia program is a page of errors and no

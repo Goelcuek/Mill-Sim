@@ -18,7 +18,7 @@ const NAME_RE = /<([^<>]*)>|"([^"]*)"|'([^']*)'/g;
 /** A bare word: CALL, EXTCALL, or the name of a file on controls that ask for it that way. */
 const IDENT_RE = /[A-Za-z_][A-Za-z0-9_.\-]*/g;
 
-import { hasMacroSyntax, parseMacroBlock, usesBrackets } from './macro.js';
+import { hasMacroSyntax, parseMacroBlock, usesBrackets, FUNCTION_NAMES } from './macro.js';
 import { DIALECTS } from './dialects.js';
 
 /**
@@ -97,6 +97,17 @@ export function lex(text, dialect) {
       body = body.slice(1).trim();
     }
 
+    // What a Siemens block says in words of its own — a cycle called like
+    // a function, a frame, TRAORI, T="NAME", C=DC(90) — taken out before
+    // the rest is read, and carried on the block for the interpreter.
+    let extra = null;
+    if (d.siemensWords) {
+      const pre = siemensWords(body);
+      body = pre.body;
+      extra = pre.extra;
+    }
+    const pushBlock = (blk) => blocks.push(extra ? Object.assign(blk, extra) : blk);
+
     // "Do this now": a mark in front of a line on the controls that have
     // one. It says when the block runs, not what it does, so the reader
     // takes it off and reads the rest as it always would.
@@ -114,7 +125,7 @@ export function lex(text, dialect) {
       const asks = new RegExp(d.call.line, 'i').exec(body);
       if (asks) {
         const name = asks[1].trim().split(/[\\/]/).pop();
-        blocks.push({
+        pushBlock({
           line: i + 1,
           raw,
           words: [],
@@ -137,7 +148,7 @@ export function lex(text, dialect) {
     if (d.settings && d.settings.length) {
       const set = settingIn(body, d.settings);
       if (set) {
-        blocks.push({
+        pushBlock({
           line: i + 1, raw, words: [], comments, names: [], idents: [],
           setting: set, blockDelete, skipped: false,
         });
@@ -147,7 +158,7 @@ export function lex(text, dialect) {
 
     // Program start/end markers and O-numbers carry no motion.
     if (body === '%') {
-      blocks.push({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
+      pushBlock({ line: i + 1, raw, words: [], comments, blockDelete, skipped: false, marker: true });
       continue;
     }
 
@@ -168,7 +179,7 @@ export function lex(text, dialect) {
     // always took, which is most blocks in most programs.
     if (hasMacroSyntax(body, d)) {
       const macro = parseMacroBlock(body, d);
-      blocks.push({
+      pushBlock({
         line: i + 1,
         raw,
         words: macro.words,
@@ -196,7 +207,7 @@ export function lex(text, dialect) {
         const tail = body.slice(name.length).trim();
         const num = /^-?\d+(\.\d+)?$/.exec(tail.split(/\s+/)[0] || '');
         command = { name: name.toUpperCase(), text: tail, value: num ? Number(num[0]) : null };
-        blocks.push({
+        pushBlock({
           line: i + 1, raw, words: [], comments, names, idents: [], command, blockDelete, skipped: false,
         });
         continue;
@@ -230,10 +241,110 @@ export function lex(text, dialect) {
     const junk = rest.replace(IDENT_RE, '').replace(/\s+/g, '');
     const error = junk.length ? `Unrecognised text: ${junk.slice(0, 24)}` : undefined;
 
-    blocks.push({ line: i + 1, raw, words, comments, names, idents, blockDelete, skipped: false, error });
+    pushBlock({ line: i + 1, raw, words, comments, names, idents, blockDelete, skipped: false, error });
   }
 
   return blocks;
+}
+
+/**
+ * Words a mode is spelled with on a Siemens, rather than a G code. Each is
+ * taken out of the block wherever it stands — SOFT or FFWON sit on motion
+ * blocks — and handed to the interpreter by name; TRAORI may carry a
+ * transformation number in brackets.
+ */
+const SIEMENS_MODES = [
+  'TRAORI', 'TRAFOOF', 'DIAMOF', 'DIAMON', 'DIAM90', 'SUPA',
+  'ORIWKS', 'ORIMKS', 'ORIAXES', 'ORIVECT', 'ORIEULER', 'ORIRPY', 'ORIPLANE', 'ORICONCW', 'ORICONCCW',
+  'SOFT', 'BRISK', 'FFWON', 'FFWOF', 'CFC', 'CFTCP', 'CFIN', 'COMPCAD', 'COMPCURV', 'COMPSURF', 'COMPON', 'COMPOF',
+  'STOPRE', 'TOFRAME', 'TOROT', 'TOROTOF', 'PAROT', 'PAROTOF', 'UPATH', 'SPATH',
+];
+const MODES_RE = new RegExp(`\\b(${SIEMENS_MODES.join('|')})\\b(?:\\s*\\(\\s*[^()]*\\))?`, 'gi');
+/** The frame words: each a block of its own, its axes the frame's numbers. */
+const FRAMES_RE = /^(ROT|AROT|TRANS|ATRANS|SCALE|ASCALE|MIRROR|AMIRROR)\b/i;
+/** How a single axis value may be qualified: C=DC(90), X=IC(10). */
+const VALUE_MODE_RE = /\b([A-Za-z][A-Za-z0-9]*)\s*=\s*(DC|ACP|ACN|AC|IC)\s*\(/gi;
+
+/** Where the bracket opened at `open` closes, or -1. */
+function closing(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/**
+ * Take the Siemens-only words out of a block.
+ *
+ * @returns {{body:string, extra:null|{siemens?:object, toolName?:string, axisModes?:object}}}
+ */
+export function siemensWords(input) {
+  let body = input;
+  const extra = {};
+  // T="FACE MILL 50": a tool chosen by its name rather than a pot number.
+  body = body.replace(/\bT\s*=\s*"([^"]*)"/i, (all, name) => {
+    extra.toolName = name.trim();
+    return ' ';
+  });
+  // C=DC(90): the value in brackets, with how the axis is to get there.
+  let m;
+  VALUE_MODE_RE.lastIndex = 0;
+  while ((m = VALUE_MODE_RE.exec(body)) !== null) {
+    const open = m.index + m[0].length - 1;
+    const close = closing(body, open);
+    if (close < 0) break;
+    extra.axisModes = extra.axisModes || {};
+    extra.axisModes[m[1].toUpperCase()] = m[2].toUpperCase();
+    body = `${body.slice(0, m.index)}${m[1]}=(${body.slice(open + 1, close)})${body.slice(close + 1)}`;
+    VALUE_MODE_RE.lastIndex = m.index + m[1].length + 1;
+  }
+  // The modes, wherever they stand.
+  const modes = [];
+  body = body.replace(MODES_RE, (all, name) => {
+    modes.push(name.toUpperCase());
+    return ' ';
+  });
+  if (modes.length) extra.modes = modes;
+
+  const trimmed = body.trim();
+  // MCALL CYCLE81(...) — called again at every position that follows —
+  // or MCALL alone, which stops that.
+  let rest = trimmed;
+  let modal = false;
+  const mcall = /^MCALL\b\s*/i.exec(rest);
+  if (mcall) {
+    modal = true;
+    rest = rest.slice(mcall[0].length);
+    if (!rest) {
+      extra.siemens = { op: 'mcall-off' };
+      return { body: '', extra };
+    }
+  }
+  // A call written as a function, the whole block: CYCLE81(10, 0, 2, , -20).
+  // A name starts with two letters or an underscore; M00 (CHECK) is an M
+  // word and a bracket, not a call to something called M00.
+  const call = /^([A-Za-z_][A-Za-z_][A-Za-z0-9_]*|_[A-Za-z0-9_]+)\s*\(/.exec(rest);
+  if (call && !FUNCTION_NAMES.has(call[1].toUpperCase())) {
+    const open = call[0].length - 1;
+    const close = closing(rest, open);
+    if (close >= 0 && !rest.slice(close + 1).trim()) {
+      extra.siemens = { op: 'call', name: call[1].toUpperCase(), argsText: rest.slice(open + 1, close), modal };
+      return { body: '', extra };
+    }
+  }
+  if (modal) {
+    extra.siemens = { op: 'call', name: rest.trim().toUpperCase(), argsText: '', modal: true };
+    return { body: '', extra };
+  }
+  // ROT Z45, TRANS X10 Y5, ROT: the frame word, its numbers left to be read.
+  const frame = FRAMES_RE.exec(trimmed);
+  if (frame) {
+    extra.siemens = { op: 'frame', name: frame[1].toUpperCase() };
+    body = trimmed.slice(frame[0].length);
+  }
+  return { body, extra: Object.keys(extra).length ? extra : null };
 }
 
 /**

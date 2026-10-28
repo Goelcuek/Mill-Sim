@@ -22,7 +22,7 @@ import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
 import { columnFor, stockGrid } from './sim/stockShape.js';
-import { Simulator } from './sim/simulator.js';
+import { Simulator, slotNameKey } from './sim/simulator.js';
 import { silhouetteSpheres, checkLimits } from './sim/collision.js';
 import { interpret } from './gcode/interpreter.js';
 import { FLAVOUR_DIALECT, controlName, DIALECTS } from './gcode/dialects.js';
@@ -1791,6 +1791,16 @@ export class App {
       index++;
       const n = Number(a.number);
       if (n) slots.set(n, slot);
+      // A Siemens chooses its tool by name — T="50 FACE MILL" — so the
+      // assembly answers to its name, to its name without the "T1 · " in
+      // front, and to the name of the tool in it; the first to claim a
+      // name keeps it.
+      const names = [a.name, String(a.name || '').replace(/^T\d+\s*·\s*/, ''), built.tool && built.tool.def && built.tool.def.name];
+      for (const name of names) {
+        if (!name) continue;
+        const key = slotNameKey(name);
+        if (!slots.has(key)) slots.set(key, slot);
+      }
       if (a.id === this.state.activeAssemblyId) this.fallbackSlot = slot;
     }
     if (!this.state.activeAssemblyId || !this.fallbackSlot) {

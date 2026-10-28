@@ -56,6 +56,8 @@ const COMPARE = {
 };
 
 const ALWAYS = ['MOD', ...Object.keys(FUNCTIONS)];
+/** The functions an expression may call, which a call to a cycle is not. */
+export const FUNCTION_NAMES = new Set(Object.keys(FUNCTIONS));
 
 /** A literal, safe to drop into a regular expression. */
 const escapeRe = (t) => String(t).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -615,7 +617,19 @@ export function parseMacroBlock(code, dialect) {
         if (p.isWord('rep')) { p.next(); control = { kind: 'times', count: p.expression(), level: 0 }; continue; }
         if (p.isWord('repEnd')) { p.next(); control = { kind: 'end-times', level: 0 }; continue; }
 
-        if (p.isWord('repeat')) { p.next(); control = { kind: 'repeat', level: 0 }; continue; }
+        if (p.isWord('repeat')) {
+          p.next();
+          // REPEAT on its own opens a loop that UNTIL closes. REPEAT and a
+          // label is a Siemens section repetition: the lines from that
+          // label — to a second label, to ENDLABEL:, or back down to the
+          // REPEAT itself — run P times, and the program carries on below.
+          if (p.peek().kind === 'ident' || (p.peek().kind === 'address' && p.peek(1).kind !== '=')) {
+            control = repeatSection(p, 'section');
+          } else {
+            control = { kind: 'repeat', level: 0 };
+          }
+          continue;
+        }
         if (p.isWord('until')) { p.next(); control = { kind: 'until', cond: p.expression(), level: 0 }; continue; }
 
         // CALL "ROUGH": the name itself was lifted out of the block before
@@ -627,6 +641,13 @@ export function parseMacroBlock(code, dialect) {
         }
 
         throw new Error(`"${p.peek().text}" cannot start a block`);
+      }
+
+      // REPEATB LABEL P=n: the one block with that label, n times.
+      if (d.keywords.repeat && p.peek().kind === 'ident' && p.peek().text === 'REPEATB') {
+        p.next();
+        control = repeatSection(p, 'block');
+        continue;
       }
 
       // An address, one letter or several, with or without an = in front of
@@ -647,6 +668,52 @@ export function parseMacroBlock(code, dialect) {
   }
 
   return { words, assigns, control, label, call, defs };
+}
+
+/**
+ * The rest of a REPEAT that names its section: a label, perhaps a second
+ * one, and how many times (P=n, once if not said).
+ */
+function repeatSection(p, shape) {
+  const start = p.next().text;
+  let end = null;
+  const isCount = () => p.peek().text === 'P' && p.peek(1).kind === '=';
+  if (shape === 'section' && !isCount() && (p.peek().kind === 'ident' || p.peek().kind === 'address')) end = p.next().text;
+  let count = null;
+  if (isCount()) {
+    p.next();
+    p.next();
+    count = p.expression();
+  }
+  return { kind: shape === 'block' ? 'repeat-block' : 'repeat-section', start, end, count, level: 0 };
+}
+
+/**
+ * The arguments of a call written as a function — CYCLE81(10, 0, 2, , -20),
+ * CYCLE800(1, "TABLE", 0, 57, ...) — each an expression, a quoted text, or
+ * left out, which is how a Siemens cycle says "take the default".
+ *
+ * @returns {Array<object|null>} parsed expressions, null where left empty
+ */
+export function parseArgs(text, dialect) {
+  const d = dialect || DIALECTS.fanuc;
+  const tokens = tokenize(String(text || ''), d);
+  if (!tokens.length) return [];
+  const parts = [[]];
+  let depth = 0;
+  for (const t of tokens) {
+    if (t.kind === '[' || t.kind === 'idx[') depth++;
+    else if (t.kind === ']' || t.kind === 'idx]') depth--;
+    if (t.kind === ',' && depth === 0) { parts.push([]); continue; }
+    parts[parts.length - 1].push(t);
+  }
+  return parts.map((ts) => {
+    if (!ts.length) return null;
+    const p = new Parser(ts, d);
+    const node = p.expression();
+    if (p.peek().kind !== 'end') throw new Error(`"${p.peek().text}" does not belong in an argument`);
+    return node;
+  });
 }
 
 /** The counter of a FOR loop: a variable, an =, and where it starts. */

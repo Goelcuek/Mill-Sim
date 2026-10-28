@@ -119,6 +119,13 @@ const SIEMENS = {
    * data (GUD), which this reader takes from the machine's parameters.
    */
   namedVariables: true,
+  /**
+   * The words a Siemens writes that are neither addresses nor macro
+   * syntax: cycles called like functions (CYCLE81(...), CYCLE800(...)),
+   * the frame words (ROT, TRANS), modes (TRAORI, DIAMOF), T="NAME" and an
+   * axis value with its mode (C=DC(90)). See siemensWords in lexer.js.
+   */
+  siemensWords: true,
   call: { code: null, program: 'CALL', ret: 'M17' },
   marks: ['\\bGOTOF\\b', '\\bGOTOB\\b', '\\bENDWHILE\\b', '\\bDEF\\s+(REAL|INT|BOOL|STRING|CHAR)\\b', '\\bR\\d+\\s*=', '\\bMSG\\s*\\(', '\\bCYCLE\\d+', '\\bTRANS\\b'],
 };

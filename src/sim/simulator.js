@@ -85,6 +85,9 @@ function applyRigid(m, p, out) {
   return out;
 }
 
+/** How a tool's name is looked up among the slots: by itself, not by case. */
+export const slotNameKey = (name) => `name:${String(name).trim().toLowerCase()}`;
+
 /** Distance from p to the segment a–b. */
 function pointSegment(p, a, b) {
   const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
@@ -275,14 +278,21 @@ export class Simulator {
     return t > 0 ? Math.min(1, this.time / t) : this.finished ? 1 : 0;
   }
 
-  /** Tool assembly in effect for a given T number. */
+  /**
+   * Tool assembly in effect for a T number — or for a name, on a control
+   * that chooses its tools by name (T="FACE MILL 50"), matched against
+   * the assemblies' and their tools' names without regard to case.
+   */
   slotFor(toolNumber) {
-    if (this.slots.has(toolNumber)) return this.slots.get(toolNumber);
+    const key = typeof toolNumber === 'string' ? slotNameKey(toolNumber) : toolNumber;
+    if (this.slots.has(key)) return this.slots.get(key);
     if (toolNumber && !this.notified.has(`t${toolNumber}`)) {
       this.notified.add(`t${toolNumber}`);
       this.report('notool', {
         line: this.program.moves[this.moveIndex] ? this.program.moves[this.moveIndex].line : 0,
-        message: `T${toolNumber} has no assembly assigned; the fallback assembly is used.`,
+        message: typeof toolNumber === 'string'
+          ? `T="${toolNumber}": no assembly or tool of that name; the fallback assembly is used.`
+          : `T${toolNumber} has no assembly assigned; the fallback assembly is used.`,
       });
     }
     return this.fallbackSlot;

@@ -7,7 +7,7 @@
 
 import { lex } from './lexer.js';
 import { normaliseCode, expandMacro } from '../machine/macros.js';
-import { Vars, evaluate, ARGUMENTS } from './macro.js';
+import { Vars, evaluate, ARGUMENTS, parseArgs } from './macro.js';
 import { resolveDialect, detectDialect, DIALECTS, registersOf, parseRegisterKey } from './dialects.js';
 import { BlockLog } from './blockLog.js';
 import { MM_PER_INCH, deg2rad } from '../core/util.js';
@@ -95,6 +95,14 @@ export const DEFAULT_CONFIG = {
 
 const MOTION_CYCLES = new Set([73, 74, 76, 81, 82, 83, 84, 85, 86, 88, 89]);
 
+/** The Siemens drilling cycles this reader turns into moves. */
+const IGNORED_CALLS = new Set(['CYCLE832', 'MSG', 'WORKPIECE', 'SETMS', 'G_SETTINGS', 'CYCLE800_RESET']);
+const DRILL_CYCLES = new Set(['CYCLE81', 'CYCLE82', 'CYCLE83', 'CYCLE84', 'CYCLE840', 'CYCLE85', 'CYCLE86', 'CYCLE87', 'CYCLE88', 'CYCLE89']);
+
+/** Coarse metric thread pitches, by nominal size: what MPIT=10 means. */
+const METRIC_PITCH = { 1: 0.25, 1.2: 0.25, 1.6: 0.35, 2: 0.4, 2.5: 0.45, 3: 0.5, 4: 0.7, 5: 0.8, 6: 1, 8: 1.25, 10: 1.5, 12: 1.75, 14: 2, 16: 2, 18: 2.5, 20: 2.5, 22: 2.5, 24: 3, 27: 3, 30: 3.5, 33: 3.5, 36: 4, 42: 4.5, 48: 5 };
+const metricPitch = (size) => METRIC_PITCH[Math.abs(Number(size) || 0)] || 0;
+
 /** @typedef {{kind:string, line:number, path:Float64Array, ...}} Move */
 
 class State {
@@ -146,6 +154,21 @@ class State {
      * `plane` — that is the G17/18/19 arc plane and they are unrelated.
      */
     this.tilt = null;
+    /**
+     * A Siemens programmable frame — TRANS, ROT and their additive forms —
+     * or null. It sits inside the tilted plane, if there is one: `xf` is the
+     * two together, which is what a programmed point goes through.
+     */
+    this.frame = null;
+    this.xf = null;
+    /**
+     * A plane swivelled by CYCLE800: the control works out the axes for
+     * the turned frame itself, so what is programmed in it is the tip on
+     * the part, as under TRAORI.
+     */
+    this.swivel = false;
+    /** The cycle MCALL made modal: run again at every position that follows. */
+    this.mcall = null;
     this.retractMode = 98;
     this.cycleR = 0;
     this.cycleZ = 0;
@@ -578,6 +601,49 @@ export function interpret(text, config = {}) {
     return { turn, turnSq, slideSq };
   };
 
+  /** Is the tip what is programmed? Under TRAORI or G43.4 — and in a swivelled plane. */
+  const tcpNow = () => st.tcp || (st.swivel ? 4 : 0);
+
+  /**
+   * Switch between the two ways a position is written, without moving.
+   *
+   * With tool centre point on, the position is the tip on the part. Off,
+   * it is where the tip would be with these slides and every rotary at
+   * zero — which is what a machine without TCP is told. With the rotaries
+   * at zero they are the same point; turned, they are not, and changing
+   * mode with the head over at 90 has to carry one into the other through
+   * the machine, or the next move starts from somewhere the tool is not.
+   */
+  const setTcpMode = (change) => {
+    const before = tcpNow();
+    change();
+    const after = tcpNow();
+    const kin = cfg.kinematics;
+    if (!!before === !!after || !kin || typeof kin.linearsForTip !== 'function') return;
+    if (!turning.some((L) => Math.abs(st.rot[L] || 0) > 1e-9)) return;
+    const g = cfg.gaugeLength || 0;
+    const rot = {};
+    for (const L of turning) rot[L] = st.rot[L] || 0;
+    const zero = {};
+    for (const L of turning) zero[L] = 0;
+    const axes = after
+      ? kin.linearsForTip(st.pos, zero, g)
+      : kin.linearsForTip(st.pos, rot, g);
+    if (!axes) return;
+    st.pos = kin.toolInWork({ ...(after ? rot : zero), ...axes }, g).tip;
+  };
+
+  /** The tilted plane and the programmable frame inside it, as one matrix. */
+  const updateXf = () => {
+    st.xf = st.tilt && st.frame ? m4.multiply(m4.create(), st.tilt, st.frame) : st.tilt || st.frame;
+    // The current point, carried into the new frame, so the next block
+    // may leave any axis word out.
+    if (st.xf) {
+      st.tiltLocal = workToPlane(st.pos);
+      st.tiltLocalPrev = st.tiltLocal;
+    }
+  };
+
   const emitLinear = (line, kind, target, feed) => {
     const from = st.pos.slice();
     const len = dist3(from, target);
@@ -590,7 +656,7 @@ export function interpret(text, config = {}) {
       path: [from[0], from[1], from[2], target[0], target[1], target[2]],
       rotFrom: { ...st.rotPrev },
       rotTo: { ...st.rot },
-      tcp: st.tcp,
+      tcp: tcpNow(),
       feed: pace.feed,
       rpm: st.rpm,
       spindleDir: st.spindleDir,
@@ -638,7 +704,7 @@ export function interpret(text, config = {}) {
       to: target.slice(),
       rotFrom: { ...st.rotPrev },
       rotTo: { ...st.rot },
-      tcp: st.tcp,
+      tcp: tcpNow(),
       center: centre.slice(),
       plane: st.plane,
       ccw,
@@ -664,7 +730,7 @@ export function interpret(text, config = {}) {
       to: st.pos.slice(),
       rotFrom: { ...st.rot },
       rotTo: { ...st.rot },
-      tcp: st.tcp,
+      tcp: tcpNow(),
       path: [st.pos[0], st.pos[1], st.pos[2], st.pos[0], st.pos[1], st.pos[2]],
       feed: 0,
       rpm: st.rpm,
@@ -684,8 +750,13 @@ export function interpret(text, config = {}) {
    * in that plane, so it is transformed out of it before anything else sees
    * it — everything downstream keeps working in one frame.
    */
-  const resolveLinear = (axis, metric, machineCoords) => {
-    if (st.tilt && !machineCoords) {
+  const resolveLinear = (axis, metric, machineCoords, modes = null) => {
+    // X=IC(5) in G90, X=AC(5) in G91: one axis read the other way.
+    const absAt = (i) => {
+      const mode = modes && modes['XYZ'[i]];
+      return mode === 'AC' ? true : mode === 'IC' ? false : st.absolute;
+    };
+    if (st.xf && !machineCoords) {
       // The block is written in the plane's own frame, so the position is
       // tracked there too: a G91 delta is a step along the plane's axes,
       // and an arc's I/J are offsets in the plane. Keeping the local point
@@ -701,7 +772,7 @@ export function interpret(text, config = {}) {
       const local = [0, 1, 2].map((i) => {
         const w = [axis.X, axis.Y, axis.Z][i];
         const d = w === undefined ? undefined : toMM(w, metric);
-        if (st.absolute) return d === undefined ? prev[i] : d;
+        if (absAt(i)) return d === undefined ? prev[i] : d;
         return prev[i] + (d === undefined ? 0 : d);
       });
       st.tiltLocalPrev = prev;
@@ -717,7 +788,7 @@ export function interpret(text, config = {}) {
       if (w === undefined) return st.pos[i];
       const v = toMM(w, metric);
       if (machineCoords) return cfg.machineZero[i] + v + drop[i];
-      if (st.absolute) return st.offset()[i] + v;
+      if (absAt(i)) return st.offset()[i] + v;
       return st.pos[i] + v;
     });
   };
@@ -746,7 +817,7 @@ export function interpret(text, config = {}) {
 
   /** A point in the active tilted plane, expressed in work coordinates. */
   const planeToWork = (local) => {
-    const w = m4.transformPoint([0, 0, 0], st.tilt, local);
+    const w = m4.transformPoint([0, 0, 0], st.xf, local);
     const off = st.offset();
     return [w[0] + off[0], w[1] + off[1], w[2] + off[2]];
   };
@@ -755,8 +826,13 @@ export function interpret(text, config = {}) {
   const workToPlane = (pos) => {
     const off = st.offset();
     const rel = [pos[0] - off[0], pos[1] - off[1], pos[2] - off[2]];
-    return m4.transformPoint([0, 0, 0], m4.invertRigid(m4.create(), st.tilt), rel);
+    return m4.transformPoint([0, 0, 0], m4.invertRigid(m4.create(), st.xf), rel);
   };
+
+  /** A point as the program states it — through any plane or frame — in work coordinates. */
+  const progToWork = (p) => (st.xf ? planeToWork(p) : st.offset().map((o, i) => o + p[i]));
+  /** And back: where the tool is, in the program's own terms. */
+  const workToProg = (w) => (st.xf ? workToPlane(w) : w.map((v, i) => v - st.offset()[i]));
 
   /** Single-axis form, still needed by G28/G30 and the canned cycles. */
   const resolveAxis = (idx, word, metric, machineCoords) => {
@@ -773,12 +849,26 @@ export function interpret(text, config = {}) {
    * Rotaries are in degrees whatever G20/G21 says; an extra linear slide is
    * in program units like any other length, so it goes through toMM.
    */
-  const applyExtraAxes = (axis) => {
+  const applyExtraAxes = (axis, modes = null) => {
     st.rotPrev = { ...st.rot };
     let moved = false;
     for (const L of turning) {
       if (axis[L] === undefined) continue;
-      st.rot[L] = st.absolute ? axis[L] : st.rot[L] + axis[L];
+      const mode = modes && modes[L];
+      const cur = st.rot[L];
+      const v = axis[L];
+      // Where a rotary goes when the program says how: DC by the shorter
+      // way round, ACP forwards, ACN backwards — each to the position v
+      // reads as on the dial, 0 to 360 — and AC/IC absolute or incremental
+      // whatever G90/G91 says.
+      const turn = (d) => cur + d;
+      const mod = (x) => ((x % 360) + 360) % 360;
+      if (mode === 'DC') st.rot[L] = turn(mod(v - cur + 180) - 180);
+      else if (mode === 'ACP') st.rot[L] = turn(mod(v - cur));
+      else if (mode === 'ACN') st.rot[L] = turn(-mod(cur - v));
+      else if (mode === 'AC') st.rot[L] = v;
+      else if (mode === 'IC') st.rot[L] = cur + v;
+      else st.rot[L] = st.absolute ? v : cur + v;
       moved = true;
     }
     for (const L of auxLinear) {
@@ -1073,6 +1163,20 @@ export function interpret(text, config = {}) {
     }
     if (ended) break;
 
+    // The end of a section a REPEAT is running: round again, or back to
+    // the block after the REPEAT.
+    const sectionFrame = callStack[callStack.length - 1];
+    if (sectionFrame && sectionFrame.section && pc === sectionFrame.end + 1) {
+      if (sectionFrame.remaining > 0) {
+        sectionFrame.remaining--;
+        pc = sectionFrame.target;
+      } else {
+        callStack.pop();
+        pc = sectionFrame.ret;
+      }
+      continue;
+    }
+
     executed++;
     if (executed > cfg.maxBlocks) {
       warn(blocks[pc].line, 'Aborted: block limit reached (runaway subprogram loop?).', 'error');
@@ -1216,6 +1320,36 @@ export function interpret(text, config = {}) {
             continue;
           }
 
+          // REPEAT LABEL: run a section of the program again, P times, and
+          // carry on after the REPEAT. The section is from the label to a
+          // second label when one is named, else to the first ENDLABEL:
+          // after it, else — the label being above — down to the REPEAT.
+          if (c.kind === 'repeat-section' || c.kind === 'repeat-block') {
+            const start = findLabel(b, c.start);
+            if (start < 0) { warn(b.line, `REPEAT: there is no label called ${c.start} in this program.`, 'error'); continue; }
+            let end = -1;
+            if (c.kind === 'repeat-block') end = start;
+            else if (c.end) {
+              end = findLabel(b, c.end);
+              if (end < 0) { warn(b.line, `REPEAT: there is no label called ${c.end} in this program.`, 'error'); continue; }
+            } else {
+              for (let i = start + 1; i < blocks.length && (blocks[i].src || null) === (b.src || null); i++) {
+                const lab = blocks[i].macro && blocks[i].macro.label;
+                if (lab && lab.toUpperCase() === 'ENDLABEL') { end = i; break; }
+                if (i === pc - 1) break;
+              }
+              if (end < 0) end = start < pc - 1 ? pc - 2 : -1;
+              if (end < 0) { warn(b.line, `REPEAT ${c.start}: the section has no end — no ENDLABEL: after the label, and the label is not above the REPEAT.`, 'error'); continue; }
+            }
+            if (end < start) { warn(b.line, `REPEAT: ${c.end || 'the end'} comes before ${c.start}.`, 'error'); continue; }
+            if (callStack.length > 16) { warn(b.line, 'REPEAT nested too deep.', 'error'); continue; }
+            const times = c.count ? Math.floor(evaluate(c.count, vars)) : 1;
+            if (times < 1) continue;
+            callStack.push({ ret: pc, remaining: times - 1, target: start, end, section: true });
+            pc = start;
+            continue;
+          }
+
           // REPEAT runs its body and then asks whether to go round again.
           if (c.kind === 'repeat') {
             if (matchLoop(pc - 1, true) < 0) { warn(b.line, 'REPEAT has no UNTIL.', 'error'); }
@@ -1236,6 +1370,14 @@ export function interpret(text, config = {}) {
 
     if (b.blockDelete) {
       b.skipped = true;
+      continue;
+    }
+
+    // ---- the words a Siemens writes for itself ---------------------------
+    if (b.modes) siemensModes(b);
+    if (b.siemens && siemensStatement(b)) continue;
+    if (b.toolName && !b.words.length) {
+      st.pendingTool = b.toolName;
       continue;
     }
     // ---- a call written as a name ----------------------------------------
@@ -1306,7 +1448,9 @@ export function interpret(text, config = {}) {
     const m = [];
     const axis = {};
     let f, s, t, h, d, p, q, r, l, iArc, jArc, kArc;
-    let machineCoords = false;
+    // SUPA: this block in machine coordinates, every frame suppressed.
+    let machineCoords = !!(b.modes && b.modes.includes('SUPA'));
+    let fixedPoint = 1;
 
     for (const w of b.words) {
       switch (w.letter) {
@@ -1328,6 +1472,7 @@ export function interpret(text, config = {}) {
         case 'Q': q = w.value; break;
         case 'R': r = w.value; break;
         case 'L': l = w.value; break;
+        case 'FP': fixedPoint = w.value; break;
         default: break;
       }
     }
@@ -1337,7 +1482,9 @@ export function interpret(text, config = {}) {
     // does elsewhere. Read from the digits rather than from the value: 0.7
     // and 0.07 are not the same number but are the same pot, and taking
     // the value times a hundred made one of them pot 70.
-    if (t !== undefined && dialect.toolDecimal) {
+    // T="FACE MILL" chose the tool by its name.
+    if (b.toolName) t = b.toolName;
+    if (t !== undefined && dialect.toolDecimal && !b.toolName) {
       const word = b.words.find((w) => w.letter === 'T');
       const parts = word && /^[Tt]\s*(\d*)\.(\d*)$/.exec(word.text.replace(/\s+/g, ''));
       if (parts) {
@@ -1349,7 +1496,7 @@ export function interpret(text, config = {}) {
     // ---- Non-modal and modal G codes -------------------------------------
     const motionBefore = st.motion;
     let motionThisBlock = null;
-    let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false;
+    let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false, g75 = false;
     /** Set by codes whose X/Y/Z words are data, not a destination. */
     let axesConsumed = false;
 
@@ -1381,6 +1528,25 @@ export function interpret(text, config = {}) {
         case 20: st.metric = false; break;
         case 21: st.metric = true; break;
         case 28: g28 = true; break;
+        // Siemens: G74 back to the reference point, G75 to a fixed point —
+        // FP=1, the default, being home — on the axes the block names. The
+        // values in the block (G75 Z1.0) are only there to name them.
+        case 75: g75 = true; axesConsumed = true; break;
+        case 74:
+          if (dialect.siemensWords) { g75 = true; axesConsumed = true; break; }
+          motionThisBlock = 74;
+          st.motion = 74;
+          break;
+        // G153 and G500: machine coordinates for the block, and no
+        // settable frame — the Siemens forms of G53 and "no work offset".
+        case 153: machineCoords = true; break;
+        case 500: st.wcs = 'G500'; break;
+        case 70: case 700: st.metric = false; break;
+        case 71: case 710: st.metric = true; break;
+        // Exact stop, continuous path and the rest of the smoothing modes:
+        // how the control blends the path, not where it goes.
+        case 9: case 60: case 601: case 602: case 603: case 641: case 642: case 643: case 644: case 645:
+        case 290: case 291: case 450: case 451: case 931: case 961: case 971: break;
         case 30: g30 = true; break;
         case 40: st.cutterComp = 40; break;
         case 41: case 42:
@@ -1437,8 +1603,7 @@ export function interpret(text, config = {}) {
           st.tilt = tiltedPlaneMatrix(origin, iArc || 0, jArc || 0, kArc || 0, mode);
           // Carry the current point into the new frame so the first block
           // in the plane can leave any axis word out.
-          st.tiltLocal = workToPlane(st.pos);
-          st.tiltLocalPrev = st.tiltLocal;
+          updateXf();
           events.push({
             line: b.line, type: 'plane', moveIndex: moves.length,
             text: `G68.2 tilted plane at ${origin.join(', ')} (${mode === 2 ? 'RPY' : 'Euler ZXZ'} ${iArc || 0}, ${jArc || 0}, ${kArc || 0})`,
@@ -1448,6 +1613,8 @@ export function interpret(text, config = {}) {
         case 69:
           if (st.tilt) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G69 tilted plane cancelled' });
           st.tilt = null;
+          st.swivel = false;
+          updateXf();
           break;
         case 43:
           st.lengthComp = true;
@@ -1457,7 +1624,7 @@ export function interpret(text, config = {}) {
             // T5 M06 G43 H5 changes the tool in the same block, so it is the
             // new tool the offset has to match, not the one going back.
             const holding = m.includes(6) ? (t !== undefined ? t : st.pendingTool) || st.tool : st.tool;
-            if (holding && h !== holding) warn(b.line, `G43 H${h} does not match the active tool T${holding}. On the machine this is a length-offset crash.`, 'error');
+            if (holding && typeof holding === 'number' && h !== holding) warn(b.line, `G43 H${h} does not match the active tool T${holding}. On the machine this is a length-offset crash.`, 'error');
           }
           break;
         case 44: st.lengthComp = true; st.hNumber = h !== undefined ? h : st.hNumber; break;
@@ -1595,7 +1762,7 @@ export function interpret(text, config = {}) {
           if (!next) { warn(b.line, 'M06 without a T word.', 'error'); break; }
           st.tool = next;
           toolChanges.push({ line: b.line, tool: next, moveIndex: moves.length });
-          events.push({ line: b.line, type: 'toolchange', moveIndex: moves.length, tool: next, text: `Tool change T${next}` });
+          events.push({ line: b.line, type: 'toolchange', moveIndex: moves.length, tool: next, text: `Tool change ${typeof next === 'string' ? `T="${next}"` : `T${next}`}` });
           break;
         }
         case 7: st.coolant = 'mist'; break;
@@ -1693,6 +1860,22 @@ export function interpret(text, config = {}) {
       continue;
     }
 
+    if (g75) {
+      // Every axis the block names, at rapid, straight to the point — no
+      // intermediate point, unlike G28. A rotary named goes to its zero.
+      const point = fixedPoint === 2 ? cfg.g30 : cfg.machineZero;
+      const drop = gaugeDrop();
+      const target = st.pos.slice();
+      for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) target[i] = point[i] + drop[i];
+      const turned = turning.filter((L) => axis[L] !== undefined);
+      if (turned.length) {
+        st.rotPrev = { ...st.rot };
+        for (const L of turned) st.rot[L] = 0;
+      }
+      emitLinear(b.line, 'rapid', target, cfg.rapidRate);
+      continue;
+    }
+
     // ---- Motion ----------------------------------------------------------
     if (axesConsumed) continue;
     const hasAxisWord = axis.X !== undefined || axis.Y !== undefined || axis.Z !== undefined;
@@ -1767,7 +1950,7 @@ export function interpret(text, config = {}) {
       }
     }
 
-    if (hasRotaryWord) applyExtraAxes(axis);
+    if (hasRotaryWord) applyExtraAxes(axis, b.axisModes);
 
     if (motion === 80 || (!hasAxisWord && !hasRotaryWord && !turnedByVector)) {
       if (hasAxisWord && motion === 80) warn(b.line, 'Axis words with G80 are ignored.');
@@ -1781,7 +1964,7 @@ export function interpret(text, config = {}) {
       continue;
     }
 
-    const target = resolveLinear(axis, st.metric, machineCoords);
+    const target = resolveLinear(axis, st.metric, machineCoords, b.axisModes);
 
     if (motion === 0) {
       emitLinear(b.line, 'rapid', target, cfg.rapidRate);
@@ -1792,7 +1975,7 @@ export function interpret(text, config = {}) {
       const ccw = motion === 3;
       const feed = st.feed > 0 ? st.feed : 100;
       const words = { i: iArc, j: jArc, k: kArc, r };
-      const tilted = st.tilt && !machineCoords;
+      const tilted = st.xf && !machineCoords;
       const from = tilted ? st.tiltLocalPrev : st.pos;
       const to = tilted ? st.tiltLocal : target;
       const center = arcCentre(b.line, to, words, warn, from, tilted ? [0, 0, 0] : null, ccw);
@@ -1804,6 +1987,9 @@ export function interpret(text, config = {}) {
         emitArc(b.line, target, center, ccw, feed);
       }
     }
+
+    // MCALL CYCLE81(...): the cycle again, at the position just reached.
+    if (st.mcall && hasAxisWord) runSiemensCycle(st.mcall.name, st.mcall.args, b.line);
   }
 
   /**
@@ -1868,6 +2054,392 @@ export function interpret(text, config = {}) {
 
     warnFn(line, 'Arc without I/J/K or R; treated as a straight feed move.', 'error');
     return null;
+  }
+
+  // ---- Siemens ---------------------------------------------------------------
+
+  /** Modes a Siemens writes as words: TRAORI, TRAFOOF, DIAMON and the rest. */
+  function siemensModes(b) {
+    for (const mode of b.modes) {
+      if (mode === 'TRAORI' || mode === 'TRAFOOF') {
+        const on = mode === 'TRAORI';
+        if (on !== (st.tcp !== 0)) {
+          events.push({ line: b.line, type: 'tcp', moveIndex: moves.length, text: on ? 'Tool centre point control on (TRAORI)' : 'Tool centre point control off (TRAFOOF)' });
+        }
+        setTcpMode(() => { st.tcp = on ? 4 : 0; });
+      } else if ((mode === 'DIAMON' || mode === 'DIAM90') && !spokenFor.has(mode)) {
+        // Diameter programming is a lathe's: X read as a diameter. A mill
+        // has no use for it, and this reader keeps X a position.
+        spokenFor.add(mode);
+        warn(b.line, `${mode} is diameter programming, for turning; X is read as a position here.`);
+      }
+      // DIAMOF, SUPA (read where the axes are), and the smoothing and
+      // orientation modes change nothing about where the tool goes.
+    }
+  }
+
+  /**
+   * A block that is one Siemens statement: a frame, a call written as a
+   * function, MCALL. True when the block has been dealt with whole.
+   */
+  function siemensStatement(b) {
+    const sw = b.siemens;
+    if (sw.op === 'mcall-off') {
+      if (st.mcall) events.push({ line: b.line, type: 'cycle', moveIndex: moves.length, text: `MCALL ${st.mcall.name} ended` });
+      st.mcall = null;
+      return true;
+    }
+    if (sw.op === 'frame') {
+      siemensFrame(b);
+      return true;
+    }
+    if (sw.op !== 'call') return false;
+    // Settings the control keeps for the machining that follows — high
+    // speed, the message line, the blank's outline for its own graphics —
+    // none of which moves anything. Their arguments are the control's own
+    // constants (_ROUGH, _FINISH), not this program's, so they are not read.
+    if (IGNORED_CALLS.has(sw.name) && !sw.modal) return true;
+    let args;
+    try {
+      if (!sw.args) sw.args = parseArgs(sw.argsText, dialect);
+      args = sw.args.map((a) => (a === null ? null : evaluate(a, vars)));
+    } catch (err) {
+      warn(b.line, `${sw.name}: ${err.message}.`, 'error');
+      return true;
+    }
+    const name = sw.name;
+    if (sw.modal) {
+      if (!DRILL_CYCLES.has(name)) {
+        warn(b.line, `MCALL ${name}: only the drilling cycles are run modally here.`, 'error');
+        return true;
+      }
+      st.mcall = { name, args };
+      events.push({ line: b.line, type: 'cycle', moveIndex: moves.length, text: `MCALL ${name}: at every position that follows` });
+      return true;
+    }
+    if (name === 'CYCLE800') { cycle800(args, b.line); return true; }
+    if (DRILL_CYCLES.has(name)) { runSiemensCycle(name, args, b.line); return true; }
+    // A program of the shop's own, with arguments: run it.
+    const target = namedTarget(name);
+    if (target !== undefined) {
+      if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); return true; }
+      callStack.push({ ret: pc, remaining: 0, target, scoped: true });
+      vars.pushScope(name);
+      pc = target;
+      return true;
+    }
+    if (!spokenFor.has(name)) {
+      spokenFor.add(name);
+      warn(b.line, `${name} is not simulated: no toolpath comes from it.`, /^CYCLE|^POCKET|^SLOT|^HOLES|^LONGHOLE/.test(name) ? 'warning' : 'error');
+    }
+    return true;
+  }
+
+  /**
+   * TRANS, ROT and their additive forms: a frame of the program's own
+   * inside the work offset. The plain forms replace the whole frame — and
+   * with nothing after them clear it; ATRANS and AROT add to it, in its
+   * own axes. ROT turns Z, then Y, then X; RPL turns in the working plane.
+   */
+  function siemensFrame(b) {
+    const name = b.siemens.name;
+    const v = {};
+    for (const w of b.words) v[w.letter] = w.value;
+    const has = ['X', 'Y', 'Z', 'RPL'].some((L) => v[L] !== undefined);
+    const additive = name[0] === 'A';
+    const base = name.replace(/^A/, '');
+    if (!has) {
+      if (!additive) {
+        if (st.frame) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: `${name}: programmable frame cleared` });
+        st.frame = null;
+        updateXf();
+      }
+      return;
+    }
+    let mat;
+    if (base === 'TRANS') {
+      mat = m4.fromTranslation(m4.create(), [0, 1, 2].map((i) => toMM(v['XYZ'[i]] || 0, st.metric)));
+    } else if (base === 'ROT') {
+      mat = m4.create();
+      const turn = (axisV, deg) => {
+        if (!deg) return;
+        m4.multiply(mat, mat, m4.fromRotation(m4.create(), axisV, deg2rad(deg)));
+      };
+      if (v.RPL !== undefined) {
+        turn(st.plane === 18 ? [0, 1, 0] : st.plane === 19 ? [1, 0, 0] : [0, 0, 1], v.RPL);
+      } else {
+        turn([0, 0, 1], v.Z || 0);
+        turn([0, 1, 0], v.Y || 0);
+        turn([1, 0, 0], v.X || 0);
+      }
+    } else {
+      if (!spokenFor.has(name)) {
+        spokenFor.add(name);
+        warn(b.line, `${name} is not modelled: the path is read unscaled and unmirrored.`);
+      }
+      return;
+    }
+    st.frame = additive && st.frame ? m4.multiply(m4.create(), st.frame, mat) : mat;
+    updateXf();
+    events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: `${name} ${b.words.map((w) => `${w.letter}${+w.value.toFixed(3)}`).join(' ')}` });
+  }
+
+  /**
+   * CYCLE800: swivel the working plane, and the head or table with it.
+   *
+   *   CYCLE800(_FR, _TC, _ST, _MODE, _X0, _Y0, _Z0, _A, _B, _C, _X1, _Y1, _Z1, _DIR, ...)
+   *
+   * _MODE's top two bits say how the angles are given — axis by axis (the
+   * other bits then give the order, two to an axis: 1 X, 2 Y, 3 Z, so 57
+   * is X then Y then Z), as a solid angle, or as the rotary positions
+   * themselves. Each turn is about the axes the last one left. _X0.._Z0
+   * shift the origin before turning, _X1.._Z1 after. _ST 1 adds to the
+   * plane already there. _FR retracts first (1 in Z, 2 in Z then X and Y),
+   * and a _DIR of 0 turns the plane without swinging the machine.
+   *
+   * CYCLE800() with nothing in it takes the plane away again.
+   */
+  function cycle800(args, line) {
+    const n = (i) => (Number.isFinite(Number(args[i])) && args[i] !== null && typeof args[i] !== 'string' ? Number(args[i]) : 0);
+    if (!args.length || args.every((a) => a === null || a === '' || a === 0)) {
+      if (st.tilt) events.push({ line, type: 'plane', moveIndex: moves.length, text: 'CYCLE800() swivel plane cleared' });
+      setTcpMode(() => { st.swivel = false; });
+      st.tilt = null;
+      updateXf();
+      return;
+    }
+    const fr = n(0);
+    const additive = n(2) % 10 === 1;
+    const mode = Math.round(n(3));
+    const kind = (mode >> 6) & 3;
+    const angles = [n(7), n(8), n(9)];
+    const dir = args[13] === null || args[13] === undefined ? -1 : n(13);
+    const kin = cfg.kinematics;
+
+    const rot = m4.create();
+    const turn = (axisIndex, deg) => {
+      if (!deg || !axisIndex) return;
+      const a = [[1, 0, 0], [0, 1, 0], [0, 0, 1]][axisIndex - 1];
+      m4.multiply(rot, rot, m4.fromRotation(m4.create(), a, deg2rad(deg)));
+    };
+    let direct = null;
+    if (kind === 0 || kind === 2) {
+      if (kind === 2 && !spokenFor.has('CYCLE800 projection')) {
+        spokenFor.add('CYCLE800 projection');
+        warn(line, 'CYCLE800 projection angles are read as axis-by-axis angles; check the swivelled plane.');
+      }
+      const order = [mode & 3, (mode >> 2) & 3, (mode >> 4) & 3];
+      if (!order.some(Boolean)) order.splice(0, 3, 1, 2, 3);
+      order.forEach((ax, k) => turn(ax, angles[k]));
+    } else if (kind === 1) {
+      // A solid angle: round Z in the plane, then tipped about the new Y.
+      turn(3, angles[0]);
+      turn(2, angles[1]);
+    } else {
+      // The rotary positions themselves, in the order the machine has them.
+      if (!kin || !kin.rotaries().length) {
+        warn(line, 'CYCLE800 with rotary positions needs a machine with rotary axes.', 'error');
+        return;
+      }
+      direct = {};
+      kin.rotaries().forEach((node, k) => { if (k < 3) direct[node.letter] = angles[k]; });
+      const axisV = m4.normalize(kin.toolAxis({ ...st.rot, ...direct }, cfg.gaugeLength || 0));
+      // The turn that stands Z up along the tool, by the shortest way.
+      const zc = Math.max(-1, Math.min(1, axisV[2]));
+      const about = Math.hypot(axisV[0], axisV[1]) > 1e-12 ? [-axisV[1], axisV[0], 0] : [1, 0, 0];
+      m4.multiply(rot, rot, m4.fromRotation(m4.create(), about, Math.acos(zc)));
+    }
+    const shift0 = [n(4), n(5), n(6)].map((x) => toMM(x, st.metric));
+    const shift1 = [n(10), n(11), n(12)].map((x) => toMM(x, st.metric));
+    let plane = m4.multiply(m4.create(), m4.fromTranslation(m4.create(), shift0), rot);
+    plane = m4.multiply(m4.create(), plane, m4.fromTranslation(m4.create(), shift1));
+    if (additive && st.tilt) plane = m4.multiply(m4.create(), st.tilt, plane);
+
+    // The cycle retracts and swings with the slides, not the tip: Z up to
+    // its stop, then the head or table turns where it stands. So both are
+    // written as a machine without TCP is told them, whatever was on.
+    const tcpWas = st.tcp;
+    setTcpMode(() => { st.swivel = false; st.tcp = 0; });
+    if (fr === 1 || fr === 2 || fr === 4) {
+      const g = cfg.gaugeLength || 0;
+      const up = st.pos.slice();
+      up[2] = cfg.machineZero[2] - g;
+      if (Math.abs(up[2] - st.pos[2]) > 1e-9) emitLinear(line, 'rapid', up, cfg.rapidRate);
+      if (fr === 2) {
+        const home = [cfg.machineZero[0], cfg.machineZero[1], up[2]];
+        if (dist3(home, st.pos) > 1e-9) emitLinear(line, 'rapid', home, cfg.rapidRate);
+      }
+    }
+    st.tilt = plane;
+    updateXf();
+    const swivelOn = () => {
+      setTcpMode(() => { st.swivel = true; st.tcp = tcpWas; });
+      updateXf();
+    };
+    events.push({ line, type: 'plane', moveIndex: moves.length, text: `CYCLE800 swivel plane (${['axis by axis', 'solid angle', 'projection', 'rotary positions'][kind]} ${angles.map((x) => +x.toFixed(3)).join(', ')})` });
+
+    if (dir === 0) { swivelOn(); return; }
+    let sol = direct;
+    if (!sol) {
+      if (!kin || !kin.rotaries().length) {
+        warn(line, 'CYCLE800 swings the machine, which needs a machine with rotary axes; load a 5-axis machine in Setup.', 'error');
+        swivelOn();
+        return;
+      }
+      const normal = m4.normalize(m4.transformDir([0, 0, 0], st.tilt, [0, 0, 1]));
+      sol = kin.rotariesForToolAxis(normal, st.rot, cfg.gaugeLength || 0);
+      if (!sol) {
+        warn(line, `CYCLE800 cannot reach a tool axis of ${normal.map((x) => x.toFixed(3)).join(', ')} within the machine's travel.`, 'error');
+        swivelOn();
+        return;
+      }
+    }
+    st.rotPrev = { ...st.rot };
+    Object.assign(st.rot, sol);
+    emitLinear(line, 'rapid', st.pos.slice(), cfg.rapidRate);
+    events.push({ line, type: 'align', moveIndex: moves.length, text: `CYCLE800 swung the machine: ${Object.entries(sol).map(([k, x]) => `${k}${x.toFixed(3)}`).join(' ')}` });
+    swivelOn();
+  }
+
+  /**
+   * A Siemens drilling cycle at the position the tool stands over.
+   *
+   * The first five are the same on all of them: RTP the retract plane and
+   * RFP the reference plane, both absolute; SDIS the safety distance above
+   * RFP, which is where feeding starts; DP the final depth, absolute — or
+   * DPR, the depth below RFP, which wins when both are given. Depths run
+   * down the working plane's own Z, so a swivelled plane drills down its
+   * own axis.
+   */
+  function runSiemensCycle(name, args, line) {
+    const num = (i, dflt = 0) => (args[i] === null || args[i] === undefined || typeof args[i] === 'string' ? dflt : Number(args[i]));
+    const given = (i) => args[i] !== null && args[i] !== undefined && typeof args[i] !== 'string';
+    if (st.plane !== 17 && !spokenFor.has('cycle plane')) {
+      spokenFor.add('cycle plane');
+      warn(line, `${name} is drilled along Z; the cycles here are for G17.`);
+    }
+    const mm = (v) => toMM(v, st.metric);
+    const rtp = mm(num(0));
+    const rfp = mm(num(1));
+    const sdis = Math.abs(mm(num(2)));
+    const depth = given(4) && num(4) !== 0 ? rfp - Math.abs(mm(num(4))) : mm(num(3));
+    const approach = rfp + sdis;
+    // Every cycle feeds at F but the tapping ones, which go at the pitch.
+    const tapping = name === 'CYCLE84' || name === 'CYCLE840';
+    const feed = st.feed > 0 ? st.feed : 100;
+    if (!(st.feed > 0) && !(tapping && st.rpm > 0)) warn(line, `${name} with no active F word; assuming 100 mm/min.`, 'error');
+    const here = workToProg(st.pos);
+    const [hx, hy] = here;
+    const go = (z, kind, f, x = hx, y = hy) => {
+      const local = [x, y, z];
+      const w = progToWork(local);
+      if (st.xf) { st.tiltLocalPrev = st.tiltLocal; st.tiltLocal = local; }
+      emitLinear(line, kind, w, kind === 'rapid' ? cfg.rapidRate : f);
+    };
+    // Down to where feeding starts: from above it, straight down; from
+    // below — a cycle called with the tool low — up first, then over.
+    if (here[2] < approach - 1e-9) go(approach, 'rapid', 0, here[0], here[1]);
+    go(approach, 'rapid', 0);
+    const dwell = (secs) => { if (secs > 0) emitDwell(line, secs); };
+    const out = () => go(Math.max(rtp, approach), 'rapid', 0);
+
+    switch (name) {
+      case 'CYCLE81':
+        go(depth, 'feed', feed);
+        out();
+        break;
+      case 'CYCLE82':
+        go(depth, 'feed', feed);
+        dwell(num(5));
+        out();
+        break;
+      case 'CYCLE83': {
+        // Deep hole: FDEP (absolute) or FDPR (below RFP) for the first
+        // stroke, each stroke after it DAM shorter but never shorter than
+        // DAM; VARI 0 breaks the chip by backing off a millimetre, VARI 1
+        // clears it by going back up to RFP + SDIS between strokes.
+        const first = given(6) && num(6) ? rfp - Math.abs(mm(num(6))) : given(5) ? mm(num(5)) : depth;
+        const dam = Math.abs(mm(num(7)));
+        const dtb = num(8);
+        const dts = num(9);
+        const frf = given(10) && num(10) > 0 ? Math.min(1, num(10)) : 1;
+        const vari = num(11);
+        const vrt = given(14) && num(14) > 0 ? mm(num(14)) : 1;
+        let z = approach;
+        let step = Math.max(rfp - Math.max(first, depth), 1e-3);
+        let stroke = 0;
+        while (z > depth + 1e-6 && stroke < 10000) {
+          if (stroke > 0 && dam > 0) step = Math.max(step - dam, dam);
+          const next = stroke === 0 ? Math.max(first, depth) : Math.max(depth, z - step);
+          go(next, 'feed', stroke === 0 ? feed * frf : feed);
+          stroke++;
+          if (next <= depth + 1e-6) break;
+          if (vari === 1) {
+            go(approach, 'rapid', 0);
+            dwell(dts);
+            go(next + 1, 'rapid', 0);
+          } else {
+            go(next + vrt, 'rapid', 0);
+          }
+          z = next;
+        }
+        dwell(dtb);
+        out();
+        break;
+      }
+      case 'CYCLE84':
+      case 'CYCLE840': {
+        // Tapping: down and back up along the thread, at the pitch times
+        // the speed — PIT, or the pitch of the MPIT metric size.
+        const pitch = name === 'CYCLE84'
+          ? (given(8) && num(8) ? Math.abs(mm(num(8))) : metricPitch(num(7)))
+          : (given(10) && num(10) ? Math.abs(mm(num(10))) : metricPitch(num(9)));
+        const tapFeed = pitch > 0 && st.rpm > 0 ? pitch * st.rpm : feed;
+        go(depth, 'feed', tapFeed);
+        dwell(num(5));
+        go(approach, 'feed', tapFeed);
+        out();
+        break;
+      }
+      case 'CYCLE85': {
+        // Boring, fed in at FFR and fed out at RFF.
+        const ffr = given(6) && num(6) > 0 ? mm(num(6)) : feed;
+        const rff = given(7) && num(7) > 0 ? mm(num(7)) : ffr;
+        go(depth, 'feed', ffr);
+        dwell(num(5));
+        go(approach, 'feed', rff);
+        out();
+        break;
+      }
+      case 'CYCLE86': {
+        // Boring with the spindle stopped at the bottom and the tool lifted
+        // off the wall — RPA in X, RPO in Y, RPAP in Z — before it comes out.
+        go(depth, 'feed', feed);
+        dwell(num(5));
+        const ox = hx + mm(num(7));
+        const oy = hy + mm(num(8));
+        go(depth + mm(num(9)), 'rapid', 0, ox, oy);
+        go(approach, 'rapid', 0, ox, oy);
+        go(approach, 'rapid', 0);
+        out();
+        break;
+      }
+      case 'CYCLE87':
+      case 'CYCLE88':
+        // Boring with a stop at the bottom: the operator brings it out.
+        go(depth, 'feed', feed);
+        if (name === 'CYCLE88') dwell(num(5));
+        out();
+        break;
+      case 'CYCLE89':
+        go(depth, 'feed', feed);
+        dwell(num(5));
+        go(approach, 'feed', feed);
+        out();
+        break;
+      default:
+        break;
+    }
   }
 
   /** Expand a drilling canned cycle into discrete moves. */

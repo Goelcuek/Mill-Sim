@@ -216,6 +216,40 @@ export const EXAMPLES = [
     },
     "file": "examples/side-holes-full-3d-stock.nc",
     "lines": 61
+  },
+  {
+    "name": "Siemens swivel plane and drilling cycles",
+    "description": "The side-hole job as a Siemens 840D sl writes it: tools chosen by name before M6, the facing passes as one labelled section run again with REPEAT … P=2, CYCLE800 to swing the head onto the right face, MCALL CYCLE83 to peck both side holes and CYCLE81 for the hole from the top. Loading it sets the machine to the head-table and to Siemens.",
+    "setup": {
+      "stock": {
+        "size": [
+          120,
+          90,
+          40
+        ],
+        "origin": [
+          40,
+          -45,
+          -40
+        ],
+        "resolution": 0.25
+      },
+      "machine": {
+        "preset": "headTable",
+        "controller": {
+          "flavour": "siemens",
+          "dialect": "siemens",
+          "syntax": null,
+          "plane": 17,
+          "metric": true,
+          "absolute": true,
+          "arcCentreAbsolute": false,
+          "feedMode": 94
+        }
+      }
+    },
+    "file": "examples/siemens-swivel-and-cycles-840d.nc",
+    "lines": 55
   }
 ];
 
