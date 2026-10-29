@@ -76,6 +76,23 @@ const open = async () => {
 };
 const check = (ok, message) => { if (!ok) throw new Error(message); };
 
+/**
+ * Go to a step, and to one card of it, the way a person does: the step
+ * bar, then the card's header if it is shut. The View pages are on the
+ * viewport's toolbar.
+ */
+async function goTo(page, tab, group = null) {
+  if (tab === 'view') {
+    if (group) await page.evaluate((g) => window.millsim.viewDock.open(g), group);
+    return;
+  }
+  await page.click(`.step[data-step="${tab}"]`);
+  if (!group) return;
+  const open = await page.evaluate(([t, g]) => window.millsim.panels[t].isOpen(g), [tab, group]);
+  if (!open) await page.click(`[data-group="${group}"] > .group-head`);
+  await page.evaluate(([t, g]) => { window.millsim.panels[t].page = g; }, [tab, group]);
+}
+
 /** Load one of the shipped examples and wait for it to be read. */
 async function loadExample(page, index, name) {
   await page.evaluate((i) => window.millsim.panels.program.loadExampleAt(i), index);
@@ -140,8 +157,7 @@ try {
   check(!loads.some((x) => x.tool === 6), 'the chamfer pass cuts air and was given a load');
 
   // ---- and the editor is showing the program it just ran ----------------
-  await page.click('.ribbon-tab[data-tab="program"]');
-  await page.click('.ribbon-page[data-page="editor"]');
+  await goTo(page, 'program', 'editor');
   await page.waitForTimeout(400);
   check(await page.evaluate(() => document.querySelector('.editor-area').value === window.millsim.state.source),
     'the editor is not showing the loaded program');
@@ -188,8 +204,7 @@ try {
         skipped: c.skippedCells, compared: c.comparedCells, lateral: c.lateral,
       };
     });
-    await page.click('.ribbon-tab[data-tab="results"]');
-    await page.click('.ribbon-page[data-page="compare"]');
+    await goTo(page, 'results', 'compare');
     await page.waitForTimeout(400);
     const said = await page.evaluate(() => [...document.querySelectorAll('.panel')].map((p) => p.textContent).join(' '));
     console.log('reference check:', JSON.stringify({
@@ -347,8 +362,7 @@ try {
   // a drag actually moves it, which is three separate pieces of wiring: the
   // hit test, the gizmo, and the rebuild on release.
   {
-    await page.click('.ribbon-tab[data-tab="setup"]');
-    await page.click('.ribbon-page[data-page="stock"]');
+    await goTo(page, 'setup', 'stock');
     await page.waitForTimeout(300);
     const canvas = await page.$('canvas');
     const box = await canvas.boundingBox();
@@ -366,7 +380,7 @@ try {
     await page.waitForTimeout(400);
     check(await page.evaluate(() => window.millsim.stockGizmo.attached),
       'clicking the stock did not put the handles on it');
-    check(await page.evaluate(() => window.millsim.panels.setup.page === 'stock'),
+    check(await page.evaluate(() => window.millsim.panels.setup.isOpen('stock')),
       'clicking the stock did not open the Stock page');
 
     const at = await page.evaluate(() => {
@@ -417,7 +431,7 @@ try {
 
     // And they are a setup affordance: leaving the tab puts them away
     // rather than leaving something standing in front of the part.
-    await page.click('.ribbon-tab[data-tab="program"]');
+    await goTo(page, 'program');
     await page.waitForTimeout(400);
     check(!(await page.evaluate(() => window.millsim.stockGizmo.attached)),
       'the handles stayed up after leaving the Setup tab');
@@ -711,8 +725,7 @@ try {
     check(wrong.suggested === 'fidia', 'a Fidia program was not recognised as one');
     check(wrong.errors > 0, 'the Fidia program read cleanly as a Fanuc, which it should not');
 
-    await page.click('.ribbon-tab[data-tab="program"]');
-    await page.click('.ribbon-page[data-page="summary"]');
+    await goTo(page, 'program', 'summary');
     await page.waitForTimeout(400);
     await page.click('.panel button:has-text("Read it as a Fidia")');
     await page.waitForTimeout(1200);
@@ -782,8 +795,7 @@ try {
   }
 
   // ---- the axes can be wound by hand ------------------------------------
-  await page.click('.ribbon-tab[data-tab="machine"]');
-  await page.click('.ribbon-page[data-page="jog"]');
+  await goTo(page, 'machine', 'jog');
   await page.waitForTimeout(500);
   const sliders = await page.$$('.jog-slider');
   check(sliders.length > 0, 'the jog page has no axes');
@@ -797,7 +809,7 @@ try {
   console.log('jog:', JSON.stringify(jogged.jog));
   check(moved, 'the jog slider did not move an axis');
   check(/80/.test(jogged.hud), 'the readout did not follow the jog');
-  await page.click('.ribbon-tab[data-tab="program"]');
+  await goTo(page, 'program');
   await page.waitForTimeout(300);
   check(await page.evaluate(() => window.millsim.jog === null), 'jogging did not stop when the page was left');
 
@@ -824,31 +836,25 @@ try {
     limits: [...window.millsim.state.machine.limits.min],
   }));
 
-  await page.click('.ribbon-tab[data-tab="setup"]');
-  await page.click('.ribbon-page[data-page="project"]');
-  await page.waitForTimeout(300);
   const saved = page.waitForEvent('download');
-  await page.click('.panel .action-row button:has-text("Save project")');
+  await page.click('.topbar .top-btn[aria-label^="Save the project"]');
   const file = join(scratch, 'smoke-project.zip');
   await (await saved).saveAs(file);
   await page.close();
 
   page = await open();
   // Visit the editor first: it is the page that used to come back empty.
-  await page.click('.ribbon-tab[data-tab="program"]');
-  await page.click('.ribbon-page[data-page="editor"]');
+  await goTo(page, 'program', 'editor');
   await page.waitForTimeout(300);
-  await page.click('.ribbon-tab[data-tab="setup"]');
-  await page.click('.ribbon-page[data-page="project"]');
+  await goTo(page, 'setup');
   await page.waitForTimeout(300);
   const chooser = page.waitForEvent('filechooser');
-  await page.click('.panel .action-row button:has-text("Open project")');
+  await page.click('.topbar .top-btn[aria-label^="Open a project"]');
   (await chooser).setFiles(file);
   await page.waitForFunction(() => /Demo bracket/.test(window.millsim.state.programName), null, { timeout: 30000 });
   await page.waitForTimeout(1500);
 
-  await page.click('.ribbon-tab[data-tab="program"]');
-  await page.click('.ribbon-page[data-page="editor"]');
+  await goTo(page, 'program', 'editor');
   await page.waitForTimeout(500);
   const after = await page.evaluate(() => ({
     source: window.millsim.state.source.length,
@@ -886,11 +892,10 @@ try {
   // was a line of the main program that happened to share a number with
   // the line running inside the called file.
   {
-    await page.click('.ribbon-tab[data-tab="program"]');
-    await page.click('.ribbon-page[data-page="editor"]');
+    await goTo(page, 'program', 'editor');
     await page.waitForTimeout(400);
     const named = () => page.evaluate(() => ({
-      tab: [...document.querySelectorAll('.ribbon-page')].find((b) => b.dataset.page === 'editor').textContent.trim(),
+      tab: document.querySelector('[data-group="editor"] .group-label').textContent.trim(),
       showing: document.querySelector('.editor-showing .name').textContent,
       text: document.querySelector('.editor-area').value.length,
       source: (() => {
@@ -976,8 +981,7 @@ try {
 
 
   // ---- G53 and the envelope both measure from home ----------------------
-  await page.click('.ribbon-tab[data-tab="machine"]');
-  await page.click('.ribbon-page[data-page="limits"]');
+  await goTo(page, 'machine', 'limits');
   await page.waitForTimeout(300);
   const labels = await page.$$eval('.panel .field-label', (n) => n.map((x) => x.textContent.trim()));
   check(labels.some((t) => t.startsWith('Home X')), 'the Travels page has no home position');
@@ -1040,8 +1044,7 @@ try {
 
   // ---- the machine can be painted ---------------------------------------
   {
-    await page.click('.ribbon-tab[data-tab="machine"]');
-    await page.click('.ribbon-page[data-page="layout"]');
+    await goTo(page, 'machine', 'layout');
     await page.waitForTimeout(300);
     const has = await page.$$eval('.panel input[type="color"]', (n) => n.length);
     check(has > 0, 'the Layout page has no colour picker on it');
@@ -1364,8 +1367,7 @@ try {
   // the lists take a selection rather than a row: a tick per row, Ctrl to
   // add and drop, Shift for a run, and one confirmation for the lot.
   {
-    await page.click('.ribbon-tab[data-tab="tools"]');
-    await page.click('.ribbon-page[data-page="tools"]');
+    await goTo(page, 'tools', 'tools');
     await page.waitForTimeout(400);
     const before = await page.evaluate(() => window.millsim.library.tools.length);
     check(before >= 6, `only ${before} cutters to pick from`);
@@ -1425,7 +1427,7 @@ try {
 
     // The library is kept without anyone being asked to tick a box about
     // browser storage — that question goes away with the browser.
-    await page.click('.ribbon-page[data-page="library"]');
+    await goTo(page, 'tools', 'library');
     await page.waitForTimeout(300);
     const libPage = await page.evaluate(() => document.body.innerText);
     check(!/Keep the library in this browser/.test(libPage), 'the browser-storage toggle is still on the Library page');
@@ -1467,12 +1469,12 @@ try {
       // nothing throwing on the way.
       const saidMm = [];
       for (const tab of ['setup', 'machine', 'tools', 'program', 'results', 'view']) {
-        app.setTab ? app.setTab(tab) : app.setPage(tab, null);
-        const pages = [...document.querySelectorAll('.ribbon-page')].map((p) => p.dataset.page);
+        if (tab !== 'view') app.setTab(tab);
+        const pages = app.panels[tab].pageDefs.map((p) => p.id);
         for (const pg of pages) {
           app.setPage(tab, pg);
           await new Promise((r) => setTimeout(r, 40));
-          const host = document.querySelector('.panel-body') || document.body;
+          const host = tab === 'view' ? document.querySelector('.view-pop') : document.querySelector('.panel-host');
           if (/\bmm\b|cm³/.test(host.innerText)) saidMm.push(`${tab}/${pg}`);
         }
       }
@@ -1532,8 +1534,8 @@ try {
         await new Promise((r) => setTimeout(r, 250));
         const found = {};
         for (const tab of ['setup', 'machine', 'tools', 'program', 'results', 'view']) {
-          if (app.setTab) app.setTab(tab);
-          const pages = [...document.querySelectorAll('.ribbon-page')].map((p) => p.dataset.page);
+          if (tab !== 'view') app.setTab(tab);
+          const pages = app.panels[tab].pageDefs.map((p) => p.id);
           for (const pg of pages) {
             app.setPage(tab, pg);
             await new Promise((r) => setTimeout(r, 50));
@@ -1695,8 +1697,7 @@ try {
     const silent = [];
     let opened = 0;
     for (const [tab, id] of pages) {
-      await page.click(`.ribbon-tab[data-tab="${tab}"]`);
-      await page.click(`.ribbon-page[data-page="${id}"]`);
+      await goTo(page, tab, id);
       await page.waitForTimeout(200);
       const labels = await page.$$eval('.panel .add-bar .add-btn:not([disabled])', (bs) => bs.map((b) => b.textContent.trim()));
       for (const label of labels) {
@@ -1719,8 +1720,7 @@ try {
     check(opened >= 9, `only ${opened} Add windows were tried`);
 
     // And the fixture window adds a fixture.
-    await page.click('.ribbon-tab[data-tab="setup"]');
-    await page.click('.ribbon-page[data-page="fixtures"]');
+    await goTo(page, 'setup', 'fixtures');
     const count = () => page.evaluate(() => window.millsim.models.models.length);
     const was = await count();
     await page.click('.panel .add-bar .add-btn:has-text("Add fixture")');
@@ -1738,8 +1738,7 @@ try {
 
   // ---- no perspective, turns about the machine's axes, zero on a bore ----
   {
-    await page.click('.ribbon-tab[data-tab="setup"]');
-    await page.click('.ribbon-page[data-page="origin"]');
+    await goTo(page, 'setup', 'origin');
     await page.waitForTimeout(200);
     const r = await page.evaluate(() => {
       const app = window.millsim;
@@ -1793,8 +1792,7 @@ try {
   //
   // Stand-in castings are how a preset describes itself; on a machine you
   // are modelling yourself they are geometry nobody owns.
-  await page.click('.ribbon-tab[data-tab="machine"]');
-  await page.click('.ribbon-page[data-page="layout"]');
+  await goTo(page, 'machine', 'layout');
   await page.waitForTimeout(300);
   const drawn = () => page.evaluate(() => {
     let n = 0;

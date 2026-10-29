@@ -31,7 +31,7 @@ works — `python3 -m http.server 8080` is fine if you'd rather not use Node.
 The single-file build sidesteps this entirely by bundling to one classic
 script.
 
-Open the page, pick an example from the **Program** tab, and press play.
+Open the page, go to step 4 · **Program**, pick an example, and press play.
 
 ### As a Windows program
 
@@ -84,7 +84,8 @@ lives inside the spindle bore and can never touch anything. The gauge line
 is the mating face, and the spindle nose starts exactly there. A tool plus a holder plus a stickout is an *assembly*, and
 an assembly is what a `T` number selects.
 
-**Millimetres or inches.** **View › Show › Units** switches every length on
+**Millimetres or inches.** The **mm | in** switch in the top bar (or
+**Settings › General**) switches every length on
 every page — the tool library, the machine's travels, the stock, what has
 been measured, the readout in the corner — between millimetres and inches.
 It is a reading, not a second set of numbers: the job is held in
@@ -180,8 +181,8 @@ contouring), which keeps a floor meeting a wall a sharp corner rather than
 a bevel the size of a cell — on a plain block every vertex lies on a face,
 and on a slotted one within 0.02 mm of the true part at a 0.25 mm lattice.
 The mesh is built in blocks of 32 cells, about 0.8 ms each, and a cut
-remakes only the blocks it reached. Being closed, a **View › Inspect ›
-Section** through it shows the inside as a solid cut face. Picking
+remakes only the blocks it reached. Being closed, a **section** (the
+viewport toolbar's section button) through it shows the inside as a solid cut face. Picking
 and measuring land on it — a click down a side hole stops at the bottom of
 the hole — and **Results › Export › Part as STL** writes it, side holes and
 all, as a closed mesh. Past a triangle budget (2.4 million, 600,000 on a
@@ -249,8 +250,8 @@ stock included, so a head brought down beside a trunnion swung to A90 is
 reported in the table face. Pairs that already touch with every axis at
 zero are how the machine is built (a bridge on its walls, a slide on its
 ways) and are never reported. **Machine › Travels › Check the castings**
-turns both off. **Setup ›
-Checks** decides what counts: ask for clearance and a pass that clears a
+turns both off. **Results ›
+Collision rules** decides what counts: ask for clearance and a pass that clears a
 clamp by 2 mm is reported as the near miss it is, rather than only metal
 in metal. Which parts of the assembly are checked at all is a switch, and
 two exceptions live on the fixture itself — a soft jaw being cut can be
@@ -356,7 +357,8 @@ which is the first place to look when a macro program lands somewhere
 odd.
 
 **Measuring.** A verifier that cannot answer "how deep is that pocket" is
-asking to be trusted and checked somewhere else. **View › Measure** takes
+asking to be trusted and checked somewhere else. **Measure**, on the
+viewport toolbar, takes
 two points for a distance, with its three components, or three points
 round a bore for its diameter and centre. Points snap to corners, edges,
 face centres, work origins — and to the rim of whatever has been cut,
@@ -433,7 +435,7 @@ O-numbered sections still works exactly as it did.
 **The job as one file.** A setup is not a program: it is a program, the
 machine it runs on, the stock it starts from, where that stock sits
 against the work offsets, which tools the T numbers mean, and the clamps
-standing around it. **Setup › Project** saves all of it as one zip —
+standing around it. **Save** in the top bar (Ctrl+S) saves all of it as one zip —
 `project.json` for the setup, `program/` for the G-code and its
 subprograms, `machine/` laid out exactly as **Save machine** writes it,
 `library.json` for the tools, `models/` and `stock/` as STL. Opening one
@@ -459,7 +461,7 @@ fidia-kr199.zip
 └── README.txt
 ```
 
-Everything on the Machine tab is in there, geometry included: load the
+Everything on the Machine step is in there, geometry included: load the
 folder on another computer and you have the same machine, with the same
 envelope, the same crash model and the same idea of what M06 does. The two
 exceptions are deliberate — whether the full machine is *drawn*, and which
@@ -494,37 +496,69 @@ three — twenty-six views, the camera swinging there round its target
 without changing the zoom. The arrows off its corner are machine X, Y
 and Z.
 
-One rule decides where everything lives:
+The window is laid out as the job is done.
 
-> **The ribbon navigates. The side panel acts.**
+**The top bar** carries the five steps, in order — **1 Machine · 2 Setup ·
+3 Tools · 4 Program · 5 Results** — and under each name a line saying where
+that step stands: which machine and control, what stock and how many
+models, how many tools (or how many the program calls that the table is
+missing), which program and its cycle time, how many findings. A step's
+number turns to a tick once it is set, amber when it needs a look and red
+when the run found something. The order is the usual one, not a wizard:
+any step can be opened at any time, and `Alt+1`…`Alt+5` go straight to
+one. To its left, **Open** and **Save** handle the project (`Ctrl+O`,
+`Ctrl+S`); to its right are the **mm | in** switch, light or dark, and
+**Settings**.
 
-The tabs across the top say which part of the job you are working on, and
-the row under them says which page of it. Neither ever *does* anything —
-clicking a page changes what the side panel shows, and that is all. Every
-control that changes something lives in the panel, next to the thing it
-changes, so no button is ever in two places and there is only one place to
-look for it. Double-click a tab, or use the chevron on the right, to
-collapse the page row and give the viewport the space back.
+**The side panel** is the step in hand: its title, one line on what it is
+for, and a column of cards — on Setup, *Stock*, *Work offsets*, *Fixtures &
+clamps*, *Reference part* and *Decoration*, each with its own Add button,
+list and drop zone. A card opens and shuts on its header, and says what it
+holds while shut (the stock's shape, the active offset, a count), so a
+step reads at a glance and the cards you use stay open — which ones is
+remembered. **Next** at the bottom goes on to the following step; on
+Results it runs the program to the end.
 
-| Tab | Pages |
+| Step | Cards |
 | --- | --- |
-| **Setup** | Project · Stock · Work offsets · Fixtures · Checks |
-| **Machine** | Layout · Axes · Assembly · Controller · Macros · Travels |
-| **Tools** | Tool table · Cutters · Holders · Library |
-| **Program** | Main · Programs · Variables · Summary |
-| **Results** | Findings · Compare · Export |
-| **View** | Camera · Show · Inspect · Measure |
+| **1 Machine** | Machine & control · Axes · Bodies · Travels · Macros · Jog |
+| **2 Setup** | Stock · Work offsets · Fixtures & clamps · Reference part · Decoration |
+| **3 Tools** | Tool table · Cutters · Holders · Library file |
+| **4 Program** | the running file's editor · Job files · Variables · Summary |
+| **5 Results** | Collision rules · Findings · Loads · Compare · Export |
 
-The panels say little until asked: a section with more to explain than
-its controls do carries a small **i** beside its title, and the
-explanation opens under it. Status — a file name, a count, a warning —
-is always shown.
+Opening **Jog** hands it the machine to wind by hand, and opening
+**Travels** parks it at home with the spindle empty; the two take turns,
+and either gives the machine back when it is closed or play is pressed.
+
+**The viewport toolbar**, down the right-hand edge under the view cube, is
+how the job is looked at from any step: fit, **Views** (the named views
+and fitting the toolpath), **Display** (what is drawn, background,
+colours, the deviation map), **Section** (the section plane, tool opacity,
+backplot), **Measure**, and a screenshot. Each opens a small panel beside
+it that stays put while you work in the viewport; `Esc` or the button
+again shuts it.
+
+**Settings** holds what is yours rather than the job's, kept on this
+computer between starts: light, dark or the system's theme; the unit;
+whether to open on step 1 or where you left off; on the desktop, whether
+to reopen the last machine; the viewport's look (background, colours,
+what is shown, backplot); the resolution new stock is simulated at and the
+playback speed; and the collision defaults — near-miss distance, gouge
+tolerance, what is checked. The display and check switches elsewhere are
+the same settings, so a switch thrown on the Display panel or in Collision
+rules is remembered too. A project still carries its own display when it
+is opened.
+
+The panels say little until asked: a card with more to explain than its
+controls do carries a small **i** beside its title, and the explanation
+opens under it. Status — a file name, a count, a warning — is always shown.
 
 Drag the side panel's right edge to make it wider or narrower (the arrow
 keys do the same once the edge has focus); double-click the edge to put
 the width back. The width is remembered in the browser.
 
-**View › Inspect › Section** cuts the whole view open on a plane square to
+**Section** cuts the whole view open on a plane square to
 the part's X, Y or Z — the machine, the fixtures, the reference part and the
 tool as well as the stock: the slider moves the plane across everything the
 scene holds, **At** puts it exactly, in the program's coordinates, and
@@ -552,14 +586,14 @@ turns into fan noise. So the renderer runs when something says it needs to:
 a change anywhere in the app, the orbit controls while they move, or the
 simulator while it cuts. Idle is zero frames a second.
 
-**Background** is a setting, on View › Show. A pale part on a pale ground
+**Background** is a setting, in Settings › Viewport and on the Display panel. A pale part on a pale ground
 has no silhouette, and a machined face reads by its silhouette before
 anything else, so the default puts a mid grey-blue behind the work and
 there is a dark ground for inspecting a bright finish, a blueprint blue, a
 paper white for screenshots, and a colour picker.
 
 Anything that has to be created from nothing is behind an **Add** button at
-the top of the page that lists it, and Add always opens a window: a cutter,
+the top of the card that lists it, and Add always opens a window: a cutter,
 a holder, an assembly, a fixture, an axis, a casting. A window is a task
 with a beginning and an end — fill it in, watch the preview redraw as you
 type, then commit or cancel. Nothing changes until you commit, so Escape is
@@ -588,7 +622,8 @@ usually why the stop is there: `M00 (TURN THE PART OVER)`. ⏭⏭ and the
 scrubber run straight through. The switches stay where you leave them.
 
 Keyboard: `Space` play/pause, `R` reset, `→` next line (single block),
-`Shift+→` one move, `F` fit view.
+`Shift+→` one move, `F` fit view, `Alt+1`…`Alt+5` steps, `Ctrl+S` save
+and `Ctrl+O` open the project, `Esc` shuts the viewport panel.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
 
 ## Placing things by clicking
@@ -761,7 +796,7 @@ The Results panel also reports the other half of the comparison — how much
 stock is still standing above the part, and what fraction of the reference
 surface was gouged. The tolerance is adjustable; the default is 0.02 mm.
 
-**View › Inspect › Deviation map** colours the stock by it: green on size,
+The **deviation map** (Display, on the viewport toolbar) colours the stock by it: green on size,
 blue for stock still to come off, red for a cut past the part, each
 deepening to full colour at a range you set. The distance is the shortest
 one to the part, in any direction, and which side of it a point is on is
@@ -773,7 +808,7 @@ undercut, the underside of a ledge — vertex by vertex, and a cut remeasures
 only the blocks it reached. Against a reference whose side hole is Ø10.6,
 the wall of the Ø10 hole that was drilled reads +0.30 all the way round.
 
-**Pick points** (on the map's key, or View › Inspect) pins readings on the
+**Pick points** (on the map's key, or the Display panel) pins readings on the
 part: click a spot and it is labelled with how much is left there or how
 deep it is gouged, and listed under the key. A reading is a line of sight,
 not a fixed point: as the program runs and the spot is cut away, it reads
@@ -853,7 +888,7 @@ turns a plain ring) and the turning cycles.
 | **Machine collision** | The assembly met one of the machine's castings — a cradle, a cheek, a column, an imported body — or a casting riding with the spindle met the table, another casting, the stock or the reference part (its real shape, stock round it or not). Both parts are named, with the axes they ride on. |
 | **Travel limit exceeded** | The tool tip left the machine envelope. |
 | **Gouge into the reference part** | The cutter went into the reference part by more than the tolerance — measured to the part's nearest face, so a gouge in a wall or the side of a hole is as deep as it really is. Where the cutter cut no stock — air, or a blank that does not cover the part — the cutter itself is measured against the part, so a gouge shows even with no stock there. |
-| **Reference part collision** | The holder, the shank above the flutes or the spindle nose reached into the reference part — its real shape, not a box round it — with the depth to its nearest face. The cutting edge is the gouge check's. With a near-miss distance set, passing closer than that is a near miss. Off on Setup › Checks. |
+| **Reference part collision** | The holder, the shank above the flutes or the spindle nose reached into the reference part — its real shape, not a box round it — with the depth to its nearest face. The cutting edge is the gouge check's. With a near-miss distance set, passing closer than that is a near miss. Off in Results › Collision rules. |
 | **Cutting with spindle stopped** | Material removed with no `M03`/`M04` active. |
 | **No tool assembly loaded** | The program selected a `T` number the library has no assembly for. |
 
@@ -863,7 +898,7 @@ is found, before another chunk is worked out, so a deep crash cannot bog the
 page down following it. ▶ then passes over the rest of that block, uncut and
 unchecked, with the tool where the block would have left it, and the run
 goes on from the next. Scrubbing and ⏭⏭ go through and list what they meet.
-Setup › Checks can turn the stopping off.
+Results › Collision rules can turn the stopping off.
 
 **Results › Findings** has a switch for each kind of finding the run turned
 up, with how many: turn travel limits off, say, and they leave the list, the
@@ -1119,9 +1154,12 @@ src/
     stl.js            STL read/write, OBJ write
     mesh.js           stock, lathe and box triangulation
   ui/
-    ribbon.js         tabs and pages — navigation only, no actions
-    panel.js          the shape every side panel has: pages, Add bars,
-                      action rows
+    stepBar.js        the five steps across the top, with their status
+    panel.js          the shape every side panel has: cards that open
+                      and shut, Add bars, action rows
+    viewDock.js       the viewport's toolbar and its pop-out panels
+    settings.js       preferences kept between starts, and the theme
+    settingsDialog.js the Settings window
     dialog.js         the windows Add opens
     toolDialogs.js    cutter, holder and assembly editors
     setupDialogs.js   the Add-a-fixture window

@@ -60,25 +60,27 @@ export class ProgramPanel extends Panel {
     super(app, [
       {
         id: 'editor',
-        // The tab names the file that is running, because that is the one
+        // The card names the file that is running, because that is the one
         // underneath it. On a job of four files "Main" was a label that
         // was wrong three quarters of the time.
         label: () => runningFile(app).name,
-        icon: 'open',
+        icon: 'file',
         hint: 'The file the machine is in: open, edit and re-read it',
+        fill: true,
         render: ProgramPanel.prototype.editorPage,
       },
-      { id: 'subs', label: 'Programs', icon: 'library', hint: 'Every file in this job — the main program and what it calls', badge: () => app.state.subprograms.length + 1, render: ProgramPanel.prototype.subsPage },
+      { id: 'subs', label: 'Job files', icon: 'library', hint: 'Every file in this job — the main program and what it calls', open: false, badge: () => app.state.subprograms.length + 1, render: ProgramPanel.prototype.subsPage },
       {
         id: 'variables',
         label: 'Variables',
         icon: 'variable',
         hint: 'What each variable held on the move the machine is on, and the line that set it',
+        open: false,
         badge: () => { const t = app.variables(); return (t && t.count) || null; },
         render: ProgramPanel.prototype.variablesPage,
       },
-      { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
-    ]);
+      { id: 'summary', label: 'Summary', icon: 'report', hint: 'What the interpreter made of it', open: false, summary: () => (app.state.program ? fmtDuration(app.state.program.stats.cycleTime) : ''), badge: () => (app.state.program && app.state.program.warnings.length) || null, render: ProgramPanel.prototype.summaryPage },
+    ], { key: 'program' });
     this.editorHost = el('div.editor-host');
     this.subHost = el('div.editor-host');
     this.summaryHost = el('div.summary-host');
@@ -88,25 +90,6 @@ export class ProgramPanel extends Panel {
     /** Which subprogram the page is acting on. */
     this.subId = null;
     this.render();
-  }
-
-  /**
-   * Only the pages that host an editor get the fixed, unscrolling layout
-   * the editor needs. Anything else is an ordinary panel that scrolls, or
-   * its lower half is unreachable.
-   */
-  render() {
-    const hostsEditor = this.page === 'editor' || this.page === 'subs';
-    this.root.classList.toggle('panel-program', hostsEditor);
-    super.render();
-    // The tab is named after the file being shown, and the ribbon is drawn
-    // when a tab changes rather than on every repaint — so when that name
-    // changes underneath it, it is asked for again.
-    const name = runningFile(this.app).name;
-    if (this._tabName !== name) {
-      this._tabName = name;
-      if (this.app.buildRibbon) this.app.buildRibbon();
-    }
   }
 
   // ---- pages -------------------------------------------------------------
@@ -416,7 +399,7 @@ export class ProgramPanel extends Panel {
 
   /** The run has moved: the values on the Variables page follow it. */
   updateVariables() {
-    if (this.page === 'variables') this.vars.update();
+    if (this.isOpen('variables')) this.vars.update();
   }
 
   /**
@@ -446,7 +429,7 @@ export class ProgramPanel extends Panel {
    * @param {string|null} source which file that line was counted in
    */
   setActiveLine(line, source = null) {
-    if (!this.editor || this.page !== 'editor') return;
+    if (!this.editor || !this.isOpen('editor')) return;
     const showing = this.showing || runningFile(this.app);
     const shown = showing.kind === 'main' ? null : showing.name;
     // The run has moved into another file: show that one instead. A
@@ -495,23 +478,20 @@ export class ProgramPanel extends Panel {
 
   /** Called by the app on every re-interpret; harmless when off-screen. */
   refresh() {
-    if (this.page === 'summary' || this.page === 'subs') {
-      this.render();
-      return;
-    }
-    // Drawn again only when the program is a new one, so the search box
-    // keeps the caret while the program is re-read underneath it.
-    if (this.page === 'variables') {
-      this.vars.render();
-      return;
-    }
-    // A different file is running: the page names it and shows it, so it
-    // is drawn again rather than patched.
+    // A different file is running: the card names it and shows it, so the
+    // whole panel is drawn again rather than patched.
     const showing = runningFile(this.app);
-    if (!this.showing || this.showing.kind !== showing.kind || this.showing.name !== showing.name) {
+    if (this.isOpen('editor') && (!this.showing || this.showing.kind !== showing.kind || this.showing.name !== showing.name)) {
       this.render();
       return;
     }
+    // The rest are cheap, or shut and only a header. The variables are
+    // drawn again only when the program is a new one, so the search box
+    // keeps the caret while the program is re-read underneath it.
+    for (const id of ['subs', 'summary']) this.renderGroup(id);
+    if (this.isOpen('variables')) this.vars.render();
+    else this.renderGroup('variables');
+    if (!this.isOpen('editor')) return;
     // The program may have been replaced from somewhere else entirely.
     this.showing = showing;
     this.syncEditor();

@@ -1,11 +1,10 @@
 // The tool library, as a browser.
 //
-// Four pages: the tool table, the cutters and holders that feed it, and the
-// library as a whole. Editing happens in a window, so this panel's job is to
-// show what is in the library, what is wrong with it, and to act on whatever
-// is selected — Edit, Duplicate, Delete and Export sit under the list they
-// apply to rather than in the ribbon, where they would be a second copy of
-// the same three buttons.
+// Step 3. Four cards: the tool table, the cutters and holders that feed it,
+// and the library as a whole. Editing happens in a window, so this panel's
+// job is to show what is in the library, what is wrong with it, and to act
+// on whatever is selected — Edit, Duplicate, Delete and Export sit under the
+// list they apply to.
 
 import { el, button, row, section, clear, download } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
@@ -20,10 +19,10 @@ export class ToolsPanel extends Panel {
   constructor(app) {
     super(app, [
       { id: 'assemblies', label: 'Tool table', icon: 'assembly', hint: 'What each T number loads', badge: () => app.library.assemblies.length, render: ToolsPanel.prototype.renderAssemblies },
-      { id: 'tools', label: 'Cutters', icon: 'cutter', badge: () => app.library.tools.length, render: ToolsPanel.prototype.renderTools },
-      { id: 'holders', label: 'Holders', icon: 'holder', badge: () => app.library.holders.length, render: ToolsPanel.prototype.renderHolders },
-      { id: 'library', label: 'Library', icon: 'library', hint: 'Import, export and reset the whole library', render: ToolsPanel.prototype.renderLibrary },
-    ]);
+      { id: 'tools', label: 'Cutters', icon: 'cutter', hint: 'Every cutter and insert in the library', open: false, badge: () => app.library.tools.length, render: ToolsPanel.prototype.renderTools },
+      { id: 'holders', label: 'Holders', icon: 'holder', hint: 'Every holder in the library', open: false, badge: () => app.library.holders.length, render: ToolsPanel.prototype.renderHolders },
+      { id: 'library', label: 'Library file', icon: 'library', hint: 'Import, export and reset the whole library', open: false, render: ToolsPanel.prototype.renderLibrary },
+    ], { key: 'tools' });
     /** The row Edit opens: the last one clicked without a modifier. */
     this.selected = { assembly: null, tool: null, holder: null };
     /**
@@ -196,7 +195,7 @@ export class ToolsPanel extends Panel {
     });
   }
 
-  /** The assembly whose geometry the ribbon exports. */
+  /** The assembly whose geometry Export STL writes. */
   currentBuilt() {
     const app = this.app;
     const lib = app.library;

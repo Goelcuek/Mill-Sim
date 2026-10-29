@@ -1,11 +1,12 @@
 // Results panel: what the run found, and how to get the part out.
 //
-// Four pages. Playback is not one of them: the transport bar under the
+// Step 5. Collision rules, findings, loads, the comparison and the export.
+// Playback is not here: the transport bar under the
 // viewport is always visible and already owns play, step, run-to-end and
 // the scrubber, so putting the same buttons here would be the duplication
 // this layout exists to avoid.
 
-import { el, section, field, select, download } from './dom.js';
+import { el, section, field, select, download, checkbox } from './dom.js';
 import { MATERIALS, materialById } from '../cutting/materials.js';
 import { chipTarget } from '../cutting/analyzer.js';
 import { Panel, actionRow } from './panel.js';
@@ -16,13 +17,84 @@ import * as units from '../core/units.js';
 export class ResultsPanel extends Panel {
   constructor(app) {
     super(app, [
+      { id: 'checks', label: 'Collision rules', icon: 'shield', hint: 'What counts as a crash: clearances, and what is checked at all', open: false, summary: () => (app.state.checks.nearMiss > 0 ? `near miss ${units.lenU(app.state.checks.nearMiss, 2)}` : 'metal in metal'), render: ResultsPanel.prototype.checksPage },
       { id: 'findings', label: 'Findings', icon: 'report', hint: 'Collisions and gouges the run turned up', badge: () => app.findingsShown().length || null, render: ResultsPanel.prototype.findingsPage },
       { id: 'loads', label: 'Loads', icon: 'gauge', hint: 'Forces, power and deflection along the run, from the metal each move meets', render: ResultsPanel.prototype.loadsPage },
       { id: 'compare', label: 'Compare', icon: 'target', hint: 'The cut against the reference part', render: ResultsPanel.prototype.comparePage },
       { id: 'export', label: 'Export', icon: 'export', hint: 'The machined part, the report, a screenshot', render: ResultsPanel.prototype.exportPage },
-    ]);
+    ], { key: 'results' });
     this.render();
   }
+
+  /**
+   * What the crash model looks for.
+   *
+   * A collision check is a rule, and a rule that cannot be adjusted is a
+   * rule people learn to ignore: the shop that models its holders
+   * generously gets a holder crash on every block and stops reading the
+   * findings at all. So the distances and the exceptions live here, in one
+   * place, rather than being hard-coded as "touching is bad".
+   */
+  checksPage() {
+    const app = this.app;
+    const c = app.state.checks;
+    const parts = c.parts;
+
+    const partRow = (key, label, hint) => checkbox(label, parts[key] !== false, (v) => {
+      app.setChecks({ parts: { [key]: v } });
+    }, { title: hint });
+
+    const ignored = app.models.models.filter((m) => m.ignore).length;
+    const special = app.models.models.filter((m) => Number.isFinite(m.clearance)).length;
+
+    return [
+      section('Clearance', [
+        el('label.field', {}, [
+          el('span.field-label', {}, ['Near miss ', el('span.value', {}, c.nearMiss > 0 ? units.lenU(c.nearMiss, 2) : 'off')]),
+          // The slider is millimetres of clearance whichever way the unit
+          // switch is set; only the readout changes, because a slider you
+          // cannot land on a round number is worse than one in the other
+          // unit.
+          el('input', {
+            type: 'range', min: 0, max: 10, step: 0.25, value: c.nearMiss,
+            // The readout follows the thumb; the panel is drawn again on
+            // release, so the drag is not torn out from under the pointer.
+            oninput: (e) => {
+              const v = parseFloat(e.target.value);
+              e.target.parentNode.querySelector('.value').textContent = v > 0 ? units.lenU(v, 2) : 'off';
+            },
+            onchange: (e) => app.setChecks({ nearMiss: parseFloat(e.target.value) }),
+          }),
+        ]),
+        el('div.hint', {}, c.nearMiss > 0
+          ? `Anything that passes within ${units.lenU(c.nearMiss, 2)} of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
+          : 'Off: only metal in metal is reported. Ask for room and the run also tells you where it came close, which is what you want before the first part rather than after it.'),
+        checkbox('Report rapids that touch material', c.rapidIntoStock !== false, (v) => app.setChecks({ rapidIntoStock: v })),
+        checkbox('Stop playing at a collision', c.stopOnCollision !== false, (v) => app.setChecks({ stopOnCollision: v })),
+        el('div.hint', {}, 'Playing stops at the first crash, gouge or travel limit — of the kinds not switched off under Findings — where it is found. ▶ then passes over the rest of that block, uncut and unchecked, and goes on from the next. Scrubbing and running to the end go through and list them.'),
+        el('div.hint', {}, 'A G0 that removes material is a crash on the machine. Some posts rapid to the surface on purpose, so this can be turned off.'),
+      ]),
+      section('What is checked', [
+        partRow('tool', 'The cutter and its shank', 'The flutes and the shank above them'),
+        partRow('holder', 'The holder', 'Collet chuck, shrink fit, shell arbor'),
+        partRow('spindle', 'The spindle nose', 'The face of the spindle itself'),
+        checkbox('Holder, shank and spindle against the reference part', c.reference !== false, (v) => app.setChecks({ reference: v }), {
+          title: 'Against its real shape, not a box round it. The cutting edge is the gouge check\u2019s.',
+        }),
+        el('div.hint', {}, 'Everything checked is checked against the fixtures, the table and the travel limits, and — above the flutes — against the reference part\u2019s real shape; the cutter going past the part is a gouge. Turning one off does not make it safe — it makes this program stop mentioning it.'),
+      ]),
+      section('Exceptions', [
+        el('div.hint', {}, ignored || special
+          ? `${ignored} ${ignored === 1 ? 'model is' : 'models are'} ignored and ${special} ${special === 1 ? 'asks' : 'ask'} for a clearance of their own.`
+          : 'No model has a rule of its own yet.'),
+        el('div.hint', {}, 'A fixture the tool is meant to touch — a soft jaw being cut, a sacrificial plate — can be ignored on its own, and a fragile one can ask for more room than everything else. Both live on the fixture, on the fixture itself, in Setup.'),
+        actionRow([
+          { label: 'Go to fixtures', onClick: () => app.setPage('setup', 'fixtures') },
+        ]),
+      ]),
+    ];
+  }
+
 
   findingsPage() {
     return [this.statsSection(), this.collisionSection()];
@@ -33,9 +105,9 @@ export class ResultsPanel extends Panel {
     return [compare || section('Compare against a reference part', [
       el('div.empty', {}, [
         el('div.empty-title', {}, 'No reference part loaded'),
-        el('div.hint', {}, 'Import the finished part on Setup › Fixtures with the role Reference part.'),
+        el('div.hint', {}, 'Import the finished part under Setup › Reference part.'),
       ]),
-      actionRow([{ label: 'Go to fixtures', variant: 'primary', onClick: () => this.app.setPage('setup', 'fixtures') }]),
+      actionRow([{ label: 'Import a reference part', variant: 'primary', onClick: () => this.app.setPage('setup', 'reference') }]),
     ])];
   }
 

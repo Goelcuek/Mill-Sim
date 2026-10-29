@@ -1,23 +1,23 @@
 // What the viewport draws.
 //
-// Every display setting lives here and only here. A toggle that also
-// appeared beside the thing it affects would be the same control in two
-// places, which is the one thing this layout is built to avoid — so Setup
-// talks about the stock and View decides what colour it is.
+// The pages of the viewport's toolbar: views, display, section, measure.
+// Display switches are preferences too, so Settings › Viewport shows the
+// same ones and a change in either place is remembered.
 
 import { el, select, checkbox, button, row, section, field } from './dom.js';
 import { Panel, actionRow } from './panel.js';
 import { BACKGROUNDS, DEFAULT_BACKGROUND } from '../scene/backgrounds.js';
+import { VIEWS } from '../scene/viewer.js';
 import * as units from '../core/units.js';
 
 export class ViewPanel extends Panel {
   constructor(app) {
     super(app, [
-      { id: 'camera', label: 'Camera', icon: 'view', hint: 'Where you are looking from', render: ViewPanel.prototype.cameraPage },
-      { id: 'show', label: 'Show', icon: 'eye', hint: 'What is drawn', render: ViewPanel.prototype.showPage },
-      { id: 'inspect', label: 'Inspect', icon: 'ruler', hint: 'Section plane, opacity, backplot', render: ViewPanel.prototype.inspectPage },
-      { id: 'measure', label: 'Measure', icon: 'target', hint: 'Measure the cut part: distances and bore diameters', badge: () => app.state.measurements.length || null, render: ViewPanel.prototype.measurePage },
-    ]);
+      { id: 'camera', label: 'Views', icon: 'view', hint: 'Where you are looking from', render: ViewPanel.prototype.cameraPage },
+      { id: 'show', label: 'Display', icon: 'eye', hint: 'What is drawn, and in what colours', render: ViewPanel.prototype.showPage },
+      { id: 'inspect', label: 'Section', icon: 'section', hint: 'Section plane, tool opacity, backplot', render: ViewPanel.prototype.inspectPage },
+      { id: 'measure', label: 'Measure', icon: 'ruler', hint: 'Measure the cut part: distances and bore diameters', badge: () => app.state.measurements.length || null, render: ViewPanel.prototype.measurePage },
+    ], { key: 'view', single: true });
     this.render();
   }
 
@@ -39,21 +39,18 @@ export class ViewPanel extends Panel {
 
   cameraPage() {
     const app = this.app;
-    return section('Camera', [
-      el('div.hint', {}, 'Drag to orbit, right-drag or two fingers to pan, wheel to zoom. The wheel goes towards whatever the pointer is on, and a double-click puts the turning point there — which is what makes a big part workable: the middle of a two metre frame is a metre away from everything you want to look at.'),
-      actionRow([
-        { label: 'Isometric', variant: 'primary', onClick: () => app.viewer.setView('iso') },
-        { label: 'Fit the job', onClick: () => app.fitToScene(), hint: 'F' },
+    const view = (name, label) => el('button.view-tile', { type: 'button', onclick: () => app.viewer.lookFrom(VIEWS[name], { animate: true }) }, label);
+    return [
+      el('div.view-grid', {}, [
+        view('iso', 'Isometric'), view('top', 'Top'), view('bottom', 'Bottom'),
+        view('front', 'Front'), view('back', 'Back'), view('left', 'Left'), view('right', 'Right'),
       ]),
       actionRow([
-        { label: 'Top', onClick: () => app.viewer.setView('top') },
-        { label: 'Front', onClick: () => app.viewer.setView('front') },
-        { label: 'Right', onClick: () => app.viewer.setView('right') },
+        { label: 'Fit the job', variant: 'primary', onClick: () => app.fitToScene(), hint: 'F' },
+        { label: 'Fit the toolpath', disabled: !app.state.program, onClick: () => app.fitToProgram() },
       ]),
-      actionRow([
-        { label: 'Fit the view to the path', disabled: !app.state.program, onClick: () => app.fitToProgram() },
-      ]),
-    ]);
+      el('div.hint.keep', {}, 'Drag to orbit · right-drag to pan · wheel to zoom where the pointer is · double-click sets the turning point.'),
+    ];
   }
 
   showPage() {
@@ -62,13 +59,6 @@ export class ViewPanel extends Panel {
     const t = (label, key) => checkbox(label, d[key], (v) => app.setDisplay({ [key]: v }));
 
     return [
-      section('Units', [
-        row([select('Show lengths in', [
-          { value: 'mm', label: 'Millimetres' },
-          { value: 'in', label: 'Inches' },
-        ], app.state.units, (v) => app.setUnits(v))]),
-        el('div.hint', {}, 'Every length on every page — the tool library, the machine\u2019s travels, the stock, what has been measured, the readout in the corner. The job itself is held in millimetres whichever way this is set, so switching it mid-job changes the reading and nothing else. It is not G20/G21: what the numbers in a program mean is the program\u2019s business, and a metric program stays metric.'),
-      ]),
       section('Show', [
         row([t('Stock', 'stock'), t('Tool', 'tool')]),
         row([t('Holder', 'holder'), t('Toolpath', 'toolpath')]),

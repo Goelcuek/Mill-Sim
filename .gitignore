@@ -7,3 +7,4 @@ node_modules/
 # Python bytecode from the NX journal helpers
 __pycache__/
 *.pyc
+scripts/.tmp/

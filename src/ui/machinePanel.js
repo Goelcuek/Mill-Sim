@@ -41,13 +41,13 @@ const TRAVEL_AXES = ['X', 'Y', 'Z'];
 export class MachinePanel extends Panel {
   constructor(app) {
     super(app, [
-      { id: 'layout', label: 'Layout', icon: 'machine', hint: 'Which machine this is, what control it has, and how it is drawn', render: MachinePanel.prototype.layoutPage },
-      { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', render: MachinePanel.prototype.axesPage },
-      { id: 'assembly', label: 'Assembly', icon: 'import', hint: 'Import bodies and assemble the machine from them', badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
-      { id: 'macros', label: 'Macros', icon: 'code', hint: 'What this machine does at an M code, and the subprograms that live in it', badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: MachinePanel.prototype.macrosPage },
-      { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Machine zero, travel limits, the table surface and rapid rate', render: MachinePanel.prototype.limitsPage },
-      { id: 'jog', label: 'Jog', icon: 'axes', hint: 'Wind the axes by hand and watch what the machine does', render: MachinePanel.prototype.jogPage },
-    ]);
+      { id: 'layout', label: 'Machine & control', icon: 'machine', hint: 'Which machine this is, what control it has, and how it is drawn', summary: () => app.machineView.kinematics.name, render: MachinePanel.prototype.layoutPage },
+      { id: 'axes', label: 'Axes', icon: 'axes', hint: 'The kinematic chain and what each joint does', open: false, summary: () => app.machineView.kinematics.axes().map((n) => n.letter).filter(Boolean).join(' '), render: MachinePanel.prototype.axesPage },
+      { id: 'assembly', label: 'Bodies', icon: 'import', hint: 'Import bodies and assemble the machine from them', open: false, badge: () => app.machineParts.parts.length || null, render: MachinePanel.prototype.assemblyPage },
+      { id: 'limits', label: 'Travels', icon: 'gauge', hint: 'Machine zero, travel limits, the table surface and rapid rate. Open, it parks the machine at home with the spindle empty', open: false, render: MachinePanel.prototype.limitsPage },
+      { id: 'macros', label: 'Macros', icon: 'code', hint: 'What this machine does at an M code, and the subprograms that live in it', open: false, badge: () => (app.state.machine.macros || []).filter((m) => m.enabled).length || null, render: MachinePanel.prototype.macrosPage },
+      { id: 'jog', label: 'Jog', icon: 'move', hint: 'Wind the axes by hand and watch what the machine does. Open, it has the machine', open: false, render: MachinePanel.prototype.jogPage },
+    ], { key: 'machine' });
     this.selectedId = null;
     /** What the Macros page is acting on. */
     this.macroId = null;
@@ -55,15 +55,6 @@ export class MachinePanel extends Panel {
     /** Whether moving a pivot leaves the castings hanging on it where they are. */
     this.holdAssembly = true;
     this.render();
-  }
-
-  /** Opening the Jog page takes the machine; leaving it gives it back. */
-  setPage(id) {
-    if (id === 'jog' && this.page !== 'jog') this.app.startJog();
-    else if (id && id !== 'jog' && this.page === 'jog') this.app.stopJog();
-    // Travels parks the machine at home with the spindle empty.
-    if (id) this.app.setTravelView(id === 'limits' && this.app.activeTab === 'machine');
-    super.setPage(id);
   }
 
   get kin() { return this.app.machineView.kinematics; }
@@ -239,7 +230,7 @@ export class MachinePanel extends Panel {
     const over = (k.violations ? k.violations(jog) : []).filter((v) => owned.has(v.axis));
     showAlarm();
     return [section('Jog', [
-      el('div.hint', {}, 'The axes as the pendant would move them. Nothing is cut and the run is not touched — press play, or leave this page, and the machine goes back to the program.'),
+      el('div.hint', {}, 'The axes as the pendant would move them. Nothing is cut and the run is not touched — press play, or close this card, and the machine goes back to the program.'),
       ...rows,
       alarm,
       over && over.length
@@ -250,7 +241,7 @@ export class MachinePanel extends Panel {
         : null,
       actionRow([
         { label: 'All to home', variant: 'primary', hint: 'Every slide to machine zero, every rotary to 0', onClick: () => { for (const n of axes) app.setJogReading(n.letter, 0); this.render(); } },
-        { label: 'Back to the program', onClick: () => { app.stopJog(); this.app.setPage('machine', 'axes'); } },
+        { label: 'Done jogging', onClick: () => { this.setOpen('jog', false); this.render(); } },
       ]),
       el('div.hint', {}, 'X, Y and Z read in machine coordinates: where the spindle face is, measured from home, whatever tool is in it — 0 at home, and each slider running from that axis\u2019s minimum to its maximum on the Travels page. A rotary reads its own angle and spans its stops from the Axes page. The end of a slider is exactly where the over-travel warning starts.'),
     ])];

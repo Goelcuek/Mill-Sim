@@ -45,7 +45,13 @@ import { ToolsPanel } from './ui/toolsPanel.js';
 import { ProgramPanel } from './ui/programPanel.js';
 import { ResultsPanel } from './ui/resultsPanel.js';
 import { ViewPanel } from './ui/viewPanel.js';
-import { Ribbon } from './ui/ribbon.js';
+import { StepBar } from './ui/stepBar.js';
+import { ViewDock } from './ui/viewDock.js';
+import { icon } from './ui/icons.js';
+import { settings, saveSettings, resetSettings, applyTheme, pick, DISPLAY_KEYS, CHECK_KEYS } from './ui/settings.js';
+import { openSettings } from './ui/settingsDialog.js';
+import { groupForRole } from './ui/setupPanel.js';
+import { describeShape } from './sim/stockShape.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
 import { fmt, fmtDuration, clamp, uid, clone, wrapAngle, deg2rad, rad2deg } from './core/util.js';
 import { variableTimeline, formatVariable } from './gcode/variableTimeline.js';
@@ -84,7 +90,7 @@ function loadStops() {
   return { m0: true, m1: false };
 }
 
-const SPEEDS = [
+export const SPEEDS = [
   { value: '0.25', label: '¼×' },
   { value: '1', label: '1×' },
   { value: '4', label: '4×' },
@@ -118,6 +124,8 @@ function desktopMessage(err) {
 
 export class App {
   constructor(root) {
+    const prefs = settings();
+    applyTheme();
     /**
      * The desktop program's calls (desktop/preload.cjs), or null in a
      * browser. With them, machines live in a folder on disk.
@@ -139,7 +147,7 @@ export class App {
          * Tilting the *part* is what the machine's rotaries do.
          */
         rotation: 0,
-        resolution: 0.28,
+        resolution: prefs.resolution,
         /** Round bar only. */
         diameter: 80,
         /** A model used as stock: its triangles, kept in memory only. */
@@ -175,6 +183,8 @@ export class App {
         // reaching full colour at devRange millimetres either way.
         deviation: false, devRange: 0.5,
         background: DEFAULT_BACKGROUND, backgroundCustom: '#8b93a3',
+        // Whatever the person at the keyboard has set as theirs.
+        ...pick(prefs.display, DISPLAY_KEYS),
       },
       program: null,
       source: '',
@@ -186,7 +196,7 @@ export class App {
        */
       subprograms: [],
       playing: false,
-      speed: '4',
+      speed: prefs.speed,
       activeAssemblyId: null,
       /** What lengths are shown in. See setUnits: nothing else changes. */
       units: 'mm',
@@ -212,16 +222,16 @@ export class App {
        * generously would rather not be told about the holder every block.
        */
       checks: {
-        nearMiss: 0,
-        parts: { tool: true, shank: true, holder: true, spindle: true },
-        rapidIntoStock: true,
+        nearMiss: prefs.checks.nearMiss,
+        parts: { ...prefs.checks.parts },
+        rapidIntoStock: prefs.checks.rapidIntoStock,
         /** The holder, shank and spindle against the reference part. */
-        reference: true,
+        reference: prefs.checks.reference,
         /** Playing stops at a crash; ▶ passes over the rest of that block. */
-        stopOnCollision: true,
+        stopOnCollision: prefs.checks.stopOnCollision,
       },
       /** How far the cutter may pass the reference surface before it gouges. */
-      gougeTolerance: 0.02,
+      gougeTolerance: prefs.gougeTolerance,
       /**
        * Kinds of finding left out of the list, the count and the badge —
        * travel limits, say, while the crashes are being looked at. They
@@ -260,13 +270,10 @@ export class App {
     // The unit someone reads in is a preference of theirs, not a property
     // of the job, so it is remembered here rather than written into a
     // project that somebody else may open.
-    try {
-      const saved = localStorage.getItem('millsim.units');
-      if (saved === 'in' || saved === 'mm') {
-        units.setUnits(saved);
-        this.state.units = units.units();
-      }
-    } catch (err) { /* private window: millimetres, then */ }
+    if (prefs.units === 'in' || prefs.units === 'mm') {
+      units.setUnits(prefs.units);
+      this.state.units = units.units();
+    }
 
     this.buildPanels();
     this.buildTransport();
@@ -292,8 +299,13 @@ export class App {
     if (this.libraryRepaired.length) {
       this.notify(`The stored library had no ${this.libraryRepaired.join(' and no ')}, so the built-in ${this.libraryRepaired.length === 1 ? 'set was' : 'sets were'} put back. Anything else you had saved is untouched.`, 'info');
     }
-    this.notify('Pick an example in the Program tab, or open your own G-code.', 'info');
-    if (this.desktop) this.restoreLastMachine();
+    if (!this.state.program) this.notify('Choose a machine, set up the stock, then open a program — or load an example in step 4.', 'info');
+    if (this.desktop && prefs.reopenMachine) this.restoreLastMachine();
+    // The step bar's statuses follow whatever changed; reading them is cheap.
+    this.stepTimer = setInterval(() => this.updateSteps(), 400);
+    if (window.matchMedia) {
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => applyTheme());
+    }
   }
 
   // ---- layout ------------------------------------------------------------
@@ -301,11 +313,11 @@ export class App {
   buildLayout() {
     clear(this.root);
 
-    this.ribbon = new Ribbon();
-    this.ribbon.onNavigate((tabId, pageId) => {
-      this.setPage(tabId, pageId);
+    this.stepBar = new StepBar();
+    this.stepBar.onStep((id) => {
+      this.setPage(id, null);
       // On a phone the panel is a sheet over the bottom of the view, shut
-      // until it is asked for — and picking a page is asking for it.
+      // until it is asked for — and picking a step is asking for it.
       if (this.narrow()) this.setPanelOpen(true);
     });
     this.panelHost = el('div.panel-host');
@@ -327,40 +339,136 @@ export class App {
     this.transport = el('div.transport');
     this.toast = el('div.toast-host');
 
-    this.root.appendChild(el('header.titlebar', {}, [
-      el('div.brand', {}, [el('span.brand-mark', {}, '⌗'), el('span', {}, 'Mill-Sim')]),
-      el('div.spacer'),
-      this.statusStrip = el('div.title-status'),
-      // Only shown on a narrow screen, where the panel is a sheet.
-      this.panelToggle = el('button.panel-toggle', {
-        type: 'button',
-        onclick: () => this.setPanelOpen(!this.root.classList.contains('panel-open')),
-      }, 'Panel'),
+    const tool = (name, title, onclick, label) => el(`button.top-btn${label ? '.with-label' : ''}`, { type: 'button', title, 'aria-label': title, onclick }, [icon(name, 17), label ? el('span', {}, label) : null]);
+    this.unitSwitch = el('div.unit-switch', { role: 'radiogroup', title: 'Show lengths in' }, ['mm', 'in'].map((u) => el('button', {
+      type: 'button',
+      dataset: { unit: u },
+      onclick: () => this.applySettings({ units: u }),
+    }, u)));
+    this.root.appendChild(el('header.topbar', {}, [
+      el('div.brand', {}, [
+        el('span.brand-mark', {}, icon('cutter', 15)),
+        el('span.brand-name', {}, 'Mill-Sim'),
+      ]),
+      el('div.top-file', {}, [
+        tool('open', 'Open a project (Ctrl+O)', () => this.openProject(), 'Open'),
+        tool('save', 'Save the project (Ctrl+S)', () => this.saveProject(), 'Save'),
+      ]),
+      this.stepBar.root,
+      el('div.top-right', {}, [
+        this.unitSwitch,
+        this.themeBtn = tool('moon', 'Light or dark', () => this.applySettings({ theme: document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark' })),
+        tool('settings', 'Settings', () => openSettings(this)),
+        // Only shown on a narrow screen, where the panel is a sheet.
+        this.panelToggle = el('button.panel-toggle', {
+          type: 'button',
+          onclick: () => this.setPanelOpen(!this.root.classList.contains('panel-open')),
+        }, 'Panel'),
+      ]),
     ]));
-    this.root.appendChild(this.ribbon.root);
     this.root.appendChild(el('div.workspace', {}, [
       this.sidebar,
       this.buildSplitter(),
       el('main.main', {}, [this.viewportHost, this.transport]),
     ]));
     this.root.appendChild(this.toast);
+    this.syncTopbar();
+  }
+
+  /** The unit switch and the theme button say what is set. */
+  syncTopbar() {
+    if (this.unitSwitch) {
+      for (const b of this.unitSwitch.children) b.classList.toggle('on', b.dataset.unit === units.units());
+    }
+    if (this.themeBtn) {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      this.themeBtn.replaceChildren(icon(dark ? 'sun' : 'moon', 17));
+      this.themeBtn.title = dark ? 'Switch to light' : 'Switch to dark';
+    }
   }
 
   /**
-   * The ribbon is navigation and nothing else: the tabs say which part of
-   * the job you are working on, the row under them says which page of it.
-   * Every page is a panel's own, and so is everything that acts on it —
-   * that is what keeps one control from growing two homes.
+   * Change a preference: kept for next time, and in effect now. Null puts
+   * every preference back to how it came.
    */
+  applySettings(patch) {
+    if (patch === null) {
+      const d = resetSettings();
+      applyTheme();
+      this.setUnits(d.units, true);
+      this.setDisplay({ ...d.display });
+      this.setChecks({ ...d.checks });
+      this.setGougeTolerance(d.gougeTolerance);
+      this.setSpeed(d.speed);
+      this.syncTopbar();
+      this.renderStepPanel();
+      return;
+    }
+    saveSettings(patch);
+    if ('theme' in patch) applyTheme();
+    if (patch.units) this.setUnits(patch.units);
+    if (patch.display) this.setDisplay(patch.display);
+    if (patch.checks) this.setChecks(patch.checks);
+    if ('gougeTolerance' in patch) this.setGougeTolerance(patch.gougeTolerance);
+    if (patch.speed) this.setSpeed(patch.speed);
+    if ('stepHints' in patch) this.renderStepPanel();
+    this.syncTopbar();
+  }
+
+  setSpeed(v) {
+    this.state.speed = v;
+    if (this.speedSelect) this.speedSelect.value = v;
+    saveSettings({ speed: v });
+  }
+
+  renderStepPanel() {
+    const panel = this.panels && this.panels[this.activeTab];
+    if (panel) panel.render();
+  }
+
+  /** The step bar follows the active step, and the counts and names under each. */
   buildRibbon() {
-    if (!this.panels) return;
-    this.ribbon.setTabs(this.tabOrder.map(([id, label]) => ({
-      id,
-      label,
-      pages: this.panels[id] ? this.panels[id].pages : [],
-    })));
-    const panel = this.panels[this.activeTab];
-    this.ribbon.setActive(this.activeTab, panel ? panel.page : null);
+    if (!this.panels || !this.stepBar) return;
+    this.stepBar.setActive(this.activeTab);
+    this.updateSteps();
+  }
+
+  updateSteps() {
+    if (this.stepBar) this.stepBar.update();
+  }
+
+  /** What each step says about itself on the step bar. */
+  stepStatus(id) {
+    const s = this.state;
+    if (id === 'machine') {
+      const k = this.machineView.kinematics;
+      return { text: `${k.name} · ${controlName(s.machine.controller.flavour)}`, state: 'ok' };
+    }
+    if (id === 'setup') {
+      const n = this.models.models.length;
+      return { text: `${describeShape(s.stock)}${n ? ` · ${n} ${n === 1 ? 'model' : 'models'}` : ''}`, state: this.stock ? 'ok' : 'idle' };
+    }
+    if (id === 'tools') {
+      const n = this.library.assemblies.length;
+      const missing = s.program ? [...new Set(s.program.toolChanges.map((t) => t.tool))].filter((t) => !(this.slots && this.slots.get(t))).length : 0;
+      return missing
+        ? { text: `${missing} missing from the table`, state: 'warn' }
+        : { text: `${n} ${n === 1 ? 'tool' : 'tools'} in the table`, state: s.program ? 'ok' : 'idle' };
+    }
+    if (id === 'program') {
+      if (!s.program) return { text: 'No program', state: 'idle' };
+      const errors = s.program.warnings.filter((w) => w.level === 'error').length;
+      return { text: `${s.programName} · ${fmtDuration(s.program.stats.cycleTime)}`, state: errors ? 'warn' : 'ok' };
+    }
+    if (id === 'results') {
+      const sim = this.simulator;
+      if (!s.program) return { text: 'Nothing to run', state: 'idle' };
+      const n = this.findingsShown().length;
+      const done = sim.totalTime > 0 && sim.time >= sim.totalTime - 1e-9;
+      if (n) return { text: `${n} ${n === 1 ? 'finding' : 'findings'}`, state: 'error' };
+      return done ? { text: 'Clean run', state: 'ok' } : { text: sim.time > 0 ? `${Math.round((sim.time / Math.max(sim.totalTime, 1e-9)) * 100)}% run` : 'Not run yet', state: 'idle' };
+    }
+    return { text: '' };
   }
 
   // ---- scene -------------------------------------------------------------
@@ -507,7 +615,7 @@ export class App {
   selectModel(model) {
     this.stockGizmo.detach();
     this.models.select(model);
-    this.setPage('setup', 'fixtures');
+    this.setPage('setup', groupForRole(model.role));
   }
 
   /** Put the handles on the block and open the Stock page. */
@@ -651,23 +759,58 @@ export class App {
 
   buildPanels() {
     this.panels = {
-      setup: new SetupPanel(this),
       machine: new MachinePanel(this),
+      setup: new SetupPanel(this),
       tools: new ToolsPanel(this),
       program: new ProgramPanel(this),
       results: new ResultsPanel(this),
       view: new ViewPanel(this),
     };
-    this.tabOrder = [
-      ['setup', 'Setup'],
-      ['machine', 'Machine'],
-      ['tools', 'Tools'],
-      ['program', 'Program'],
-      ['results', 'Results'],
-      ['view', 'View'],
+    this.steps = [
+      { id: 'machine', label: 'Machine', title: 'Machine', guide: 'Pick or build the machine: its axes, control, travels and macros.' },
+      { id: 'setup', label: 'Setup', title: 'Setup', guide: 'The stock, where zero is, and everything clamped around it.' },
+      { id: 'tools', label: 'Tools', title: 'Tools', guide: 'What each T number loads: cutter, holder and stick-out.' },
+      { id: 'program', label: 'Program', title: 'Program', guide: 'Open the G-code and the subprograms it calls, and read what the control makes of it.' },
+      { id: 'results', label: 'Results', title: 'Simulate & results', guide: 'Run it, then read the findings, the loads and the cut against the part.' },
     ];
-    this.buildRibbon();
-    this.setTab('setup');
+    this.stepBar.setSteps(this.steps.map((st) => ({ ...st, status: () => this.stepStatus(st.id) })));
+    this.steps.forEach((st, i) => {
+      const panel = this.panels[st.id];
+      panel.header = () => this.stepHeader(st, i);
+      panel.footer = () => this.stepFooter(i);
+      panel.onToggle = (id, on) => {
+        // Jogging and the travel view each take the machine: one at a time.
+        const other = { jog: 'limits', limits: 'jog' }[id];
+        if (st.id === 'machine' && on && other && panel.isOpen(other)) {
+          panel.setOpen(other, false);
+          panel.renderGroup(other);
+        }
+        this.syncModes();
+      };
+    });
+    this.viewDock = new ViewDock(this, this.viewportHost, this.panels.view);
+    const prefs = settings();
+    const start = prefs.startStep === 'last' && this.panels[prefs.lastStep] ? prefs.lastStep : 'machine';
+    this.setTab(start);
+  }
+
+  stepHeader(st, i) {
+    const hints = settings().stepHints;
+    return el('div.step-head', {}, [
+      el('div.step-kicker', {}, `Step ${i + 1} of ${this.steps.length}`),
+      el('h2.step-title', {}, st.title),
+      hints ? el('p.step-guide', {}, st.guide) : null,
+    ]);
+  }
+
+  stepFooter(i) {
+    const prev = this.steps[i - 1];
+    const next = this.steps[i + 1];
+    return el('div.step-foot', {}, [
+      prev ? el('button.btn.btn-ghost', { type: 'button', onclick: () => this.setTab(prev.id) }, [icon('arrowLeft', 15), el('span', {}, prev.label)]) : el('span'),
+      next ? el('button.btn.btn-primary', { type: 'button', onclick: () => this.setTab(next.id) }, [el('span', {}, `Next: ${next.label}`), icon('arrowRight', 15)])
+        : el('button.btn.btn-primary', { type: 'button', disabled: !this.state.program, onclick: () => this.runToEnd() }, [icon('play', 15), el('span', {}, 'Simulate to the end')]),
+    ]);
   }
 
   setTab(id) {
@@ -675,29 +818,52 @@ export class App {
   }
 
   /**
-   * Show one page of one tab. Passing a null page keeps whichever page that
-   * tab was last on, so coming back to a tab lands where you left it.
+   * Go to one group of one step. A null group keeps the step as it was
+   * left. The old names still work: the View pages open on the viewport's
+   * toolbar, and the checks are on Results.
    */
   setPage(tabId, pageId) {
+    if (tabId === 'view') {
+      if (this.viewDock) this.viewDock.open(pageId || 'camera');
+      return;
+    }
+    if (tabId === 'setup' && pageId === 'checks') tabId = 'results';
+    if (tabId === 'setup' && pageId === 'project') pageId = null;
     if (this.pick && this.pick.active) this.pick.cancel();
     const panel = this.panels[tabId];
     if (!panel) return;
     // Placement handles belong to the setup. Leaving them standing while a
     // program runs would only put something in the way of the part.
     if (tabId !== 'setup' && this.stockGizmo) this.clearSelection();
+    const changed = this.activeTab !== tabId;
     this.activeTab = tabId;
-    if (pageId) panel.setPage(pageId);
     if (this.panelHost.firstChild !== panel.root) {
       clear(this.panelHost);
       this.panelHost.appendChild(panel.root);
-      panel.render();
+      if (!pageId) panel.render();
     }
-    // The jog page has the machine while it is open, and only while it is;
-    // the Travels page parks it at home with the spindle empty.
-    if (tabId === 'machine' && panel.page === 'jog') this.startJog();
-    else this.stopJog();
-    this.setTravelView(tabId === 'machine' && panel.page === 'limits');
+    // Being sent somewhere else on the Machine step gives the machine back
+    // from jogging or the travel view.
+    if (tabId === 'machine' && pageId && pageId !== 'jog' && pageId !== 'limits') {
+      for (const g of ['jog', 'limits']) if (panel.isOpen(g)) panel.setOpen(g, false);
+    }
+    if (pageId) panel.setPage(pageId);
+    else if (changed) this.panelHost.scrollTop = 0;
+    if (changed) saveSettings({ lastStep: tabId });
+    this.syncModes();
     this.buildRibbon();
+  }
+
+  /**
+   * The Jog card has the machine while it is open on the Machine step, and
+   * the Travels card parks it at home with the spindle empty.
+   */
+  syncModes() {
+    const m = this.panels && this.panels.machine;
+    const onMachine = this.activeTab === 'machine' && m;
+    if (onMachine && m.isOpen('jog')) this.startJog();
+    else if (this.jog) this.stopJog();
+    this.setTravelView(!!(onMachine && !m.isOpen('jog') && m.isOpen('limits')));
   }
 
   /** A phone-sized screen, where the panel is a sheet rather than a column. */
@@ -792,7 +958,7 @@ export class App {
     this.timeLabel = el('span.time', {}, '0.00s / 0.00s');
     this.lineLabel = el('span.pill', {}, 'line –');
     this.speedSelect = el('select.speed', {
-      onchange: (e) => { this.state.speed = e.target.value; },
+      onchange: (e) => this.setSpeed(e.target.value),
     }, SPEEDS.map((s) => el('option', { value: s.value, selected: s.value === this.state.speed }, s.label)));
     this.seekNote = el('span.pill.seeking', {}, 'seeking…');
     this.seekNote.style.display = 'none';
@@ -917,10 +1083,24 @@ export class App {
 
   bindKeys() {
     window.addEventListener('keydown', (e) => {
+      // The project, from anywhere — the editor included.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'o')) {
+        e.preventDefault();
+        if (e.key === 's') this.saveProject();
+        else this.openProject();
+        return;
+      }
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.key === 'Escape' && this.pick.active) { this.pick.cancel(); return; }
+      if (e.key === 'Escape' && this.viewDock && this.viewDock.isOpen) { this.viewDock.close(); return; }
       if (e.key === 'Escape') { this.clearSelection(); return; }
+      // Alt+1…5 goes to a step.
+      if (e.altKey && /^Digit[1-5]$/.test(e.code) && this.steps) {
+        e.preventDefault();
+        this.setTab(this.steps[Number(e.code.slice(5)) - 1].id);
+        return;
+      }
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
       else if (e.key === 'ArrowRight' && e.shiftKey) this.stepMove();
@@ -948,7 +1128,9 @@ export class App {
     this.simulator.retune({ checks, fixtures: this.models.collisionBoxes(this.partFrame()) });
     if (patch.parts) this.refreshSlots();
     this.rerunIfFinished();
-    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+    const kept = pick(patch, CHECK_KEYS);
+    if (Object.keys(kept).length) saveSettings({ checks: kept });
+    if (this.panels && this.panels.results) this.panels.results.refresh();
   }
 
   /**
@@ -1504,7 +1686,7 @@ export class App {
         return;
       }
       const summary = await readProject(this, entries);
-      this.setPage('setup', 'project');
+      this.setTab('setup');
       this.notify(`Opened ${summary.name || file.name} — ${summary.program} on ${summary.machine}, ${summary.tools} cutters, ${summary.models} ${summary.models === 1 ? 'model' : 'models'}.`, 'ok');
     } catch (err) {
       this.notify(`Could not read ${file.name}: ${err.message}`, 'error');
@@ -1801,10 +1983,11 @@ export class App {
    *
    * @param {'mm'|'in'} next
    */
-  setUnits(next) {
+  setUnits(next, quiet = false) {
     if (!units.setUnits(next)) return;
     this.state.units = units.units();
-    try { localStorage.setItem('millsim.units', this.state.units); } catch (err) { /* private window */ }
+    saveSettings({ units: this.state.units });
+    this.syncTopbar();
     // Everything on screen is a number in the old unit until it is drawn
     // again, including the parts of the ribbon that carry one.
     for (const panel of Object.values(this.panels || {})) panel.render();
@@ -1813,6 +1996,7 @@ export class App {
     this.refreshMeasurements();
     this.buildRibbon();
     this.refreshProbes();
+    if (quiet) return;
     this.notify(next === 'in'
       ? 'Showing inches. Everything is still held in millimetres — this is how it is read, not what it is.'
       : 'Showing millimetres.', 'ok');
@@ -1821,6 +2005,10 @@ export class App {
   setDisplay(patch) {
     Object.assign(this.state.display, patch);
     this.applyDisplay();
+    // A switch thrown is how it is wanted next time too.
+    const kept = pick(patch, DISPLAY_KEYS);
+    if (Object.keys(kept).length) saveSettings({ display: kept });
+    if (this.viewDock && this.viewDock.openId === 'show') this.viewDock.refresh();
   }
 
   applyDisplay() {
@@ -2052,6 +2240,7 @@ export class App {
 
   setGougeTolerance(mm) {
     this.state.gougeTolerance = Math.max(0, mm || 0);
+    saveSettings({ gougeTolerance: this.state.gougeTolerance });
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
     this.refreshProbes();
@@ -2240,7 +2429,7 @@ export class App {
     // not every time the cut moves a reading.
     if (this._probeCount !== this.state.devProbes.length) {
       this._probeCount = this.state.devProbes.length;
-      if (this.panels && this.panels.view && this.activeTab === 'view') this.panels.view.refresh();
+      if (this.viewDock && this.viewDock.openId === 'show') this.viewDock.refresh();
     }
     this.viewer.invalidate();
   }
@@ -2353,10 +2542,28 @@ export class App {
     else this.play();
   }
 
-  play() {
+  /**
+   * Running the program takes the machine back from jogging and from the
+   * travel view, and shuts the card that had it — a card left open over a
+   * machine that is no longer doing what it says would be a lie.
+   */
+  releaseMachine() {
+    const m = this.panels && this.panels.machine;
+    if (m) {
+      let shut = false;
+      for (const g of ['jog', 'limits']) if (m.isOpen(g)) { m.open.delete(g); shut = true; }
+      if (shut) {
+        m.setOpen('jog', false);
+        if (this.activeTab === 'machine') m.render();
+      }
+    }
     this.stopJog();
-    // Pressing play is asking to watch the run: the tool goes back in.
     this.setTravelView(false);
+  }
+
+  play() {
+    // Pressing play is asking to watch the run: the tool goes back in.
+    this.releaseMachine();
     this.setStepCursor(null);
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
@@ -2476,6 +2683,7 @@ export class App {
    * the first line of what was called.
    */
   stepLine() {
+    this.releaseMachine();
     const program = this.state.program;
     if (!program) return;
     this.pause();
@@ -2514,6 +2722,7 @@ export class App {
 
   /** One move, whatever line it is on. Shift+→. */
   stepMove() {
+    this.releaseMachine();
     const program = this.state.program;
     if (!program) return;
     this.pause();
@@ -2543,6 +2752,7 @@ export class App {
   }
 
   runToEnd() {
+    this.releaseMachine();
     if (!this.state.program) {
       this.notify('Load a program first.', 'error');
       return;
@@ -2553,6 +2763,7 @@ export class App {
   }
 
   seekTo(time) {
+    this.releaseMachine();
     this.pause();
     this.forgetStop();
     this.setStepCursor(null);
@@ -3189,7 +3400,7 @@ export class App {
     }
     set(f.tool, this.travelView ? 'T–' : `T${sim.currentTool || '–'}`);
     // A tool change during the run moves the mark in the tool table.
-    if (this.panels && this.activeTab === 'tools' && this.panels.tools.page === 'assemblies'
+    if (this.panels && this.activeTab === 'tools' && this.panels.tools.isOpen('assemblies')
       && this.panels.tools.shownSpindle !== this.spindleAssemblyId()) this.panels.tools.render();
     set(f.toolName, this.travelView ? 'spindle empty' : slot ? slot.built.tool.def.name : 'no tool');
     // The feed is shown in what the reader works in, which is not
@@ -3259,8 +3470,8 @@ export class App {
   refreshResults() {
     if (!this.panels) return;
     if (this.activeTab === 'results') this.panels.results.refresh();
-    // The ribbon carries the finding count, so it follows the run.
-    if (this.ribbon) this.buildRibbon();
+    // The step bar carries the finding count, so it follows the run.
+    this.updateSteps();
   }
 
   // ---- helpers used by the panels ----------------------------------------
@@ -3430,9 +3641,7 @@ export class App {
     // Drawn in the work frame, so they stay on the part when the table moves.
     this.measure.attach(this.pick.frameObject() || this.viewer.scene);
     this.measure.setItems(this.state.measurements);
-    if (this.panels && this.panels.view) this.panels.view.refresh();
-    // The page's count is in the ribbon, so it is redrawn with the list.
-    if (this.ribbon) this.buildRibbon();
+    if (this.viewDock) this.viewDock.refresh();
     this.viewer.invalidate();
   }
 

@@ -1,12 +1,14 @@
 // Setup: the job. The block, where zero is, and what is clamped around it.
 //
-// Three pages, and everything that acts on them lives here rather than in
-// the ribbon: the ribbon says which page you are on, this says what is on
-// it. Fixtures are the one thing on these pages that gets created from
-// nothing, so that is the one thing behind an Add button and a window.
+// Step 2. The stock and the work offsets, then one card for each kind of
+// model on the table — fixtures and clamps, the reference part, decoration
+// — because the three are different things: what the tool must miss, what
+// the job must become, and what is only there to look at. Each card has
+// its own Add button, list and drop zone.
 
 import { el, field, select, checkbox, button, row, section } from './dom.js';
 import { Panel, addBar, actionRow } from './panel.js';
+import { icon } from './icons.js';
 import { openFixtureDialog, openStockDialog } from './setupDialogs.js';
 import { MODEL_ROLES } from '../scene/modelsView.js';
 import { describeShape } from '../sim/stockShape.js';
@@ -17,15 +19,27 @@ import * as units from '../core/units.js';
 const AXES = ['X', 'Y', 'Z'];
 const GIZMOS = [['translate', 'Move'], ['rotate', 'Rotate'], ['scale', 'Scale']];
 
+/** Which group of the Setup step lists a model of this role. */
+export function groupForRole(role) {
+  return role === 'reference' ? 'reference' : role === 'decor' ? 'decor' : 'fixtures';
+}
+
+const GROUP_ROLES = {
+  fixtures: ['fixture', 'clamp'],
+  reference: ['reference'],
+  decor: ['decor'],
+};
+
 export class SetupPanel extends Panel {
   constructor(app) {
+    const count = (roles) => () => app.models.models.filter((m) => roles.includes(m.role)).length || null;
     super(app, [
-      { id: 'project', label: 'Project', icon: 'save', hint: 'The whole job in one file: program, machine, stock, tools and fixtures', render: SetupPanel.prototype.projectPage },
-      { id: 'stock', label: 'Stock', icon: 'cube', hint: 'The block, where it sits and how finely it is simulated', render: SetupPanel.prototype.stockPage },
-      { id: 'origin', label: 'Work offsets', icon: 'target', hint: 'Where X0 Y0 Z0 is for each offset', render: SetupPanel.prototype.originPage },
-      { id: 'fixtures', label: 'Fixtures', icon: 'vice', hint: 'Vices, clamps, parallels and reference parts', badge: () => app.models.models.length || null, render: SetupPanel.prototype.fixturesPage },
-      { id: 'checks', label: 'Checks', icon: 'gouge', hint: 'What counts as a crash: clearances, and what is checked at all', render: SetupPanel.prototype.checksPage },
-    ]);
+      { id: 'stock', label: 'Stock', icon: 'cube', hint: 'The block, where it sits and how finely it is simulated', summary: () => describeShape(app.state.stock), render: SetupPanel.prototype.stockPage },
+      { id: 'origin', label: 'Work offsets', icon: 'target', hint: 'Where X0 Y0 Z0 is for each offset', summary: () => app.state.wcsEdit, open: false, render: SetupPanel.prototype.originPage },
+      { id: 'fixtures', label: 'Fixtures & clamps', icon: 'vice', hint: 'Vices, parallels and clamps: checked against the whole tool assembly', badge: count(GROUP_ROLES.fixtures), render() { return this.modelsGroup('fixtures'); } },
+      { id: 'reference', label: 'Reference part', icon: 'reference', hint: 'The finished part: gouge checks, the deviation map and Compare', badge: count(GROUP_ROLES.reference), render() { return this.modelsGroup('reference'); } },
+      { id: 'decor', label: 'Decoration', icon: 'decor', hint: 'Models that are drawn and never checked', badge: count(GROUP_ROLES.decor), open: false, render() { return this.modelsGroup('decor'); } },
+    ], { key: 'setup' });
     this.gizmoMode = 'translate';
     /** Which handles the block gets: Move or Turn. */
     this.stockGizmoMode = 'translate';
@@ -45,117 +59,12 @@ export class SetupPanel extends Panel {
 
   // ---- pages -------------------------------------------------------------
 
-  /**
-   * The job as one file.
-   *
-   * Everything else on this tab describes one part of a setup; this page is
-   * the setup itself, which is the only thing worth keeping when the
-   * browser tab closes.
-   */
-  projectPage() {
-    const app = this.app;
-    const s = app.state;
-    const kin = app.machineView.kinematics;
-    const program = s.program;
-
-    const stat = (label, value, dim) => el('div.stat', {}, [
-      el('div.stat-label', {}, label),
-      el(`div.stat-value${dim ? '.dim' : ''}`, {}, value),
-    ]);
-
-    return section('Project', [
-      el('div.hint', {}, 'A setup is not a program. It is a program, the machine it runs on, the stock it starts from, where that stock sits, which tools the T numbers mean, and the clamps standing around it — and losing any one of those makes the rest unverifiable. They are saved together.'),
-      actionRow([
-        { label: 'Save project…', variant: 'primary', onClick: () => app.saveProject(), hint: 'One zip holding all of it' },
-        { label: 'Open project…', onClick: () => app.openProject(), hint: 'A project saved earlier — or a machine folder' },
-      ]),
-      el('div.stat-grid', {}, [
-        stat('Program', s.programName || 'none', !s.programName),
-        stat('Blocks', program ? String(program.stats.blockCount) : '—', !program),
-        stat('Subprograms', String(s.subprograms.length)),
-        stat('Machine', kin.name, false),
-        stat('Tool table', `${app.library.assemblies.length} assemblies`),
-        stat('Models', `${app.models.models.length} loaded`),
-      ]),
-      el('div.hint', {}, 'Inside the zip: project.json for the setup, program/ for the G-code, machine/ laid out exactly as Save machine writes it, library.json for the tools, models/ and stock/ as STL. Every part of it opens in something else — a project only this program can read is a hostage, not an archive.'),
-    ]);
-  }
-
   stockPage() {
     return [this.stockSection()];
   }
 
   originPage() {
     return [this.originSection()];
-  }
-
-  /**
-   * What the crash model looks for.
-   *
-   * A collision check is a rule, and a rule that cannot be adjusted is a
-   * rule people learn to ignore: the shop that models its holders
-   * generously gets a holder crash on every block and stops reading the
-   * findings at all. So the distances and the exceptions live here, in one
-   * place, rather than being hard-coded as "touching is bad".
-   */
-  checksPage() {
-    const app = this.app;
-    const c = app.state.checks;
-    const parts = c.parts;
-
-    const partRow = (key, label, hint) => checkbox(label, parts[key] !== false, (v) => {
-      app.setChecks({ parts: { [key]: v } });
-    }, { title: hint });
-
-    const ignored = app.models.models.filter((m) => m.ignore).length;
-    const special = app.models.models.filter((m) => Number.isFinite(m.clearance)).length;
-
-    return [
-      section('Clearance', [
-        el('label.field', {}, [
-          el('span.field-label', {}, ['Near miss ', el('span.value', {}, c.nearMiss > 0 ? units.lenU(c.nearMiss, 2) : 'off')]),
-          // The slider is millimetres of clearance whichever way the unit
-          // switch is set; only the readout changes, because a slider you
-          // cannot land on a round number is worse than one in the other
-          // unit.
-          el('input', {
-            type: 'range', min: 0, max: 10, step: 0.25, value: c.nearMiss,
-            oninput: (e) => { app.state.checks.nearMiss = parseFloat(e.target.value); this.refresh(); },
-            onchange: (e) => app.setChecks({ nearMiss: parseFloat(e.target.value) }),
-          }),
-        ]),
-        el('div.hint', {}, c.nearMiss > 0
-          ? `Anything that passes within ${units.lenU(c.nearMiss, 2)} of a fixture or the table is reported as a near miss — a warning, not a crash. That is the pass the operator watches with a hand on the feed hold.`
-          : 'Off: only metal in metal is reported. Ask for room and the run also tells you where it came close, which is what you want before the first part rather than after it.'),
-        checkbox('Report rapids that touch material', c.rapidIntoStock !== false, (v) => app.setChecks({ rapidIntoStock: v })),
-        checkbox('Stop playing at a collision', c.stopOnCollision !== false, (v) => app.setChecks({ stopOnCollision: v })),
-        el('div.hint', {}, 'Playing stops at the first crash, gouge or travel limit — of the kinds not switched off on Results › Findings — where it is found. ▶ then passes over the rest of that block, uncut and unchecked, and goes on from the next. Scrubbing and running to the end go through and list them.'),
-        el('div.hint', {}, 'A G0 that removes material is a crash on the machine. Some posts rapid to the surface on purpose, so this can be turned off.'),
-      ]),
-      section('What is checked', [
-        partRow('tool', 'The cutter and its shank', 'The flutes and the shank above them'),
-        partRow('holder', 'The holder', 'Collet chuck, shrink fit, shell arbor'),
-        partRow('spindle', 'The spindle nose', 'The face of the spindle itself'),
-        checkbox('Holder, shank and spindle against the reference part', c.reference !== false, (v) => app.setChecks({ reference: v }), {
-          title: 'Against its real shape, not a box round it. The cutting edge is the gouge check\u2019s.',
-        }),
-        el('div.hint', {}, 'Everything checked is checked against the fixtures, the table and the travel limits, and — above the flutes — against the reference part\u2019s real shape; the cutter going past the part is a gouge. Turning one off does not make it safe — it makes this program stop mentioning it.'),
-      ]),
-      section('Exceptions', [
-        el('div.hint', {}, ignored || special
-          ? `${ignored} ${ignored === 1 ? 'model is' : 'models are'} ignored and ${special} ${special === 1 ? 'asks' : 'ask'} for a clearance of their own.`
-          : 'No model has a rule of its own yet.'),
-        el('div.hint', {}, 'A fixture the tool is meant to touch — a soft jaw being cut, a sacrificial plate — can be ignored on its own, and a fragile one can ask for more room than everything else. Both live on the fixture, on Setup › Fixtures.'),
-        actionRow([
-          { label: 'Go to fixtures', onClick: () => app.setPage('setup', 'fixtures') },
-        ]),
-      ]),
-    ];
-  }
-
-  fixturesPage() {
-    const sel = this.app.models.selected;
-    return [this.modelsSection(), sel ? this.placementSection(sel) : null];
   }
 
   // ---- stock -------------------------------------------------------------
@@ -426,63 +335,93 @@ export class SetupPanel extends Panel {
     app.fitToScene();
   }
 
-  /** Reached from elsewhere in the app: show the page that owns fixtures. */
-  openFixtures() {
-    this.app.setPage('setup', 'fixtures');
+  /** Reached from elsewhere in the app: show the group that lists this model, or the fixtures. */
+  openFixtures(model = null) {
+    this.app.setPage('setup', groupForRole(model ? model.role : 'fixture'));
   }
 
-  modelsSection() {
+  /**
+   * One kind of model: its list, the way to add one, and the placement of
+   * the one selected. Each kind has its own card, because they are three
+   * different things — what the tool must miss, what the job must become,
+   * and what is only there to look at.
+   */
+  modelsGroup(group) {
     const app = this.app;
+    const roles = GROUP_ROLES[group];
+    const models = app.models.models.filter((m) => roles.includes(m.role));
+    const role = roles[0];
 
     const list = el('div.list');
-    if (!app.models.models.length) {
+    const empty = {
+      fixtures: ['No fixtures', 'Add a vice, parallels or a toe clamp, or import your own STL. Fixtures are collision-checked against the cutter, holder and spindle.'],
+      reference: ['No reference part', 'Import the finished part as STL. The holder, shank and spindle are checked against its real shape, the cutter going past it is a gouge, and Results › Compare measures the cut against it.'],
+      decor: ['Nothing here', 'Models for show only: a table plate, a fixture you do not want checked, a sub-plate. They are drawn and never checked.'],
+    }[group];
+    if (!models.length) {
       list.appendChild(el('div.empty', {}, [
-        el('div.empty-title', {}, 'Nothing clamped yet'),
-        el('div.hint', {}, 'Add a vice, some parallels or a toe clamp, or bring in your own STL. Fixtures are collision-checked against the whole tool assembly; a reference part is the shape the job is meant to produce: the holder, shank and spindle are checked against it, and the cutter going past it is a gouge.'),
+        el('div.empty-title', {}, empty[0]),
+        el('div.hint', {}, empty[1]),
       ]));
     }
-    for (const m of app.models.models) {
+    for (const m of models) {
       list.appendChild(el(`div.list-item${app.models.selected === m ? '.selected' : ''}`, {
         onclick: () => app.selectModel(m),
       }, [
         el('div.swatch', { style: { background: `#${MODEL_ROLES[m.role].color.toString(16).padStart(6, '0')}` } }),
         el('div.list-main', {}, [
           el('div.list-title', {}, m.name),
-          el('div.list-sub', {}, `${MODEL_ROLES[m.role].label} · ${m.triangles.toLocaleString()} tris`),
+          el('div.list-sub', {}, [
+            group === 'fixtures' ? MODEL_ROLES[m.role].label.replace(/ \(.*\)$/, '') : null,
+            `${m.triangles.toLocaleString()} triangles`,
+            m.ignore ? 'ignored' : null,
+            m.visible ? null : 'hidden',
+          ].filter(Boolean).join(' · ')),
         ]),
         el('div.list-actions', {}, [
-          button(m.visible ? 'Hide' : 'Show', (e) => {
-            e.stopPropagation();
-            app.models.setVisible(m, !m.visible);
-            app.refreshFixtures();
-            this.refresh();
-          }),
-          button('✕', (e) => {
-            e.stopPropagation();
-            app.models.remove(m);
-            app.refreshFixtures();
-          }, { title: 'Remove', variant: 'warn' }),
+          el(`button.icon-btn${m.visible ? '' : '.off'}`, {
+            type: 'button',
+            title: m.visible ? 'Hide' : 'Show',
+            onclick: (e) => {
+              e.stopPropagation();
+              app.models.setVisible(m, !m.visible);
+              app.refreshFixtures();
+              this.refresh();
+            },
+          }, icon('eye', 15)),
+          el('button.icon-btn.danger', {
+            type: 'button',
+            title: 'Remove',
+            onclick: (e) => {
+              e.stopPropagation();
+              app.models.remove(m);
+              app.refreshFixtures();
+            },
+          }, icon('trash', 15)),
         ]),
       ]));
     }
 
     // Dropping a file is the same act as pressing Add, so it stays on the
-    // page rather than hiding inside the window.
+    // card rather than hiding inside the window — and lands as this card's kind.
     const drop = el('div.dropzone', {
       ondragover: (e) => { e.preventDefault(); drop.classList.add('over'); },
       ondragleave: () => drop.classList.remove('over'),
       ondrop: (e) => {
         e.preventDefault();
         drop.classList.remove('over');
-        this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)));
+        this.importFiles([...e.dataTransfer.files].filter((f) => /\.stl$/i.test(f.name)), { role, recentre: false });
       },
-    }, 'or drop STL files here — they land as fixtures; use Add for a reference part');
+    }, 'Drop STL files here');
 
-    return section(`Fixtures & models (${app.models.models.length})`, [
-      addBar('Add fixture…', () => openFixtureDialog(this.app, this), { hint: 'A vice, parallels, a clamp, or an STL of your own' }),
-      drop,
+    const label = { fixtures: 'Add fixture…', reference: 'Import reference part…', decor: 'Import model…' }[group];
+    const sel = app.models.selected;
+    return [
+      addBar(label, () => openFixtureDialog(app, this, { role }), { hint: empty[1] }),
       list,
-    ]);
+      drop,
+      sel && roles.includes(sel.role) ? this.placementSection(sel) : null,
+    ];
   }
 
   placementSection(m) {
@@ -560,7 +499,8 @@ export class SetupPanel extends Panel {
         select('Role', Object.entries(MODEL_ROLES).map(([k, v]) => ({ value: k, label: v.label })), m.role, (v) => {
           app.models.setRole(m, v);
           app.refreshFixtures();
-          this.refresh();
+          // It belongs to another card now: follow it there.
+          app.setPage('setup', groupForRole(v));
         }),
       ]),
       el('label.field', {}, [
@@ -579,7 +519,7 @@ export class SetupPanel extends Panel {
         }),
         field('Clearance', Number.isFinite(m.clearance) ? m.clearance : '', {
           type: 'number', min: 0, step: 0.5, unit: 'mm',
-          title: 'How much room this one wants; blank follows Setup › Checks',
+          title: 'How much room this one wants; blank follows Results › Collision rules',
           onChange: (v) => {
             m.clearance = v === null || v === '' ? null : Math.max(0, Number(v) || 0);
             app.refreshFixtures();
@@ -591,8 +531,8 @@ export class SetupPanel extends Panel {
       el('div.hint', {}, m.ignore
         ? 'Ignored: the assembly passes through this one without a word.'
         : Number.isFinite(m.clearance)
-          ? `Asks for ${units.lenU(m.clearance, 2)} of its own, whatever Setup › Checks says.`
-          : 'Follows the near-miss distance on Setup › Checks. Leave the clearance blank unless this one is special.'),
+          ? `Asks for ${units.lenU(m.clearance, 2)} of its own, whatever Results › Collision rules says.`
+          : 'Follows the near-miss distance in Results › Collision rules. Leave the clearance blank unless this one is special.'),
       row([
         button('Drop onto table', () => {
           app.dropModelToTable(m);

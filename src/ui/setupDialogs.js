@@ -24,10 +24,15 @@ const KINDS = [
  * @param {object} app
  * @param {{importFiles:(files:File[]) => Promise<void>, refresh:() => void}} panel
  */
-export function openFixtureDialog(app, panel) {
+export function openFixtureDialog(app, panel, opts = {}) {
   // A file's origin is kept: it lands on X0 Y0 Z0 and everything done to
-  // it afterwards is about that point.
-  const state = { kind: 'vice', units: 'mm', role: 'fixture', recentre: false, files: [] };
+  // it afterwards is about that point. A reference part or a decoration is
+  // only ever a file; a fixture may be one of the built-in shapes.
+  const fileOnly = opts.role === 'reference' || opts.role === 'decor';
+  const state = { kind: fileOnly ? 'stl' : 'vice', units: 'mm', role: opts.role || 'fixture', recentre: false, files: [] };
+  const roles = Object.entries(MODEL_ROLES)
+    .filter(([k]) => (fileOnly ? k === state.role : k === 'fixture' || k === 'clamp'))
+    .map(([k, v]) => ({ value: k, label: v.label }));
 
   // Made before the blocks that hold them: a control used before its line
   // is a ReferenceError, and the window never opened.
@@ -51,7 +56,7 @@ export function openFixtureDialog(app, panel) {
     row([
       select('Units in the file', [{ value: 'mm', label: 'Millimetres' }, { value: 'in', label: 'Inches' }],
         state.units, (v) => { state.units = v; }),
-      select('Role', Object.entries(MODEL_ROLES).map(([k, v]) => ({ value: k, label: v.label })),
+      fileOnly ? null : select('Role', roles,
         state.role, (v) => {
           state.role = v;
           // A reference part has to sit where the program thinks it sits,
@@ -76,19 +81,21 @@ export function openFixtureDialog(app, panel) {
   };
 
   const body = el('div.dialog-form', {}, [
-    select('What to add', KINDS.map((k) => ({ value: k.value, label: k.label })), state.kind, (v) => {
+    fileOnly ? null : select('What to add', KINDS.map((k) => ({ value: k.value, label: k.label })), state.kind, (v) => {
       state.kind = v;
       sync();
       // Choosing a file to add is choosing the file: the explorer opens.
       if (v === 'stl' && !state.files.length) choose();
     }),
-    kindHint,
+    fileOnly ? null : kindHint,
     stlBlock,
   ]);
 
   const dialog = new Dialog({
-    title: 'Add a fixture',
-    subtitle: 'Clamps, parallels and reference parts around the job',
+    title: state.role === 'reference' ? 'Add a reference part' : state.role === 'decor' ? 'Add a model for show' : 'Add a fixture',
+    subtitle: state.role === 'reference' ? 'The finished part: checked for gouges and compared against the cut'
+      : state.role === 'decor' ? 'Drawn, never checked'
+        : 'Vices, parallels and clamps around the job',
     width: 460,
     body,
     confirm: 'Add',
