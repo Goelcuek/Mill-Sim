@@ -172,3 +172,16 @@ test('a tool zeroed to its nose radius centre: the program is the centre, the pa
   // …and a face with the centre at Z-0.2 is at Z-1.
   near(stock.stretchesAt(2, [10.125, 0.125, -10])[0][1], -1, 0.01, 'faced to Z-1');
 });
+
+test('a grooving blade set to either corner: the same groove from the lower corner at Z-17 or the upper at Z-14', () => {
+  const groove = defaultTools().find((t) => t.id === 'tool_groove3');
+  for (const [corner, z] of [['lower', -17], ['upper', -14]]) {
+    const blade = { ...groove, grooveCorner: corner };
+    const { stock } = turnRun(['T13 M6', ...DREHEN.slice(1), `G0 X70 Z${z}`, 'G1 X50', 'G0 X70', 'M30'], { 13: slotOf(blade, 0), 11: slotOf(od, 1) });
+    const across = (zz) => stock.stretchesAt(0, [0, 0.125, zz]).map((s) => s.map((v) => +v.toFixed(2)));
+    // The block is 30 from the axis: in the groove's band, all of it beyond Ø50 is gone.
+    assert.deepEqual(across(-15.5), [[-25, 25]], `${corner}: the groove, Ø50 at Z-15.5`);
+    assert.deepEqual(across(-17.375), [[-30, 30]], `${corner}: below it, whole`);
+    assert.deepEqual(across(-13.625), [[-30, 30]], `${corner}: above it, whole`);
+  }
+});

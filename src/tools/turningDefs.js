@@ -91,6 +91,9 @@ export function turningOutline(t) {
   // The centre of the nose's radius, in the same frame: the other point a
   // tool can be measured to.
   let centre = [0, 0];
+  // The corner the tool was set to, as its imaginary tip: where its two
+  // tangents meet. The origin, but for a grooving blade set to the far one.
+  let tip = [0, 0];
 
   if (t.type === 'groove') {
     // A blade plunging in along −u: its cutting edge is the end at u = 0,
@@ -99,8 +102,15 @@ export function turningOutline(t) {
     const depth = Math.max(num(t.grooveDepth, 10), 0.5);
     const rc = Math.min(Math.max(num(t.cornerRadius, 0.2), 0), width / 2 - 1e-3);
     const box = [[0, 0], [depth, 0], [depth, width], [0, width]];
-    // The reference corner is the one at the origin, and its radius's centre.
-    centre = [rc, rc];
+    // Either corner of the cutting edge can be the one it was set to: the
+    // lower, towards −Z, or the upper, towards +Z — and of that corner, its
+    // tip or its radius's centre.
+    if (t.grooveCorner === 'upper') {
+      tip = [0, width];
+      centre = [rc, width - rc];
+    } else {
+      centre = [rc, rc];
+    }
     insert = [
       ...roundCorner(box[0], box[3], box[1], rc, 4),
       box[1], box[2],
@@ -178,7 +188,7 @@ export function turningOutline(t) {
   // What the tool was zeroed to, and so the point the program moves: the
   // imaginary tip, or the centre of the nose radius — the whole tool
   // moved so that is the origin.
-  const at = t.trackingPoint === 'centre' ? centre : [0, 0];
+  const at = t.trackingPoint === 'centre' ? centre : tip;
   return {
     kind: t.type,
     side,
@@ -186,7 +196,7 @@ export function turningOutline(t) {
     bar: { u0: u0 - at[0], u1: u0 + bar - at[0], w0: w0 - at[1], w1: Math.max(length, w0 + 5) - at[1], thick: bar },
     // The spindle's own axis runs up the middle of the bar.
     axisU: u0 + bar / 2 - at[0],
-    tracking: at[0] || at[1] ? 'centre' : 'tip',
+    tracking: t.trackingPoint === 'centre' ? 'centre' : 'tip',
     // Where the other point is, from this one.
     noseCentre: [centre[0] - at[0], centre[1] - at[1]],
     warnings,

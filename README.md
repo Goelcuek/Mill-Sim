@@ -812,9 +812,10 @@ insert* (flank angle). Each is an outline in the plane through the
 part's axis on a bar. **Zeroed to** says which point of it the program
 moves — the point the tool was set to: the *imaginary tip*, where the
 nose's tangents meet, or the *nose radius centre*, for programs written
-to the centre of the corner radius (the reference corner's on a grooving
-blade, the tip radius on a threading insert, the middle of a round
-insert). Nothing is compensated either way: the part is the insert's own
+to the centre of the corner radius (the tip radius on a threading
+insert, the middle of a round insert). A grooving blade is set to either
+corner of its cutting edge — *Set to corner*: the lower, towards −Z, or
+the upper, towards +Z — and to that corner's tip or radius centre. Nothing is compensated either way: the part is the insert's own
 outline, wherever that puts it. The bar stands beside the tip; the spindle is placed on the bar's middle,
 so the head is drawn and checked where it is. The starter library has
 T11–T14 (on a library you already have: Tools › Library › *Put the

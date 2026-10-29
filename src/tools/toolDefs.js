@@ -55,7 +55,7 @@ export const TOOL_TYPES = {
   groove: {
     label: 'Grooving / parting blade',
     turning: true,
-    fields: ['side', 'trackingPoint', 'grooveWidth', 'grooveDepth', 'cornerRadius', 'shankWidth', 'overallLength'],
+    fields: ['side', 'grooveCorner', 'trackingPoint', 'grooveWidth', 'grooveDepth', 'cornerRadius', 'shankWidth', 'overallLength'],
   },
   thread: {
     label: 'Threading insert',
@@ -86,6 +86,13 @@ export const TOOL_FIELDS = {
     options: [
       { value: 'tip', label: 'Imaginary tip (P)' },
       { value: 'centre', label: 'Nose radius centre' },
+    ],
+  },
+  grooveCorner: {
+    label: 'Set to corner',
+    options: [
+      { value: 'lower', label: 'Lower corner (−Z side)' },
+      { value: 'upper', label: 'Upper corner (+Z side)' },
     ],
   },
   insertShape: {
@@ -140,6 +147,8 @@ export const DEFAULT_TOOL = {
   side: 'OD',
   /** The point the tool was zeroed to, which the program moves: 'tip' or 'centre'. */
   trackingPoint: 'tip',
+  /** Which corner of a grooving blade it was set to: 'lower' (−Z) or 'upper' (+Z). */
+  grooveCorner: 'lower',
   insertShape: 'C',
   insertSize: 12,
   noseRadius: 0.8,
