@@ -487,6 +487,13 @@ part as STL or OBJ when the run finishes.
 
 ## Getting around
 
+**The view cube**, top right of the viewport, turns with the camera:
+click a face to look from it (TOP is +Z, FRONT −Y, RIGHT +X), near an
+edge to look along the diagonal between two faces, near a corner from all
+three — twenty-six views, the camera swinging there round its target
+without changing the zoom. The arrows off its corner are machine X, Y
+and Z.
+
 One rule decides where everything lives:
 
 > **The ribbon navigates. The side panel acts.**

@@ -1811,6 +1811,28 @@ try {
   check(preset.proxies > 0, 'a preset machine drew no castings at all');
   check(bare.proxies === 0 && bare.flag === false, `a new machine drew ${bare.proxies} stand-in parts`);
   check(after.shown === after.source, 'the program came back but the editor is empty');
+
+  // ---- the view cube: a click on it is a view --------------------------
+  {
+    const cube = await page.$('canvas.view-cube');
+    check(!!cube, 'there is no view cube in the viewport');
+    const box = await cube.boundingBox();
+    const dir = () => page.evaluate(() => {
+      const v = window.millsim.viewer;
+      const d = v.camera.position.clone().sub(v.controls.target).normalize();
+      return [d.x, d.y, d.z].map((x) => +x.toFixed(3));
+    });
+    await page.evaluate(() => window.millsim.viewer.lookFrom([0, -1, 0]));
+    await page.waitForTimeout(300);
+    // Face on, the FRONT face fills the middle; its right-hand band is the
+    // edge with RIGHT.
+    await page.mouse.click(box.x + box.width * 0.76, box.y + box.height * 0.5);
+    await page.waitForFunction(() => !window.millsim.viewer.swing, null, { timeout: 20000 });
+    const edge = await dir();
+    console.log('view cube:', JSON.stringify(edge));
+    check(Math.abs(edge[0] - 0.707) < 0.01 && Math.abs(edge[1] + 0.707) < 0.01 && Math.abs(edge[2]) < 0.01,
+      `clicking the front-right edge of the cube should look from there: ${edge}`);
+  }
 } catch (err) {
   console.error('SMOKE FAILED:', err.message);
   errors.push(err.message);

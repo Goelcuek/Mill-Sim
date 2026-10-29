@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 
 import { Viewer } from './scene/viewer.js';
+import { ViewCube } from './scene/viewCube.js';
 import { StockView } from './scene/stockView.js';
 import { TriDexelStock } from './sim/triDexel.js';
 import { ToolView } from './scene/toolView.js';
@@ -366,6 +367,7 @@ export class App {
 
   buildScene() {
     this.viewer = new Viewer(this.viewportHost);
+    this.viewCube = new ViewCube(this.viewer, this.viewportHost);
     this.machineParts = new MachineParts();
     this.machineView = new MachineView();
     // Every rebuild of the rig — a preset, a pivot, a body hung on an axis

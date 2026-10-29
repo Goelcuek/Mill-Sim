@@ -526,6 +526,52 @@ export class Viewer {
     this.invalidate();
   }
 
+  /**
+   * Look at the target from a direction — any, not only the named views —
+   * keeping the target and the zoom. Animated, it swings there over a
+   * moment, round the shorter way, so where the view went is clear.
+   *
+   * @param {number[]} dir from the target towards the camera
+   * @param {{animate?:boolean}} [opts]
+   */
+  lookFrom(dir, { animate = false } = {}) {
+    const to = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+    if (to.lengthSq() < 1e-12) return;
+    const target = this.controls.target;
+    const dist = Math.max(this.camera.position.distanceTo(target), this.sceneRadius * 2, 300);
+    const place = (v) => {
+      this.camera.position.copy(target).addScaledVector(v, dist);
+      this.updateClipping();
+      this.controls.update();
+      this.invalidate();
+    };
+    if (this.swing) { this.swing(); this.swing = null; }
+    const from = this.camera.position.clone().sub(target).normalize();
+    const angle = from.angleTo(to);
+    if (!animate || angle < 1e-3) { place(to); return; }
+    // Turning about an axis square to both; straight round the back, the
+    // axis is up, so it goes round sideways rather than through the pole.
+    let axis = new THREE.Vector3().crossVectors(from, to);
+    if (axis.lengthSq() < 1e-10) axis = new THREE.Vector3(0, 0, 1).cross(from).lengthSq() > 1e-10 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0);
+    axis.normalize();
+    const start = performance.now();
+    const ms = 160 + 220 * (angle / Math.PI);
+    const q = new THREE.Quaternion();
+    const v = new THREE.Vector3();
+    this.swing = this.onFrame(() => {
+      const t = Math.min(1, (performance.now() - start) / ms);
+      const e = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+      if (t >= 1) {
+        place(to);
+        this.swing();
+        this.swing = null;
+        return;
+      }
+      q.setFromAxisAngle(axis, angle * e);
+      place(v.copy(from).applyQuaternion(q));
+    });
+  }
+
   /** Draw the edges of the solid models, or not. */
   setOutlines(on) { this.outliner.setEnabled(on); this.invalidate(); }
 
