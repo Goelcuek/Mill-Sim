@@ -19,7 +19,7 @@ import { ModelsView } from './scene/modelsView.js';
 import { PickController } from './scene/pickController.js';
 import { StockGizmo } from './scene/stockGizmo.js';
 import { MeasureView, circleThrough } from './scene/measureView.js';
-import { buildSurfaceIndex, isClosed } from './sim/surfaceIndex.js';
+import { buildSurfaceIndex, isClosed, prepareSurfaceIndex } from './sim/surfaceIndex.js';
 import { OriginView } from './scene/originView.js';
 
 import { ToolLibrary } from './tools/library.js';
@@ -2229,6 +2229,7 @@ export class App {
     // grid; the run still measures the tool against its surface, so the
     // holder and a cutter going into it are reported wherever it stands.
     this.simulator.target = this.target || (parts.length ? referenceOnly(parts) : null);
+    if (this.simulator.target) prepareSurfaceIndex(this.simulator.target.surface);
     this.simulator.gougeTolerance = this.state.gougeTolerance;
     this.stockView.setTarget(this.target, this.state.gougeTolerance);
     this.refreshProbes();

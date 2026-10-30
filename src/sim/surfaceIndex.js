@@ -164,9 +164,15 @@ export function insideSolid(index, x, y, z) {
   const a = Math.floor((px - g.x0) / g.cell);
   const b = Math.floor((py - g.y0) / g.cell);
   if (a >= 0 && b >= 0 && a < g.nx && b < g.ny) {
-    for (let c = Math.max(0, Math.floor((z - g.z0) / g.cell)); c < g.nz; c++) {
+    const c0 = Math.max(0, Math.floor((z - g.z0) / g.cell));
+    for (let c = c0; c < g.nz; c++) {
       const k = (c * g.ny + b) * g.nx + a;
       for (let n = g.starts[k]; n < g.starts[k + 1]; n++) test(g.items[n]);
+    }
+    const ca = Math.floor(a / C3), cb = Math.floor(b / C3);
+    for (let c = Math.floor(c0 / C3); c < g.cnz; c++) {
+      const k = (c * g.cny + cb) * g.cnx + ca;
+      for (let n = g.cstarts[k]; n < g.cstarts[k + 1]; n++) test(g.citems[n]);
     }
   }
   for (let p = 0; p < partCount; p++) if (PARITY[p]) return true;
@@ -216,8 +222,73 @@ function grid3(index) {
     const [a0, a1, b0, b1, c0, c1] = range(i);
     for (let c = c0; c <= c1; c++) for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) items[fill[(c * ny + b) * nx + a]++] = i;
   }
-  index.g3 = { cell, nx, ny, nz, x0, y0, z0, starts, items, big: Uint32Array.from(big) };
+  // The big ones in cubes C3 times the size, so a question tests only the
+  // big triangles near it; the few too big even for those, everybody does.
+  const cnx = Math.ceil(nx / C3), cny = Math.ceil(ny / C3), cnz = Math.ceil(nz / C3);
+  const crange = (i) => range(i).map((v) => Math.floor(v / C3));
+  const cstarts = new Uint32Array(cnx * cny * cnz + 1);
+  const huge = [];
+  const keep = [];
+  for (const i of big) {
+    const [a0, a1, b0, b1, c0, c1] = crange(i);
+    if ((a1 - a0 + 1) * (b1 - b0 + 1) * (c1 - c0 + 1) > BIG3) { huge.push(i); continue; }
+    keep.push(i);
+    for (let c = c0; c <= c1; c++) for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) cstarts[(c * cny + b) * cnx + a + 1]++;
+  }
+  for (let k = 1; k < cstarts.length; k++) cstarts[k] += cstarts[k - 1];
+  const citems = new Uint32Array(cstarts[cnx * cny * cnz]);
+  const cfill = cstarts.slice(0, cnx * cny * cnz);
+  for (const i of keep) {
+    const [a0, a1, b0, b1, c0, c1] = crange(i);
+    for (let c = c0; c <= c1; c++) for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) citems[cfill[(c * cny + b) * cnx + a]++] = i;
+  }
+  index.g3 = {
+    cell, nx, ny, nz, x0, y0, z0, starts, items, big: Uint32Array.from(huge),
+    cnx, cny, cnz, cstarts, citems, cseen: new Uint32Array(cnx * cny * cnz), cstamp: 0, dist: null,
+  };
   return index.g3;
+}
+
+/** Fine cubes to a coarse one, a side. */
+const C3 = 8;
+
+/**
+ * For every cube, how many cubes away the nearest one holding any surface
+ * is, counted the way a king moves — so nothing is nearer to a point in it
+ * than one cube less than that. Worked out once, from every occupied cube
+ * outwards a ring at a time.
+ */
+function distField(g) {
+  if (g.dist) return g.dist;
+  const { nx, ny, nz, starts, cstarts, cnx, cny } = g;
+  const n = nx * ny * nz;
+  const dist = new Uint8Array(n).fill(255);
+  let front = [];
+  for (let c = 0; c < nz; c++) for (let b = 0; b < ny; b++) for (let a = 0; a < nx; a++) {
+    const k = (c * ny + b) * nx + a;
+    const kc = (Math.floor(c / C3) * cny + Math.floor(b / C3)) * cnx + Math.floor(a / C3);
+    if (starts[k + 1] > starts[k] || cstarts[kc + 1] > cstarts[kc]) { dist[k] = 0; front.push(k); }
+  }
+  for (let d = 1; d < 255 && front.length; d++) {
+    const next = [];
+    for (const k of front) {
+      const a = k % nx, b = Math.floor(k / nx) % ny, c = Math.floor(k / (nx * ny));
+      for (let dc = -1; dc <= 1; dc++) {
+        const cc = c + dc; if (cc < 0 || cc >= nz) continue;
+        for (let db = -1; db <= 1; db++) {
+          const bb = b + db; if (bb < 0 || bb >= ny) continue;
+          for (let da = -1; da <= 1; da++) {
+            const aa = a + da; if (aa < 0 || aa >= nx) continue;
+            const q = (cc * ny + bb) * nx + aa;
+            if (dist[q] === 255) { dist[q] = d; next.push(q); }
+          }
+        }
+      }
+    }
+    front = next;
+  }
+  g.dist = dist;
+  return dist;
 }
 
 /** A fresh mark for the triangles one query has looked at. */
@@ -228,12 +299,15 @@ function nextStamp(index) {
 }
 
 /**
- * Nearest surface within a short radius, by cube: the point's own cube
- * first, then only those cubes nearer than the best found so far — which,
- * for a point on or next to the surface, is very few.
+ * Nearest surface within `r`, by cube, outwards from the point a ring at a
+ * time: the ring the nearest occupied cube is on first — rings nearer than
+ * that are empty, and the distance field says so in one look — and no
+ * further than the best found so far allows. Near the surface that is a
+ * handful of cubes whatever `r` is; far from it, often none.
  */
 function nearest3(index, px, py, pz, r) {
   const g = grid3(index);
+  const dist = distField(g);
   const { tris, box, seen } = index;
   const stamp = nextStamp(index);
   let best2 = r * r;
@@ -249,32 +323,42 @@ function nearest3(index, px, py, pz, r) {
     const d2 = pointTriangle2(px, py, pz, tris, i * 9);
     if (d2 < best2) { best2 = d2; found = true; }
   };
-  const { cell, nx, ny, nz, x0, y0, z0, starts, items, big } = g;
-  const cellAt = (v, lo, n) => Math.floor((v - lo) / cell);
-  const ca = cellAt(px, x0), cb = cellAt(py, y0), cc = cellAt(pz, z0);
+  const { cell, nx, ny, nz, x0, y0, z0, starts, items, big, cnx, cny, cstarts, citems, cseen } = g;
+  for (let n = 0; n < big.length; n++) test(big[n]);
+  const cstamp = ++g.cstamp;
+  if (cstamp === 0xffffffff) { cseen.fill(0); g.cstamp = 1; }
+  const ca = Math.floor((px - x0) / cell), cb = Math.floor((py - y0) / cell), cc = Math.floor((pz - z0) / cell);
   const visit = (a, b, c) => {
+    const lx = x0 + a * cell, ly = y0 + b * cell, lz = z0 + c * cell;
+    const dx = px < lx ? lx - px : px > lx + cell ? px - lx - cell : 0;
+    const dy = py < ly ? ly - py : py > ly + cell ? py - ly - cell : 0;
+    const dz = pz < lz ? lz - pz : pz > lz + cell ? pz - lz - cell : 0;
+    if (dx * dx + dy * dy + dz * dz >= best2) return;
     const k = (c * ny + b) * nx + a;
     for (let n = starts[k]; n < starts[k + 1]; n++) test(items[n]);
+    const kc = (Math.floor(c / C3) * cny + Math.floor(b / C3)) * cnx + Math.floor(a / C3);
+    if (cseen[kc] !== g.cstamp) {
+      cseen[kc] = g.cstamp;
+      for (let n = cstarts[kc]; n < cstarts[kc + 1]; n++) test(citems[n]);
+    }
   };
-  if (ca >= 0 && cb >= 0 && cc >= 0 && ca < nx && cb < ny && cc < nz) visit(ca, cb, cc);
-  for (let n = 0; n < big.length; n++) test(big[n]);
-  const a0 = Math.max(0, cellAt(px - r, x0)), a1 = Math.min(nx - 1, cellAt(px + r, x0));
-  const b0 = Math.max(0, cellAt(py - r, y0)), b1 = Math.min(ny - 1, cellAt(py + r, y0));
-  const c0 = Math.max(0, cellAt(pz - r, z0)), c1 = Math.min(nz - 1, cellAt(pz + r, z0));
-  for (let c = c0; c <= c1; c++) {
-    const lz = z0 + c * cell;
-    const dz = pz < lz ? lz - pz : pz > lz + cell ? pz - lz - cell : 0;
-    if (dz * dz >= best2) continue;
-    for (let b = b0; b <= b1; b++) {
-      const ly = y0 + b * cell;
-      const dy = py < ly ? ly - py : py > ly + cell ? py - ly - cell : 0;
-      if (dz * dz + dy * dy >= best2) continue;
-      for (let a = a0; a <= a1; a++) {
-        if (a === ca && b === cb && c === cc) continue;
-        const lx = x0 + a * cell;
-        const dx = px < lx ? lx - px : px > lx + cell ? px - lx - cell : 0;
-        if (dx * dx + dy * dy + dz * dz >= best2) continue;
-        visit(a, b, c);
+  const near = dist[(cc * ny + cb) * nx + ca];
+  // Nothing in a cube that close: nothing within r.
+  if (near < 255 && (near - 1) * cell >= Math.sqrt(best2)) return found ? Math.sqrt(best2) : Infinity;
+  const last = Math.ceil(r / cell) + 1;
+  for (let s = near === 255 ? Math.min(last + 1, 255) : near; s <= last; s++) {
+    if (s > 1 && ((s - 1) * cell) ** 2 >= best2) break;
+    const c0 = Math.max(0, cc - s), c1 = Math.min(nz - 1, cc + s);
+    const b0 = Math.max(0, cb - s), b1 = Math.min(ny - 1, cb + s);
+    for (let c = c0; c <= c1; c++) {
+      const cEdge = c === cc - s || c === cc + s;
+      for (let b = b0; b <= b1; b++) {
+        if (cEdge || b === cb - s || b === cb + s) {
+          for (let a = Math.max(0, ca - s); a <= Math.min(nx - 1, ca + s); a++) visit(a, b, c);
+        } else {
+          if (ca - s >= 0) visit(ca - s, b, c);
+          if (s > 0 && ca + s < nx) visit(ca + s, b, c);
+        }
       }
     }
   }
@@ -338,9 +422,12 @@ function pointTriangle2(px, py, pz, t, o) {
  */
 export function nearestWithin(index, px, py, pz, r) {
   if (!index || !(r > 0)) return Infinity;
-  // A short reach is answered from the cubes; a long one from the columns,
-  // where the cubes it would open run to the hundreds of thousands.
-  if (r <= 4 * grid3(index).cell) return nearest3(index, px, py, pz, r);
+  // From the cubes, outwards, when the point is among them; a point
+  // outside the part's box is asked through the columns.
+  const g = grid3(index);
+  const inGrid = px >= g.x0 && py >= g.y0 && pz >= g.z0
+    && px < g.x0 + g.nx * g.cell && py < g.y0 + g.ny * g.cell && pz < g.z0 + g.nz * g.cell;
+  if (inGrid) return nearest3(index, px, py, pz, r);
   let best2 = r * r;
   let found = false;
   const { tris, box, size, gx, gy, minX, minY, starts, items, big, seen } = index;
@@ -416,8 +503,49 @@ function lineGrid(index, a) {
     const [u0, u1, v0, v1] = span4(i);
     for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) items[fill[v * nu + u]++] = i;
   }
-  index.lineGrids[a] = { b, c, lo, cell, nu, nv, starts: counts, items, big: Uint32Array.from(big) };
+  // The big ones — a flat face's long triangles — go in coarse buckets of
+  // their own, so a line tests only those near it rather than all of them:
+  // a part with a few thousand of them asked a few hundred thousand lines
+  // was most of a run's time.
+  const coarse = bucketCoarse(big, (i) => span4(i), nu, nv);
+  index.lineGrids[a] = { b, c, lo, cell, nu, nv, starts: counts, items, ...coarse };
   return index.lineGrids[a];
+}
+
+/** Fine buckets to a coarse one, a side. */
+const COARSE = 16;
+
+/**
+ * Triangles too big for the fine buckets, in buckets COARSE times the
+ * size; the few too big even for those stay on a list everyone checks.
+ *
+ * @param {number[]} list the big triangles
+ * @param {(i:number) => number[]} span4 a triangle's fine [u0, u1, v0, v1]
+ */
+function bucketCoarse(list, span4, nu, nv) {
+  const cnu = Math.ceil(nu / COARSE);
+  const cnv = Math.ceil(nv / COARSE);
+  const range = (i) => {
+    const [u0, u1, v0, v1] = span4(i);
+    return [Math.floor(u0 / COARSE), Math.floor(u1 / COARSE), Math.floor(v0 / COARSE), Math.floor(v1 / COARSE)];
+  };
+  const big = [];
+  const keep = [];
+  const cstarts = new Uint32Array(cnu * cnv + 1);
+  for (const i of list) {
+    const [u0, u1, v0, v1] = range(i);
+    if ((u1 - u0 + 1) * (v1 - v0 + 1) > BIG_LINE) { big.push(i); continue; }
+    keep.push(i);
+    for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) cstarts[v * cnu + u + 1]++;
+  }
+  for (let k = 1; k <= cnu * cnv; k++) cstarts[k] += cstarts[k - 1];
+  const citems = new Uint32Array(cstarts[cnu * cnv]);
+  const fill = cstarts.slice(0, cnu * cnv);
+  for (const i of keep) {
+    const [u0, u1, v0, v1] = range(i);
+    for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) citems[fill[v * cnu + u]++] = i;
+  }
+  return { big: Uint32Array.from(big), cnu, cnv, cstarts, citems };
 }
 
 const HITS = [];
@@ -464,6 +592,8 @@ export function lineInside(index, a, u, v) {
   if (iu >= 0 && iv >= 0 && iu < g.nu && iv < g.nv) {
     const k = iv * g.nu + iu;
     for (let n = g.starts[k]; n < g.starts[k + 1]; n++) test(g.items[n]);
+    const kc = Math.floor(iv / COARSE) * g.cnu + Math.floor(iu / COARSE);
+    for (let n = g.cstarts[kc]; n < g.cstarts[kc + 1]; n++) test(g.citems[n]);
   }
   const m = HITS.length / 2;
   if (!m) return new Float64Array(0);
@@ -481,4 +611,15 @@ export function lineInside(index, a, u, v) {
   }
   if (out.length % 2) out.pop();               // an open skin: no closing crossing
   return Float64Array.from(out);
+}
+
+/**
+ * Build everything the run will ask of the index now, while the part is
+ * being loaded, rather than at the first question in the middle of a cut —
+ * where it is a stall of a quarter of a second on a big part.
+ */
+export function prepareSurfaceIndex(index) {
+  if (!index) return;
+  distField(grid3(index));
+  for (let a = 0; a < 3; a++) lineGrid(index, a);
 }
