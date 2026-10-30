@@ -78,6 +78,8 @@ export function makeAxis(patch = {}) {
     parent: patch.parent ?? null,
     limits: patch.limits || { min: -1e6, max: 1e6 },
     invert: !!patch.invert,
+    /** A rotary that counts round to 360 and starts again: no limits, the short way round. */
+    modulo: !!patch.modulo,
     modelIds: patch.modelIds ? [...patch.modelIds] : [],
     slaveTo: patch.slaveTo || null,
     slaveRatio: patch.slaveRatio ?? 1,
@@ -773,8 +775,8 @@ export class Kinematics {
         const slope = wrap(residual(turned) - r0) / 10;
         if (Math.abs(slope) < 0.5) continue;
         let v = p[L] - r0 / slope;
-        const lo = Math.max(n.limits.min, -360);
-        const hi = Math.min(n.limits.max, 360);
+        const lo = n.modulo ? -Infinity : Math.max(n.limits.min, -360);
+        const hi = n.modulo ? Infinity : Math.min(n.limits.max, 360);
         const c = now(L);
         while (v - 360 >= lo && Math.abs(v - 360 - c) < Math.abs(v - c)) v -= 360;
         while (v + 360 <= hi && Math.abs(v + 360 - c) < Math.abs(v - c)) v += 360;
@@ -803,6 +805,7 @@ export class Kinematics {
     const out = [];
     for (const n of this.axes()) {
       const v = resolved[n.letter] || 0;
+      if (n.modulo && n.kind === 'rotary') continue;
       if (v < n.limits.min - 1e-6) out.push({ axis: n.letter, value: v, limit: n.limits.min, side: 'min' });
       else if (v > n.limits.max + 1e-6) out.push({ axis: n.letter, value: v, limit: n.limits.max, side: 'max' });
     }

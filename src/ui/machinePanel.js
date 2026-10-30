@@ -484,7 +484,15 @@ export class MachinePanel extends Panel {
 
     if (node.kind !== 'carrier') {
       body.push(directionField(node.axis, (v) => set({ axis: v })));
-      body.push(row([checkbox('Reverse', node.invert, (v) => set({ invert: v }))]));
+      body.push(row([
+        checkbox('Reverse', node.invert, (v) => set({ invert: v })),
+        node.kind === 'rotary' ? checkbox('Modulo 360°', !!node.modulo, (v) => set({ modulo: v }), {
+          title: 'Counts round to 360 and starts again: reads 0–360, an absolute position goes the shorter way round (ACP / ACN still force the direction), no travel limits',
+        }) : null,
+      ].filter(Boolean)));
+      if (node.kind === 'rotary' && node.modulo) {
+        body.push(el('div.hint', {}, `${node.letter || 'This axis'} reads 0–360°. ${node.letter || ''}180 goes the shorter way round; =ACP() turns forwards, =ACN() backwards, =IC() by the amount. No travel limits.`));
+      }
       // A slide along X, Y or Z is the thing the Travels page describes, so
       // its stops are read from there rather than typed again here. Two
       // places to say the same number is two numbers that disagree, and it

@@ -2010,7 +2010,7 @@ export class Simulator {
       const rot = this.rotaryAt(mv, u1);
       for (const n of this.kinematics.extras()) {
         const v = rot[n.letter];
-        if (v === undefined) continue;
+        if (v === undefined || (n.modulo && n.kind === 'rotary')) continue;   // turns for ever
         const over = v < n.limits.min ? n.limits.min : v > n.limits.max ? n.limits.max : null;
         if (over === null) continue;
         const unit = n.kind === 'rotary' ? '°' : ' mm';

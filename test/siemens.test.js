@@ -672,3 +672,27 @@ test('a rotary alone in G20 is still degrees a minute', () => {
   near(time('G70\nG1 C180. F60\nM30'), 180, 1e-6, 'G70 (inch), C180 at F60');
   near(time('G71\nG1 C180. F60\nM30'), 180, 1e-6, 'G71 (mm), C180 at F60');
 });
+
+test('a modulo rotary reads 0–360, goes the short way, and ACP / ACN / IC say otherwise', () => {
+  const kin = buildPreset('tableTable');
+  for (const n of kin.axes()) if (n.letter === 'C') { n.modulo = true; n.limits = { min: -10, max: 10 }; }
+  const p = run('G90 G0 X0 Y0 Z100\nC270\nC=ACP(180)\nC180\nC=ACN(90)\nC350\nC10\nC=IC(-30)\nC=AC(300)\nM30', { kinematics: kin });
+  const turns = p.moves.slice(1).map((m) => [m.line, m.rotFrom.C, m.rotTo.C]);
+  assert.deepEqual(turns, [
+    [2, 0, -90],      // C270 from 0: back 90, the short way
+    [3, 270, 540],    // ACP(180) from 270: forwards 270, to 180
+    [4, 180, 180],
+    [5, 180, 90],     // ACN(90): backwards
+    [6, 90, -10],     // C350 from 90: back 100, not on 260
+    [7, 350, 370],    // C10 from 350: on 20, not back 340
+    [8, 10, -20],     // IC(-30)
+    [9, 340, 300],    // AC(300): the short way too
+  ]);
+  // Every move after it starts where the last ended, read on the dial.
+  for (const m of p.moves.slice(2)) assert.ok(m.rotFrom.C >= 0 && m.rotFrom.C < 360, `C${m.rotFrom.C}`);
+  // Without modulo, absolute is the number as written.
+  const plain = run('G90 G0 X0 Y0 Z100\nC270\nC180\nM30', { kinematics: buildPreset('tableTable') });
+  assert.deepEqual(plain.moves.slice(1).map((m) => m.rotTo.C), [270, 180]);
+  // And a modulo axis has no travel limit to break.
+  assert.deepEqual(kin.violations({ C: 720 }).filter((v) => v.axis === 'C'), []);
+});

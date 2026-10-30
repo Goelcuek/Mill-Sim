@@ -517,6 +517,15 @@ export function interpret(text, config = {}) {
   /** Rotary letters: the three by convention, plus whatever else turns. */
   // Once each: a machine's own A and C are among its extras as well.
   const turning = [...new Set(['A', 'B', 'C', ...[...extras].filter(([, k]) => k === 'rotary').map(([L]) => L)])];
+  /**
+   * Rotaries that count round to 360 and start again — a table that turns
+   * for ever. Their position always reads 0 to 360, an absolute position
+   * goes the shorter way round, and they have no travel limits.
+   */
+  const modulo = new Set(cfg.kinematics && typeof cfg.kinematics.axes === 'function'
+    ? cfg.kinematics.axes().filter((n) => n.kind === 'rotary' && n.modulo && n.letter).map((n) => n.letter)
+    : []);
+  const mod360 = (x) => { const v = ((x % 360) + 360) % 360; return v > 360 - 1e-9 ? 0 : v; };
 
   const moves = [];
   const warnings = [];
@@ -766,6 +775,9 @@ export function interpret(text, config = {}) {
     // simulator holds these to the machine's reach, not to the envelope.
     if (m6Block || callStack.some((f) => f.macro === 'M6')) move.toolChange = true;
     moves.push(move);
+    // A modulo axis has turned however far the move took it, and now reads
+    // where that is on the dial: C270 turned on by 180 is C90, not C450.
+    for (const L of modulo) if (st.rot[L] !== undefined) st.rot[L] = mod360(st.rot[L]);
     // Every move ends where the rotaries now are, so the next one starts
     // there. Leaving this to the blocks that carry an A/B/C word would make
     // each of them look like it swung all the way from the last angle.
@@ -1168,8 +1180,11 @@ export function interpret(text, config = {}) {
       if (mode === 'DC') st.rot[L] = turn(mod(v - cur + 180) - 180);
       else if (mode === 'ACP') st.rot[L] = turn(mod(v - cur));
       else if (mode === 'ACN') st.rot[L] = turn(-mod(cur - v));
-      else if (mode === 'AC') st.rot[L] = v;
       else if (mode === 'IC') st.rot[L] = cur + v;
+      // On a modulo axis an absolute position is a place on the dial, and
+      // the axis goes to it the shorter way round, as DC does.
+      else if (modulo.has(L) && (mode === 'AC' || (!mode && st.absolute))) st.rot[L] = turn(mod(v - cur + 180) - 180);
+      else if (mode === 'AC') st.rot[L] = v;
       else st.rot[L] = st.absolute ? v : cur + v;
       moved = true;
     }

@@ -3317,6 +3317,8 @@ export class App {
     this.hudExtras = extras.map((n) => n.letter);
     /** Which of those read in degrees rather than in a length. */
     this.hudRotaries = new Set(extras.filter((n) => n.kind === 'rotary').map((n) => n.letter));
+    /** Rotaries that read 0 to 360 all the way round a move, too. */
+    this.hudModulo = new Set(extras.filter((n) => n.kind === 'rotary' && n.modulo).map((n) => n.letter));
     const extraRow = extras.length
       ? el('div.hud-row', {}, extras.flatMap((n) => [cell('span.hud-axis', n.letter), val(`ax${n.letter}`)]))
       : null;
@@ -3396,7 +3398,9 @@ export class App {
         const node = f[`ax${L}`];
         // A rotary reads in degrees whatever lengths are shown in; an
         // extra slide such as W is a length like any other.
-        if (node) set(node, (this.hudRotaries && this.hudRotaries.has(L)) ? fmt(values[L] || 0, 3) : units.len(values[L] || 0, 3));
+        let v = values[L] || 0;
+        if (this.hudModulo && this.hudModulo.has(L)) v = ((v % 360) + 360) % 360;
+        if (node) set(node, (this.hudRotaries && this.hudRotaries.has(L)) ? fmt(v, 3) : units.len(v, 3));
       }
     }
     set(f.tool, this.travelView ? 'T–' : `T${sim.currentTool || '–'}`);

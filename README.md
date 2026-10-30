@@ -1026,6 +1026,13 @@ comments, `/` block delete
 - *Axis values with a mode* — `C=DC(90)` the shorter way round,
   `ACP`/`ACN` forwards or backwards to the position, `X=AC(…)`/`X=IC(…)`
   absolute or incremental whatever `G90`/`G91` says.
+- *Modulo rotaries* — tick **Modulo 360°** on a rotary in **Machine ›
+  Axes** for a table that turns for ever. It then reads 0–360 all the way
+  (C270 turned on 180 is C90, not C450), a plain absolute position — and
+  `AC` — goes the shorter way round (C350 to C10 turns +20, not −340),
+  `ACP`/`ACN` still force the direction and `IC` turns by the amount, and
+  it has no travel limits. Untick it and C is a number like any other:
+  C180 from C270 always turns back 90.
 - *Arcs* — `G2`/`G3` with `CR=` the radius (negative the long way round),
   `AR=` the angle the arc opens, `TURN=` whole turns more before it ends (a
   helix down a hole, `Z` shared over all of them), and `I=AC(…)` a centre
