@@ -1033,7 +1033,9 @@ comments, `/` block delete
   `ACP`/`ACN` still force the direction and `IC` turns by the amount, and
   it has no travel limits. Untick it and C is a number like any other:
   C180 from C270 always turns back 90.
-- *Arcs* — `G2`/`G3` with `CR=` the radius (negative the long way round),
+- *Arcs* — `G2`/`G3` with `CR=` the radius (negative the long way round;
+  up to 0.01 mm short of half the chord, as a rounded radius often is, it
+  is run as a half circle rather than an alarm),
   `AR=` the angle the arc opens, `TURN=` whole turns more before it ends (a
   helix down a hole, `Z` shared over all of them), and `I=AC(…)` a centre
   from the work zero.

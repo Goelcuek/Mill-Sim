@@ -240,6 +240,9 @@ class State {
   }
 }
 
+/** How far short of half the chord an R-format radius may be, mm, and still be run as a half circle. */
+const ARC_RADIUS_TOLERANCE = 0.01;
+
 const toMM = (v, metric) => (metric ? v : v * MM_PER_INCH);
 
 /**
@@ -2632,8 +2635,14 @@ export function interpret(text, config = {}) {
       }
       const half = chord / 2;
       const disc = R * R - half * half;
-      if (disc < -1e-6) {
-        warnFn(line, `R-format arc radius ${R} is smaller than half the chord (${half.toFixed(3)}).`, 'error');
+      // A radius rounded to the program's last decimal can fall a hair short
+      // of half the chord: CR=0.0233 in over a 0.0467 in chord is 0.0013 mm
+      // short. A control lets that through as a half circle, up to its
+      // circle tolerance — 0.01 mm on a Siemens unless the machine data says
+      // otherwise — and alarms only past it.
+      if (disc < 0 && half - Math.abs(R) > ARC_RADIUS_TOLERANCE) {
+        const u = st.metric ? 1 : MM_PER_INCH;
+        warnFn(line, `R-format arc radius ${+(Math.abs(R) / u).toFixed(4)} is smaller than half the chord (${+(half / u).toFixed(4)}) by more than ${ARC_RADIUS_TOLERANCE} mm.`, 'error');
         return null;
       }
       const hgt = Math.sqrt(Math.max(0, disc));

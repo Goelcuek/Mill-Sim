@@ -696,3 +696,14 @@ test('a modulo rotary reads 0–360, goes the short way, and ACP / ACN / IC say 
   // And a modulo axis has no travel limit to break.
   assert.deepEqual(kin.violations({ C: 720 }).filter((v) => v.axis === 'C'), []);
 });
+
+test('an R-format radius a rounding short of half the chord is a half circle, not an error', () => {
+  // The user's inch block: CR=0.0233 over a 0.0467 chord, 0.0013 mm short.
+  const ok = run('G70 G90 G17\nG0 X0 Y0.0233 Z0\nG91\nG2 X0 Y-0.0467 Z-0.0278 CR=0.0233 F1.45\nM30');
+  assert.deepEqual(ok.warnings.filter((w) => w.severity === 'error').map((w) => w.message), []);
+  const arc = ok.moves[ok.moves.length - 1];
+  near(arc.to[1], 0.0233 * 25.4 - 0.0467 * 25.4, 1e-6, 'the arc ends where it was sent');
+  // Well short is still a mistake.
+  const bad = run('G71 G90 G17\nG0 X0 Y0 Z0\nG2 X10 Y0 CR=4 F100\nM30');
+  assert.ok(bad.warnings.some((w) => /smaller than half the chord/.test(w.message)));
+});
