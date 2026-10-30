@@ -519,11 +519,18 @@ function grow8(a, n) { const b = new Uint8Array(n); b.set(a); return b; }
  */
 function slope(F, i, j, dir, v, exit, tol) {
   const step = dir ? F.dc : F.db;
-  // Out along one side, a line at a time, while the surface goes on
+  // Out along each side, a line at a time, while the surface goes on
   // smoothly: each step's rise within a cell of the last. Read off one line
   // either side, a curved face rises in steps of the grid — stripes in the
   // shading — and a few lines, fitted, see the curve instead.
-  const side = (sgn, out) => {
+  //
+  // The fit goes through this line's own end, the near lines counting for
+  // more (weight 1/|k|): over the points (k, d) that is Σ sign(k)·d over
+  // Σ |k|, kept as running sums for each side rather than lists — this
+  // runs twice for every vertex of the surface.
+  let numP = 0, denP = 0, firstP = 0, nP = 0;
+  let numM = 0, denM = 0, firstM = 0, nM = 0;
+  for (let sgn = 1; sgn >= -1; sgn -= 2) {
     let prev = v;
     let rise = null;
     for (let k = 1; k <= SLOPE_REACH; k++) {
@@ -531,46 +538,28 @@ function slope(F, i, j, dir, v, exit, tol) {
       if (p === null) break;
       const r = (p - prev) * sgn;
       if (rise !== null && Math.abs(r - rise) > step) break;
-      out.push(sgn * k, p - v);
+      const d = p - v;
+      if (sgn > 0) { numP += d; denP += k; if (!nP) firstP = d; nP++; }
+      else { numM -= d; denM += k; if (!nM) firstM = d; nM++; }
       prev = p;
       rise = r;
     }
-    return out;
-  };
-  const plus = side(1, SLOPE_PLUS);
-  const minus = side(-1, SLOPE_MINUS);
-  const fit = (pts) => {
-    // Through this line's own end, the near lines counting for more.
-    let num = 0;
-    let den = 0;
-    for (let q = 0; q < pts.length; q += 2) {
-      const k = pts[q];
-      const w = 1 / Math.abs(k);
-      num += w * k * pts[q + 1];
-      den += w * k * k;
-    }
-    return den > 0 ? num / den : 0;
-  };
-  let out;
-  if (plus.length && minus.length) {
-    const d1 = plus[1];
-    const d2 = -minus[1];
+  }
+  if (nP && nM) {
+    const d1 = firstP;
+    const d2 = -firstM;
     // A corner: the two sides disagree by more than a cell, and the face
     // is the one nearer level with this end.
-    if (Math.abs(d1 - d2) > step) out = Math.abs(d1) < Math.abs(d2) ? fit(plus) : fit(minus);
-    else out = fit(plus.concat(minus));
-  } else if (plus.length) out = fit(plus);
-  else if (minus.length) out = fit(minus);
-  else out = 0;
-  plus.length = 0;
-  minus.length = 0;
-  return out;
+    if (Math.abs(d1 - d2) > step) return Math.abs(d1) < Math.abs(d2) ? numP / denP : numM / denM;
+    return (numP + numM) / (denP + denM);
+  }
+  if (nP) return numP / denP;
+  if (nM) return numM / denM;
+  return 0;
 }
 
 /** How many lines each side a crossing's facing is fitted over. */
 const SLOPE_REACH = 3;
-const SLOPE_PLUS = [];
-const SLOPE_MINUS = [];
 
 /** The endpoint of the same kind on line (i, j) nearest v, or null. */
 function near(F, i, j, v, exit, tol) {

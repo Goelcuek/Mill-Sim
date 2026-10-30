@@ -66,9 +66,6 @@ const PERP_RAMP = 3;
 const OBLIQUE = 4;
 
 /** The other two coordinates of p, in the order a family along `axis` keeps them. */
-function rest(axis, p) {
-  return axis === 0 ? [p[1], p[2]] : axis === 1 ? [p[0], p[2]] : [p[0], p[1]];
-}
 
 /** How far v is from leaving the stretch of `inside` it is in; 0 when in none. */
 function depthAlong(inside, v) {
@@ -563,7 +560,9 @@ export class TriDexelStock extends Stock {
   compact(F, extra) {
     let live = 0;
     for (let r = 0; r < F.rays; r++) live += 2 * F.cap[r];
-    const size = Math.ceil((live + extra) * 1.4) + 4096;
+    // Room to double: a pool grown by little is compacted again soon, and
+    // every compaction copies all of it.
+    const size = Math.ceil((live + extra) * 2) + 4096;
     const pool = new Float32Array(size);
     const who = new Uint8Array(size);
     let at = 0;
@@ -744,22 +743,9 @@ export class TriDexelStock extends Stock {
    */
   gougeAlong(F, r, i, j, tolerance) {
     const { a, b, c } = F;
-    const L = this.partCache.lines[a];
+    const L = this.partRunsAt(a, r);
     const pb = this.o3[b] + (i + 0.5) * F.db;
     const pc = this.o3[c] + (j + 0.5) * F.dc;
-    if (L.off[r] < 0) {
-      const hits = lineInside(this.partLines.surface, a, pb, pc);
-      const n = Math.min(hits.length, 2 * MAX_INTERVALS);
-      if (L.used + n > L.pool.length) {
-        const grown = new Float32Array(Math.max(2 * L.pool.length, L.used + n, 1024));
-        grown.set(L.pool.subarray(0, L.used));
-        L.pool = grown;
-      }
-      L.pool.set(hits.subarray(0, n), L.used);
-      L.off[r] = L.used;
-      L.cnt[r] = n / 2;
-      L.used += n;
-    }
     const n = L.cnt[r];
     if (!n) return;
     const part = L.pool;
@@ -780,7 +766,7 @@ export class TriDexelStock extends Stock {
         const p = [0, 0, 0];
         p[a] = mid; p[b] = pb; p[c] = pc;
         for (const other of [b, c]) {
-          bound = Math.min(bound, depthAlong(lineInside(this.partLines.surface, other, ...rest(other, p)), p[other]));
+          bound = Math.min(bound, this.crossDepth(a, other, other === b ? j : i, mid, p[other]));
           if (bound <= tolerance) break;
         }
         if (bound <= tolerance) continue;
@@ -796,6 +782,73 @@ export class TriDexelStock extends Stock {
    * way the stock keeps its own stretches — a Map of little arrays ran to
    * hundreds of megabytes on a fine lattice.
    */
+  /**
+   * The part along line r of family a — where it is solid — worked out the
+   * first time it is asked and kept: the line's cache entry.
+   */
+  partRunsAt(a, r) {
+    const L = this.partCache.lines[a];
+    if (L.off[r] < 0) {
+      const F = this.fam[a];
+      const i = r % F.nb;
+      const j = (r - i) / F.nb;
+      const hits = lineInside(this.partLines.surface, a, this.o3[F.b] + (i + 0.5) * F.db, this.o3[F.c] + (j + 0.5) * F.dc);
+      const n = Math.min(hits.length, 2 * MAX_INTERVALS);
+      if (L.used + n > L.pool.length) {
+        const grown = new Float32Array(Math.max(2 * L.pool.length, L.used + n, 1024));
+        grown.set(L.pool.subarray(0, L.used));
+        L.pool = grown;
+      }
+      L.pool.set(hits.subarray(0, n), L.used);
+      L.off[r] = L.used;
+      L.cnt[r] = n / 2;
+      L.used += n;
+    }
+    return L;
+  }
+
+  /**
+   * How deep a point is in the part along axis `other`, read off the grid's
+   * own lines rather than a line through the point itself: the two lines of
+   * that family either side of it along axis `a`, which are cached and
+   * shared by every column near them, and the deeper of the two. Only a
+   * filter — a candidate that passes is measured to the real surface.
+   *
+   * @param {number} a the axis the point lies along on its own line
+   * @param {number} other the axis to look along
+   * @param {number} kept that lattice index
+   * @param {number} along the point's coordinate on axis a
+   * @param {number} at the point's coordinate on axis other
+   */
+  crossDepth(a, other, kept, along, at) {
+    const G = this.fam[other];
+    // Which of G's two axes is a, and which the one the point sits on a lattice line of.
+    const aIsB = G.b === a;
+    const n = this.n3[a];
+    const k = (along - this.o3[a]) / this.d3[a] - 0.5;
+    let k0 = Math.floor(k);
+    let k1 = k0 + 1;
+    if (k0 < 0) k0 = 0;
+    if (k1 > n - 1) k1 = n - 1;
+    if (k0 > n - 1) k0 = n - 1;
+    // The point's other coordinate is a lattice index of the family it came from;
+    // the axis it is on is G's other axis.
+    const q = kept;
+    let deepest = 0;
+    for (const ka of k0 === k1 ? [k0] : [k0, k1]) {
+      const r = aIsB ? q * G.nb + ka : ka * G.nb + q;
+      const L = this.partRunsAt(other, r);
+      const cnt = L.cnt[r];
+      const base = L.off[r];
+      for (let m = 0; m < cnt; m++) {
+        const s0 = L.pool[base + 2 * m];
+        const s1 = L.pool[base + 2 * m + 1];
+        if (at >= s0 && at <= s1) { const d = Math.min(at - s0, s1 - at); if (d > deepest) deepest = d; break; }
+      }
+    }
+    return deepest;
+  }
+
   newPartCache(target) {
     return {
       target,
@@ -1455,17 +1508,29 @@ export class TriDexelStock extends Stock {
     if (i0 > i1 || j0 > j1) return null;
     const stride = Math.max(1, Math.round(0.25 / this.cell));
     const rMax2 = env.rMax2;
+    // Nothing of the body is lower than this: a column no taller cannot
+    // reach it, and that is most of them — the holder is above the cut.
+    const zLow = z + env.zMin;
+    const height = this.height;
+    const nx = this.nx;
     let worst = null;
     for (let j = j0; j <= j1; j += stride) {
       const wy = this.cy(j);
       const py = wy - y;
-      if (py * py > rMax2) continue;
-      for (let i = i0; i <= i1; i += stride) {
+      const py2 = py * py;
+      if (py2 > rMax2) continue;
+      // Only the columns inside the disc on this row.
+      const half = Math.sqrt(rMax2 - py2);
+      const a0 = Math.max(i0, Math.floor((x - half - this.origin[0]) / this.dx - 0.5));
+      const a1 = Math.min(i1, Math.ceil((x + half - this.origin[0]) / this.dx - 0.5));
+      for (let i = a0 - ((a0 - i0) % stride); i <= a1; i += stride) {
+        if (i < i0) continue;
+        const k = j * nx + i;
+        if (height[k] <= zLow) continue;
         const wx = this.cx(i);
         const px = wx - x;
-        const r2 = px * px + py * py;
+        const r2 = px * px + py2;
         if (r2 >= rMax2) continue;
-        const k = j * this.nx + i;
         const zb = z + env.at(r2);
         if (this.height[k] <= zb) continue;
         const m = this.materialBetween(k, zb, zTop);

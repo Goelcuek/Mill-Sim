@@ -6,15 +6,12 @@
 // not need a browser.
 
 /**
- * A new identity matrix. Made in place rather than from a list: the
- * collision checks make tens of thousands of these a second, and building
- * an array first to copy it in was the dearest line of the whole run.
+ * A new identity matrix, as a plain array. The collision checks make tens
+ * of thousands of these a second, and a typed array costs fifteen to thirty
+ * times as much to make as a plain one — it was most of the time the
+ * machine checks took.
  */
-export const create = () => {
-  const m = new Float64Array(16);
-  m[0] = 1; m[5] = 1; m[10] = 1; m[15] = 1;
-  return m;
-};
+export const create = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 export function identity(out) {
   out.fill(0);
@@ -23,7 +20,7 @@ export function identity(out) {
 }
 
 export function copy(out, a) {
-  out.set(a);
+  for (let i = 0; i < 16; i++) out[i] = a[i];
   return out;
 }
 
