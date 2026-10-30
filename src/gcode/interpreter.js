@@ -809,7 +809,14 @@ export function interpret(text, config = {}) {
         // the linear axes take to keep up. Without TCP, and in a CYCLE800
         // plane, it is degrees a minute.
         const swept = st.tcp && !st.swivel && at ? tcpSweep(at) : 0;
-        span = swept > 1e-6 ? swept : Math.sqrt(turnSq);
+        if (swept > 1e-6) span = swept;
+        else {
+          // Degrees a minute are degrees in G20 as in G21: F60 is 60°/min,
+          // not 60 inches a minute read as 1524 degrees.
+          const degPerMin = st.metric ? rate : rate / MM_PER_INCH;
+          const t = (Math.sqrt(turnSq) / Math.max(degPerMin, 1e-6)) * 60;
+          return { feed: rate, time: Math.max(t, turnMin) };
+        }
       } else if (dialect.id === 'fanuc' && !st.tcp) span = Math.sqrt(len * len + turnSq);
     }
     const t = span > 0 ? (span / Math.max(rate, 1e-6)) * 60 : 0;

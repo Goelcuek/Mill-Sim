@@ -665,3 +665,10 @@ test('a rotary alone under TRAORI feeds along the part; without it, degrees a mi
   near(last('G90 G0 X100 Y0 Z0\nTRAFOOF\nG1 C10 F60\nM30'), 10, 1e-6, 'TRAFOOF');
   near(last('G90 G0 X0 Y0 Z100\nCYCLE800(1,"HERMLE",0,192,0,0,0,-90,0,0,0,0,0,-1)\nG1 C10 F60\nM30'), 10, 1e-6, 'CYCLE800');
 });
+
+test('a rotary alone in G20 is still degrees a minute', () => {
+  const kin = buildPreset('tableTable');
+  const time = (code) => { const p = run(code, { kinematics: kin }); return p.moves[p.moves.length - 1].time; };
+  near(time('G70\nG1 C180. F60\nM30'), 180, 1e-6, 'G70 (inch), C180 at F60');
+  near(time('G71\nG1 C180. F60\nM30'), 180, 1e-6, 'G71 (mm), C180 at F60');
+});
