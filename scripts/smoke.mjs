@@ -1374,7 +1374,7 @@ try {
 
     // Rows are redrawn on every click, so they are addressed by position
     // rather than held on to.
-    const nth = (i) => `.list-item:nth-of-type(${i + 1})`;
+    const nth = (i) => `[data-group="tools"] .list-item:nth-of-type(${i + 1})`;
     await page.click(nth(1));
     await page.click(nth(4), { modifiers: ['Shift'] });
     await page.waitForTimeout(250);
@@ -1409,7 +1409,7 @@ try {
     const after = await page.evaluate(() => ({
       tools: window.millsim.library.tools.length,
       marked: window.millsim.panels.tools.marked.tool.size,
-      rows: document.querySelectorAll('.list-item').length,
+      rows: document.querySelectorAll('[data-group="tools"] .list-item').length,
       // Nothing may be left pointing at a cutter that is gone.
       dangling: window.millsim.library.assemblies.filter((a) => a.toolId && !window.millsim.library.tool(a.toolId)).length,
     }));

@@ -627,3 +627,31 @@ test('a subprogram called by its path on the control finds the file', () => {
     assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 7, 7, 7], name);
   }
 });
+
+test('stopped at an M00 under CYCLE800, the machine stays where it stopped', () => {
+  const kin = buildPreset('tableTable');
+  const p = interpret([
+    'N10 G90 G0 X0 Y0 Z200',
+    'N20 CYCLE800(1,"HERMLE",0,192,0,0,0,-90,0,0,0,0,0,-1)',
+    'N40 G0 C180',
+    'N50 G1 Y-10 F300',
+    'N80 G0 C269',
+    'N90 G1 X7.5 Z7.5 F150',
+    'N100 M0',
+    'N120 G0 C293.37 X0',
+    'N130 G1 Y4 F200',
+    'N140 M30',
+  ].join('\n'), { ...SIEMENS, kinematics: kin });
+  const stop = p.events.find((e) => e.type === 'stop');
+  let at = 0;
+  for (let i = 0; i < stop.moveIndex; i++) at += p.moves[i].time;
+  const sim = new Simulator();
+  sim.load({ program: p, stock: null, slots: new Map(), fallbackSlot: null, kinematics: kin });
+  const pose = (t) => { sim.seek(t); return sim.currentPose(); };
+  const before = pose(at - 1e-3);
+  const there = pose(at);
+  // The halt lands exactly between the two moves: the axes and the tip are
+  // where the last one left them, not where the next one is going.
+  for (const k of ['X', 'Y', 'Z', 'A', 'C']) near(there.axes[k], before.axes[k], 0.05, `${k} at the stop`);
+  for (let i = 0; i < 3; i++) near(there.tip[i], before.tip[i], 0.05, `tip ${i} at the stop`);
+});

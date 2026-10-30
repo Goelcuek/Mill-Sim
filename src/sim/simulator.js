@@ -541,7 +541,16 @@ export class Simulator {
       this.finished = true;
       this.moveIndex = this.program.moves.length - 1;
       if (this.analyzer) this.analyzer.finish();
+      return;
     }
+    // At the start of the next move, and where it says it starts. Left as
+    // it was, a run stopped exactly here — at an M00 — read the new move as
+    // already done, at the old move's point: the rotaries at the new move's
+    // end, the point still in the old move's frame, and under CYCLE800 the
+    // tool drawn somewhere else entirely.
+    this.u = 0;
+    const next = this.program.moves[this.moveIndex];
+    if (next && next.from) this.pos = next.from.slice();
   }
 
   /**
