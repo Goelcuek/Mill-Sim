@@ -325,11 +325,33 @@ class Parser {
    */
   jumpTarget() {
     if (this.d.labels === 'name') {
+      // A block number is a label too: GOTOF N4400 goes to the block
+      // numbered N4400, and reads as the letter and the number.
+      const n = this.blockNumber();
+      if (n !== null) return { target: { op: 'num', value: n } };
       const t = this.peek();
       if (t.kind === 'ident' || t.kind === 'address') return { label: this.next().text };
       throw new Error('a jump needs the name of a label');
     }
     return { target: this.expression() };
+  }
+
+  /** N and a number, taken as one: a block number named as a jump's target. Null when it is not one. */
+  blockNumber() {
+    const t = this.peek();
+    const n = this.peek(1);
+    if (t.kind === 'address' && t.text === 'N' && n && n.kind === 'number') {
+      this.next();
+      return this.next().value;
+    }
+    if (t.kind === 'ident' && /^N\d+$/.test(t.text)) return Number(this.next().text.slice(1));
+    return null;
+  }
+
+  /** A label for REPEAT: a block number, or a name. */
+  labelRef() {
+    const n = this.blockNumber();
+    return n !== null ? n : this.next().text;
   }
 
   expression() { return this.comparison(); }
@@ -727,10 +749,10 @@ export function parseMacroBlock(code, dialect) {
  * one, and how many times (P=n, once if not said).
  */
 function repeatSection(p, shape) {
-  const start = p.next().text;
+  const start = p.labelRef();
   let end = null;
   const isCount = () => p.peek().text === 'P' && p.peek(1).kind === '=';
-  if (shape === 'section' && !isCount() && (p.peek().kind === 'ident' || p.peek().kind === 'address')) end = p.next().text;
+  if (shape === 'section' && !isCount() && (p.peek().kind === 'ident' || p.peek().kind === 'address')) end = p.labelRef();
   let count = null;
   if (isCount()) {
     p.next();

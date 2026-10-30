@@ -91,6 +91,13 @@ export function lex(text, dialect) {
     const { code, comments } = stripComments(raw, d);
     let body = code.trim();
 
+    // A Siemens file by its name on the control:
+    // /_N_CUS_DIR/_N_BLUM_DIR/_N_SUB2006_SPF. The folders are the control's
+    // business, and the file is the last part — so the path is cut down to
+    // it before anything else reads the block, or its leading / would skip
+    // the block and SUB2006 would give up a B2006.
+    if (d.siemensWords) body = body.replace(/\/?(?:_N_\w+?_DIR\/)+(?=_N_\w+?_[SM]PF\b)/gi, '');
+
     let blockDelete = false;
     if (body.startsWith('/')) {
       blockDelete = true;

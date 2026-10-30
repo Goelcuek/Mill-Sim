@@ -561,12 +561,24 @@ export function interpret(text, config = {}) {
   /** name (lower case, with and without its extension) -> where it starts. */
   const byName = new Map();
   const nameKey = (n) => String(n == null ? '' : n).trim().toLowerCase();
+  /**
+   * A Siemens file by its plain name. The control's own path for a file,
+   * /_N_CUS_DIR/_N_BLUM_DIR/_N_SUB2006_SPF, is SUB2006.SPF in a folder,
+   * and a file copied off the control is often still called _N_SUB2006_SPF.
+   */
+  const plainName = (key) => {
+    const leaf = key.slice(key.lastIndexOf('/') + 1);
+    const m = /^_n_(.+)_(spf|mpf)$/.exec(leaf);
+    return m ? `${m[1]}.${m[2]}` : leaf;
+  };
   const nameSource = (name, start) => {
     const key = nameKey(name);
     if (!key) return;
-    if (!byName.has(key)) byName.set(key, start);
-    const bare = key.replace(/\.[^.]+$/, '');
-    if (bare && !byName.has(bare)) byName.set(bare, start);
+    for (const k of new Set([key, plainName(key)])) {
+      if (!byName.has(k)) byName.set(k, start);
+      const bare = k.replace(/\.[^.]+$/, '');
+      if (bare && !byName.has(bare)) byName.set(bare, start);
+    }
   };
   for (const sub of cfg.subprograms || []) {
     if (!sub) continue;
@@ -615,7 +627,13 @@ export function interpret(text, config = {}) {
     if (bare && b.idents && b.idents.length === 1) return b.idents[0];
     return null;
   };
-  const namedTarget = (name) => (name === null ? undefined : byName.get(nameKey(name)));
+  const namedTarget = (name) => {
+    if (name === null) return undefined;
+    const key = nameKey(name);
+    if (byName.has(key)) return byName.get(key);
+    const plain = plainName(key);
+    return byName.get(plain) ?? byName.get(plain.replace(/\.[^.]+$/, ''));
+  };
 
   /**
    * A work offset that turns a rotary — G55 C60 — turns the part and not

@@ -595,3 +595,35 @@ test('turning on the table: CYCLE800 "DREHEN", DIAMON, G96 with LIMS, G95 timed 
   // After CYCLE800(), milling again — DIAMON is still on, as on the control.
   assert.equal(at(11).pop().turning, undefined);
 });
+
+test('GOTOF, GOTOB and REPEAT find a block by its N number', () => {
+  const p = run([
+    'N10 G90 G0 X0 Y0 Z10',
+    'N20 R249=0',
+    'N4380 GOTOF N4400',
+    'N4390 G0 X99',
+    'N4400 IF R249<-0.0025 GOTOB N4390',
+    'N4410 IF R249>0.0025 GOTOB N4390',
+    'N4420 G0 X5',
+    'N4430 REPEAT N4420 P=2',
+    'N4440 M30',
+  ].join('\n'));
+  assert.deepEqual(p.warnings.filter((w) => w.severity === 'error'), []);
+  // X99 is jumped over; the X5 block runs once and then twice more.
+  assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 5, 5, 5]);
+});
+
+test('a subprogram called by its path on the control finds the file', () => {
+  const lines = [
+    'N10 G90 G0 X0 Y0 Z10',
+    'N20 /_N_CUS_DIR/_N_BLUM_DIR/_N_SUB2006_SPF',
+    '/_N_CUS_DIR/_N_BLUM_DIR/_N_SUB2006_SPF',
+    'N30 CALL "/_N_CUS_DIR/_N_BLUM_DIR/_N_SUB2006_SPF"',
+    'N40 M30',
+  ].join('\n');
+  for (const name of ['SUB2006.SPF', '_N_SUB2006_SPF']) {
+    const p = run(lines, { subprograms: [{ name, text: 'G0 X7\nM17' }] });
+    assert.deepEqual(p.warnings.filter((w) => w.severity === 'error'), [], name);
+    assert.deepEqual(p.moves.map((m) => m.to[0]), [0, 7, 7, 7], name);
+  }
+});
