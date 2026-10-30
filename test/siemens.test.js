@@ -655,3 +655,13 @@ test('stopped at an M00 under CYCLE800, the machine stays where it stopped', () 
   for (const k of ['X', 'Y', 'Z', 'A', 'C']) near(there.axes[k], before.axes[k], 0.05, `${k} at the stop`);
   for (let i = 0; i < 3; i++) near(there.tip[i], before.tip[i], 0.05, `tip ${i} at the stop`);
 });
+
+test('a rotary alone under TRAORI feeds along the part; without it, degrees a minute', () => {
+  const kin = buildPreset('tableTable');
+  const last = (code) => { const p = run(code, { kinematics: kin }); return p.moves[p.moves.length - 1].time; };
+  // 100 mm off the C axis, a 10° turn sweeps that spot of the part 17.45 mm.
+  near(last('G90 G0 X100 Y0 Z0\nTRAORI\nG1 C10 F60\nM30'), (100 * Math.PI) / 18, 0.01, 'TRAORI off the axis');
+  near(last('G90 G0 X0 Y0 Z0\nTRAORI\nG1 C10 F60\nM30'), 10, 1e-6, 'TRAORI on the axis');
+  near(last('G90 G0 X100 Y0 Z0\nTRAFOOF\nG1 C10 F60\nM30'), 10, 1e-6, 'TRAFOOF');
+  near(last('G90 G0 X0 Y0 Z100\nCYCLE800(1,"HERMLE",0,192,0,0,0,-90,0,0,0,0,0,-1)\nG1 C10 F60\nM30'), 10, 1e-6, 'CYCLE800');
+});

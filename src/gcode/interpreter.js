@@ -782,7 +782,7 @@ export function interpret(text, config = {}) {
    * sensible speed along the tip. Read as mm/min, F0.1 at S1000 took a
    * thousand minutes over a 100 mm line, and a G93 F2 took fifty.
    */
-  const timing = (kind, tipLen, feed, rpm = st.rpm) => {
+  const timing = (kind, tipLen, feed, rpm = st.rpm, at = null) => {
     // The other axes the move turns or slides. A swing of the head with the
     // tip standing still is not a move of no length: it takes as long as
     // the slowest axis needs, and a U/V/W slide is travel like X, Y and Z.
@@ -802,11 +802,44 @@ export function interpret(text, config = {}) {
     // centre point, where F is the tip's speed along the part.
     let span = len;
     if (turnSq > 0) {
-      if (len <= 1e-9) span = Math.sqrt(turnSq);
-      else if (dialect.id === 'fanuc' && !st.tcp) span = Math.sqrt(len * len + turnSq);
+      if (len <= 1e-9) {
+        // Under TRAORI a rotary alone is still a feed against the part:
+        // the tip stands on the part while the table turns, so the speed
+        // is how fast that spot of the part goes past the tool — the path
+        // the linear axes take to keep up. Without TCP, and in a CYCLE800
+        // plane, it is degrees a minute.
+        const swept = st.tcp && !st.swivel && at ? tcpSweep(at) : 0;
+        span = swept > 1e-6 ? swept : Math.sqrt(turnSq);
+      } else if (dialect.id === 'fanuc' && !st.tcp) span = Math.sqrt(len * len + turnSq);
     }
     const t = span > 0 ? (span / Math.max(rate, 1e-6)) * 60 : 0;
     return { feed: rate, time: Math.max(t, turnMin) };
+  };
+
+  /**
+   * How far the machine's linear axes travel while the rotaries turn under
+   * a tip held at `at`: the path of that point of the part past the tool.
+   */
+  const tcpSweep = (at) => {
+    const kin = cfg.kinematics;
+    if (!kin || typeof kin.linearsForTip !== 'function') return 0;
+    const g = cfg.gaugeLength || 0;
+    const STEPS = 24;
+    let prev = null;
+    let total = 0;
+    for (let i = 0; i <= STEPS; i++) {
+      const rot = {};
+      for (const L of turning) {
+        const a = (st.rotPrev[L] || 0) - rotaryOffset(L);
+        const b = (st.rot[L] || 0) - rotaryOffset(L);
+        rot[L] = a + ((b - a) * i) / STEPS;
+      }
+      const axes = kin.linearsForTip(at, rot, g);
+      if (!axes) return 0;
+      if (prev) total += Math.hypot(axes.X - prev.X, axes.Y - prev.Y, axes.Z - prev.Z);
+      prev = axes;
+    }
+    return total;
   };
 
   /** How far this move turns the rotaries (largest, and sum of squares) and slides U/V/W. */
@@ -902,7 +935,7 @@ export function interpret(text, config = {}) {
     const from = st.pos.slice();
     const len = dist3(from, target);
     const rpmNow = spindleRpm(from, target);
-    const pace = timing(kind, len, feed, rpmNow);
+    const pace = timing(kind, len, feed, rpmNow, target);
     const move = push({
       kind,
       line,

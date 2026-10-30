@@ -938,7 +938,11 @@ tool centre point control, and `A`/`B`/`C` words on any move
 as its slowest axis: the linear ones at the rapid rate, the rotaries at the
 rotary rapid (**Machine › Travels**, 7200°/min by default), so a head
 swinging 90° with the tip standing still takes 0.75 s, not no time. Under
-`G94`, `F` alone on a rotary is degrees a minute; with linear axes too, a
+`G94`, `F` alone on a rotary is degrees a minute — without TCP and in a
+`CYCLE800` plane. Under `TRAORI` it is a feed against the part: the tip
+stays on its spot while the table turns, and `F` is how fast that spot
+goes past the tool, so `G1 C10 F60` 100 mm off the C axis is a 17.45 mm
+arc taking 17.45 s (on the axis itself, degrees a minute). With linear axes too, a
 Fanuc runs it along all of them together (degrees counted as millimetres)
 and Siemens, Heidenhain and Fidia along the linear path, as does any control
 under tool centre point. `G93` is the program's own time. Whatever `F`
