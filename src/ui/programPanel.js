@@ -156,7 +156,72 @@ export class ProgramPanel extends Panel {
       this.editor.setMarkers(app.state.program.warnings.filter((w) => (w.source || null) === (main ? null : showing.name)));
     }
 
-    return [bar, strip, this.editorHost];
+    return [bar, strip, this.editorHost, this.editorGrip()];
+  }
+
+  /**
+   * The handle under the editor: drag it to make the editor taller or
+   * shorter, double-click it to put the height back. Remembered, like the
+   * panel's width — a long program wants all the height the screen has.
+   */
+  editorGrip() {
+    const KEY = 'millsim.editorHeight';
+    const host = this.editorHost;
+    const apply = (h) => {
+      if (h == null) host.style.removeProperty('height');
+      else host.style.height = `${Math.round(Math.max(160, Math.min(h, 4000)))}px`;
+    };
+    if (!this._editorHeightRead) {
+      this._editorHeightRead = true;
+      try { const h = Number(localStorage.getItem(KEY)); if (h > 0) apply(h); } catch { /* the default */ }
+    }
+    const save = () => {
+      try {
+        const h = parseInt(host.style.height, 10);
+        if (h > 0) localStorage.setItem(KEY, h); else localStorage.removeItem(KEY);
+      } catch { /* kept until reload */ }
+    };
+    const grip = el('div.editor-grip', {
+      role: 'separator',
+      'aria-orientation': 'horizontal',
+      'aria-label': 'Resize the editor',
+      tabindex: '0',
+      title: 'Drag to resize · double-click to reset',
+    });
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      grip.setPointerCapture(e.pointerId);
+      const y0 = e.clientY;
+      const h0 = host.getBoundingClientRect().height;
+      const scroller = this.root;
+      const move = (ev) => {
+        apply(h0 + ev.clientY - y0);
+        // Dragging past the bottom of the panel: follow it down.
+        const r = scroller.getBoundingClientRect();
+        if (ev.clientY > r.bottom - 24) scroller.scrollTop += 12;
+      };
+      const up = () => {
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        save();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+    grip.addEventListener('dblclick', () => { apply(null); save(); });
+    grip.addEventListener('keydown', (e) => {
+      const step = e.shiftKey ? 120 : 30;
+      const now = host.getBoundingClientRect().height;
+      if (e.key === 'ArrowDown') apply(now + step);
+      else if (e.key === 'ArrowUp') apply(now - step);
+      else return;
+      e.preventDefault();
+      save();
+    });
+    return grip;
   }
 
   /** Put an edit back where the text came from. */

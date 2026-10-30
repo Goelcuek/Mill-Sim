@@ -716,7 +716,28 @@ select.speed { width: 82px; }
 .group-fill .group-body .toolbar { padding: 10px 12px; gap: 6px; }
 .group-fill .toolbar .field { flex: 1 1 100%; order: -1; }
 .group-fill .toolbar .field-label { display: none; }
-.group-fill .editor-host { height: clamp(280px, calc(100dvh - 400px), 1600px); flex: none; border-bottom: 0; border-radius: 0 0 10px 10px; overflow: hidden; }
+.group-fill .group-body > .editor-host { height: clamp(320px, calc(100dvh - 300px), 1600px); border: 0; border-radius: 0; flex: none; border-bottom: 0; overflow: hidden; }
+/* The editor's bottom edge, to pull it taller or shorter. */
+.editor-grip {
+  height: 12px;
+  cursor: row-resize;
+  touch-action: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 10px 10px;
+  background: var(--surface-2);
+  position: relative;
+}
+.editor-grip::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 4px;
+  width: 36px; height: 3px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+.editor-grip:hover::after, .editor-grip:focus-visible::after { background: var(--accent); }
+.editor-grip:focus-visible { outline: none; }
 .list-host { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; }
 .group-body .toolbar { padding: 0; border-bottom: 0; flex-wrap: wrap; align-items: flex-end; }
 .group-fill .toolbar { border-bottom: 1px solid var(--line); }
