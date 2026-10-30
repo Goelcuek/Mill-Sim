@@ -2204,6 +2204,61 @@ export class Simulator {
     return !!(this.target && this.target.surface) && !(this.checks && this.checks.reference === false);
   }
 
+  /**
+   * Block search: put the run at the start of move `index` without making
+   * the moves before it — nothing cut, nothing checked, no time spent on
+   * the way. Everything modal is already in the move (the tool, the
+   * spindle, CYCLE800, TRAORI, the work offset, where the rotaries stand),
+   * since the program was read to the end when it was loaded, so the
+   * machine stands where the control would have put it.
+   *
+   * Searching ahead keeps what has been cut so far, and the findings;
+   * searching back starts again from the raw stock, as the cuts after the
+   * line have not been made yet.
+   *
+   * @returns {{reset:boolean}} whether the stock went back to raw
+   */
+  searchTo(index) {
+    if (!this.program) return { reset: false };
+    const moves = this.program.moves;
+    const k = Math.max(0, Math.min(Math.floor(index), moves.length));
+    const back = k < this.moveIndex || (k === this.moveIndex && (this.segIndex > 0 || this.segPos > 0 || this._dwelt > 0))
+      || (this.finished && k < moves.length);
+    if (back) this.reset();
+    this.halted = null;
+    this.machineEnd = null;
+    this._dwelt = 0;
+    this.segIndex = 0;
+    this.segPos = 0;
+    if (k >= moves.length) {
+      // Past the last move: the end of the program, where it stops.
+      this.moveIndex = Math.max(moves.length - 1, 0);
+      this.time = this.totalTime;
+      this.u = 1;
+      this.finished = true;
+      if (moves.length) this.pos = moves[moves.length - 1].to.slice();
+      return { reset: back };
+    }
+    // Counted from the start, as the scrubber and the step buttons count it.
+    this.time = 0;
+    this.distance = 0;
+    for (let i = 0; i < k; i++) {
+      this.time += moves[i].time;
+      segmentsOf(moves[i]);
+      this.distance += moves[i]._segTotal || 0;
+    }
+    this.moveIndex = k;
+    this.u = 0;
+    this.finished = false;
+    const mv = moves[k];
+    this.pos = mv.from.slice();
+    if (mv.tool !== this.currentTool) {
+      this.currentTool = mv.tool;
+      this.activeSlot = this.slotFor(mv.tool);
+    }
+    return { reset: back };
+  }
+
   /** Fast-forward from the start to a target simulated time. */
   seek(targetTime, budgetMs = 30) {
     if (targetTime < this.time) this.reset();

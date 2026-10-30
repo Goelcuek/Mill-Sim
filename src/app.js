@@ -50,6 +50,7 @@ import { ViewDock } from './ui/viewDock.js';
 import { icon } from './ui/icons.js';
 import { settings, saveSettings, resetSettings, applyTheme, pick, DISPLAY_KEYS, CHECK_KEYS } from './ui/settings.js';
 import { openSettings } from './ui/settingsDialog.js';
+import { Dialog } from './ui/dialog.js';
 import { groupForRole } from './ui/setupPanel.js';
 import { describeShape } from './sim/stockShape.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
@@ -950,9 +951,25 @@ export class App {
     this.playBtn = button('▶', () => this.togglePlay(), { title: 'Play / pause (Space)', variant: 'primary' });
     this.scrub = el('input.scrub', {
       type: 'range', min: 0, max: 1000, step: 1, value: 0,
+      title: 'Drag to simulate to a point in the program · Shift+drag to search to it, nothing cut or checked on the way',
+      onpointerdown: (e) => { this.scrubSearch = e.shiftKey; },
       oninput: (e) => {
         const total = this.simulator.totalTime;
-        this.seekTo((Number(e.target.value) / 1000) * total);
+        const t = (Number(e.target.value) / 1000) * total;
+        if (this.scrubSearch) this.scrubSearchTo = t;
+        else this.seekTo(t);
+      },
+      // Searching, the place is taken when the slider is let go: each
+      // search from behind starts the stock again.
+      onchange: () => {
+        if (!this.scrubSearch || this.scrubSearchTo === undefined) return;
+        const t = this.scrubSearchTo;
+        this.scrubSearchTo = undefined;
+        this.scrubSearch = false;
+        const starts = this.moveStarts();
+        let k = 0;
+        while (k + 1 < starts.length - 1 && starts[k + 1] <= t) k++;
+        this.searchToMove(k);
       },
     });
     this.timeLabel = el('span.time', {}, '0.00s / 0.00s');
@@ -984,6 +1001,7 @@ export class App {
       this.scrub,
       this.timeLabel,
       this.lineLabel,
+      button('Go to…', () => this.openSearch(), { title: 'Go to a line: block search, or simulate to it (G)' }),
       this.stopNote,
       this.seekNote,
       this.speedSelect,
@@ -1106,6 +1124,7 @@ export class App {
       else if (e.key === 'ArrowRight' && e.shiftKey) this.stepMove();
       else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') this.stepLine();
       else if (e.key === 'f' || e.key === 'F') this.fitToScene();
+      else if ((e.key === 'g' || e.key === 'G') && !e.ctrlKey && !e.metaKey) { e.preventDefault(); this.openSearch(); }
     });
   }
 
@@ -2833,6 +2852,125 @@ export class App {
       acc += mv.time;
     }
     this.seekTo(acc);
+  }
+
+  /**
+   * Block search: straight to a line, nothing cut and nothing checked on
+   * the way. The program was read to its end when it was loaded, so the
+   * line's tool, offsets, CYCLE800 or TRAORI and the rotaries are already
+   * known; only the cutting is skipped. The run waits at the start of the
+   * line, and ▶ goes on from there.
+   *
+   * @param {number} line
+   * @param {string|null} [source] the file the line is counted in
+   */
+  searchToLine(line, source = null) {
+    const program = this.state.program;
+    if (!program) return;
+    const log = program.blockLog;
+    const src = source || null;
+    let k = -1;
+    if (log && log.count && !log.truncated) {
+      // The first time the line is read; failing that, the first line after it.
+      let after = -1;
+      for (let i = 0; i < log.count; i++) {
+        if ((log.sources[log.src[i]] || null) !== src) continue;
+        if (log.line[i] === line) { k = log.move[i]; break; }
+        if (after < 0 && log.line[i] > line) after = log.move[i];
+      }
+      if (k < 0) k = after;
+    }
+    if (k < 0) {
+      k = program.moves.findIndex((mv) => (mv.source || null) === src && mv.line >= line);
+    }
+    if (k < 0) k = program.moves.length;
+    this.searchToMove(k, line);
+  }
+
+  /** Block search to the start of a move; see searchToLine. */
+  searchToMove(k, line = null) {
+    if (!this.state.program) return;
+    this.releaseMachine();
+    this.pause();
+    this.forgetStop();
+    this.setStepCursor(null);
+    this.pendingCursor = null;
+    this.state.seekTarget = null;
+    this.seekNote.style.display = 'none';
+    const { reset } = this.simulator.searchTo(k);
+    this.stockView.sync(reset);
+    this.afterStep();
+    const mv = this.state.program.moves[this.simulator.moveIndex];
+    const at = line !== null ? line : mv ? mv.line : null;
+    this.notify(this.simulator.finished
+      ? 'Searched to the end of the program.'
+      : `Searched to line ${at}${reset ? ', from the raw stock' : ''}: nothing on the way was cut or checked. Press ▶ to go on from here.`, 'info');
+  }
+
+  /**
+   * Ask for a line and go to it: by block search, or by simulating the
+   * way there. A line number, or an N number as the control would take it.
+   *
+   * @param {number|null} [suggest] the line to offer
+   */
+  openSearch(suggest = null) {
+    const program = this.state.program;
+    if (!program) {
+      this.notify('Load a program first.', 'error');
+      return;
+    }
+    if (Dialog.openCount) return;
+    const at = this.currentBlock();
+    const input = el('input', {
+      type: 'text',
+      value: String(suggest || (at && !at.source ? at.line : '') || ''),
+      placeholder: '120 or N1200',
+      spellcheck: false,
+      style: { width: '100%' },
+    });
+    const note = el('div.setting-hint', {}, 'A line number of the main program, or a block number written N1200. Search goes there at once — the tool, offsets, CYCLE800 and TRAORI as the program left them, nothing cut or checked on the way. Simulate makes every move up to it.');
+    const lineOf = () => {
+      const text = input.value.trim();
+      const n = /^n\s*(\d+)$/i.exec(text);
+      if (n) {
+        const want = Number(n[1]);
+        const lines = (this.state.source || '').split('\n');
+        const re = /^\s*\/?\d?\s*N0*(\d+)\b/i;
+        for (let i = 0; i < lines.length; i++) {
+          const m = re.exec(lines[i]);
+          if (m && Number(m[1]) === want) return i + 1;
+        }
+        this.notify(`There is no N${want} in the main program.`, 'error');
+        return null;
+      }
+      const v = Number(text);
+      if (!(v >= 1) || !Number.isInteger(v)) {
+        this.notify('Give a line number, or an N number such as N1200.', 'error');
+        return null;
+      }
+      return v;
+    };
+    const dlg = new Dialog({
+      title: 'Go to a line',
+      width: 420,
+      body: [el('label.field', {}, [el('span.field-label', {}, 'Line or N number'), input]), note],
+      confirm: 'Search',
+      onConfirm: () => {
+        const line = lineOf();
+        // Not a line: the window stays, ready to be typed into again.
+        if (line === null) { input.focus(); input.select(); return false; }
+        this.searchToLine(line);
+        return true;
+      },
+      extra: [button('Simulate to it', () => {
+        const line = lineOf();
+        if (line === null) { input.focus(); input.select(); return; }
+        dlg.close();
+        this.seekToLine(line);
+      }, { title: 'Make every move up to the line, cutting and checking as it goes' })],
+    });
+    dlg.open();
+    requestAnimationFrame(() => input.select());
   }
 
   // ---- frame -------------------------------------------------------------

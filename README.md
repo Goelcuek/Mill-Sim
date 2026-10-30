@@ -630,8 +630,25 @@ waiting at and the note says what the line says beside it, which is
 usually why the stop is there: `M00 (TURN THE PART OVER)`. ⏭⏭ and the
 scrubber run straight through. The switches stay where you leave them.
 
+**Block search** goes straight to a line without making the moves before
+it: nothing is cut and nothing is checked on the way, so the middle of a
+long program is there at once. The program was read to its end when it
+was loaded, so the tool, the work offset, `CYCLE800`, `TRAORI` and where
+the rotaries stand are all as the program left them at that line; the run
+waits at the start of the line and ▶ goes on from there. **Go to…** on the
+bar (or `G`) asks for a line number or an N number (`N1200`) and offers
+both Search and Simulate to it; `Shift`+click on a line number in the
+editor, or `Shift`+drag on the scrubber, searches; a plain click or drag
+simulates the way there, as before. Searching ahead keeps what has been
+cut so far and the findings; searching back starts again from the raw
+stock, since the cuts after that line have not been made yet.
+
+The editor stays on the line that is running: going to another step and
+back, or stopping at an `M00`, leaves it where it was and brings the
+running line into view.
+
 Keyboard: `Space` play/pause, `R` reset, `→` next line (single block),
-`Shift+→` one move, `F` fit view, `Alt+1`…`Alt+5` steps, `Ctrl+S` save
+`Shift+→` one move, `G` go to a line, `F` fit view, `Alt+1`…`Alt+5` steps, `Ctrl+S` save
 and `Ctrl+O` open the project, `Esc` shuts the viewport panel.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
 

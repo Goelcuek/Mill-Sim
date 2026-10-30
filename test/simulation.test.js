@@ -506,3 +506,39 @@ test('a tilted box is still asked about, with the sphere chain', () => {
   assert.ok(checkFixtures(spheres, [0, 0, 5], [box]), 'buried in it, at any angle');
   assert.equal(checkFixtures(spheres, [0, 0, 40], [box]), null, 'well clear above it');
 });
+
+test('block search goes to a move without cutting or checking on the way', () => {
+  const stock = new Stock({ origin: [-50, -25, -20], size: [100, 50, 20], resolution: 0.5 });
+  const slots = new Map([[1, slot(0, null, 40)], [2, slot(0, null, 40, 1)]]);
+  // A rapid through the stock on the way: a crash, if it were made.
+  const lines = ['G90 G0 X-60 Y0 Z5', 'T1 M6', 'S3000 M3', 'G0 Z-5', 'G0 X60', 'G0 Z5', 'T2 M6', 'G1 X0 Y0 Z-2 F600', 'G1 X-40', 'M30'];
+  const program = interpret(lines.join('\n'));
+  const sim = new Simulator();
+  sim.load({ program, stock, slots, fallbackSlot: slots.get(1) });
+  const k = program.moves.findIndex((mv) => mv.line === 8);
+  const { reset } = sim.searchTo(k);
+  assert.equal(reset, false);
+  assert.equal(sim.moveIndex, k);
+  assert.equal(sim.currentTool, 2);
+  assert.equal(sim.activeSlot, slots.get(2));
+  assert.deepEqual(sim.pos, program.moves[k].from);
+  let start = 0;
+  for (let i = 0; i < k; i++) start += program.moves[i].time;
+  assert.ok(Math.abs(sim.time - start) < 1e-9);
+  assert.equal(sim.removedVolume, 0);
+  assert.equal(sim.collisions.length, 0);
+  // From there it plays as usual: the cut on line 8 and 9 is made.
+  sim.runAll();
+  assert.ok(sim.removedVolume > 0);
+  assert.ok(!sim.collisions.some((c) => c.type === 'rapid'), 'the skipped rapid is not reported');
+  // Searching back starts from the raw stock.
+  const back = sim.searchTo(2);
+  assert.equal(back.reset, true);
+  assert.equal(sim.removedVolume, 0);
+  assert.equal(sim.moveIndex, 2);
+  assert.ok(!sim.finished);
+  // Past the end: finished, at the end of the program.
+  sim.searchTo(program.moves.length);
+  assert.ok(sim.finished);
+  assert.ok(Math.abs(sim.time - sim.totalTime) < 1e-9);
+});

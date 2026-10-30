@@ -35,25 +35,63 @@ export class GcodeEditor {
 
     this.lines = [''];
     this.shown = null;
+    /**
+     * Where the view was scrolled to, the last time it was on screen. A
+     * textarea taken out of the page — another step chosen, the panel
+     * drawn again — comes back scrolled to the top, and the line that is
+     * running with it out of sight.
+     */
+    this.view = { top: 0, left: 0 };
+    this.hidden = true;
     this.textarea.addEventListener('input', () => {
       this.splitLines();
       this.refreshGutter();
       this.onInput(this.textarea.value);
     });
     // The view changes size with the panel and the window.
-    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { this.shown = null; this.paint(); }).observe(this.textarea);
-    this.textarea.addEventListener('scroll', () => this.syncScroll());
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => this.resized()).observe(this.textarea);
+    this.textarea.addEventListener('scroll', () => {
+      if (this.onScreen()) this.view = { top: this.textarea.scrollTop, left: this.textarea.scrollLeft };
+      this.syncScroll();
+    });
     this.textarea.addEventListener('keyup', () => this.reportCaretLine());
     this.textarea.addEventListener('click', () => this.reportCaretLine());
     this.gutter.addEventListener('click', (e) => {
       const n = e.target && e.target.dataset ? Number(e.target.dataset.line) : 0;
-      if (n) this.onSeekLine(n);
+      if (n) this.onSeekLine(n, { search: e.shiftKey });
     });
+    this.gutter.title = 'Click a line number: simulate to that line · Shift+click: search to it, nothing cut or checked on the way';
 
     this.refreshGutter();
   }
 
   get value() { return this.textarea.value; }
+
+  /** Is the editor laid out on the page, so that it can scroll? */
+  onScreen() {
+    return this.textarea.isConnected && this.textarea.clientHeight > 0;
+  }
+
+  /**
+   * The view has changed size — or has gone, or come back. Back on the
+   * page, it is put where it was, and the running line brought into view
+   * if the run moved on while it was away.
+   */
+  resized() {
+    this.shown = null;
+    if (!this.onScreen()) {
+      this.hidden = true;
+      return;
+    }
+    if (this.hidden) {
+      this.hidden = false;
+      this.textarea.scrollTop = this.view.top;
+      this.textarea.scrollLeft = this.view.left;
+      if (this.activeLine) this.revealPending = true;
+    }
+    if (this.revealPending && this.activeLine) this.reveal(this.activeLine);
+    this.syncScroll();
+  }
 
   /**
    * Lock the text.
@@ -137,30 +175,43 @@ export class GcodeEditor {
 
   /** Highlight the line the simulator is executing and keep it in view. */
   setActiveLine(line, { scroll = true } = {}) {
-    if (line === this.activeLine) return;
-    const prev = this.gutter.querySelector('.gutter-line.active');
-    if (prev) prev.classList.remove('active');
-    this.activeLine = line;
-    if (!line) {
-      this.highlight.style.display = 'none';
+    const changed = line !== this.activeLine;
+    if (changed) {
+      const prev = this.gutter.querySelector('.gutter-line.active');
+      if (prev) prev.classList.remove('active');
+      this.activeLine = line;
+      if (!line) {
+        this.highlight.style.display = 'none';
+        return;
+      }
+      const node = this.gutter.children[line - 1];
+      if (node) node.classList.add('active');
+
+      const lh = this.lineHeight();
+      this.highlight.style.display = 'block';
+      this.highlight.style.transform = `translateY(${(line - 1) * lh}px)`;
+      this.highlight.style.height = `${lh}px`;
+    }
+    if (scroll && line && (changed || this.revealPending)) this.reveal(line);
+  }
+
+  /**
+   * Scroll a line into view, unless it is in view already. Off the page
+   * there is nothing to scroll, so it is done when the editor is back.
+   */
+  reveal(line) {
+    if (!this.onScreen()) {
+      this.revealPending = true;
       return;
     }
-    const node = this.gutter.children[line - 1];
-    if (node) node.classList.add('active');
-
+    this.revealPending = false;
     const lh = this.lineHeight();
-    this.highlight.style.display = 'block';
-    this.highlight.style.transform = `translateY(${(line - 1) * lh}px)`;
-    this.highlight.style.height = `${lh}px`;
-
-    if (scroll) {
-      const top = (line - 1) * lh;
-      const view = this.textarea.clientHeight;
-      const st = this.textarea.scrollTop;
-      if (top < st + lh * 2 || top > st + view - lh * 3) {
-        this.textarea.scrollTop = Math.max(0, top - view / 2);
-        this.syncScroll();
-      }
+    const top = (line - 1) * lh;
+    const view = this.textarea.clientHeight;
+    const st = this.textarea.scrollTop;
+    if (top < st + lh * 2 || top > st + view - lh * 3) {
+      this.textarea.scrollTop = Math.max(0, top - view / 2);
+      this.syncScroll();
     }
   }
 

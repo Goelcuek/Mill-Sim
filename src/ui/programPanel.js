@@ -114,6 +114,10 @@ export class ProgramPanel extends Panel {
       button('Open…', () => this.openFile(), { variant: 'primary' }),
       button('Save', () => this.saveFile(), { disabled: !this.editor || !this.editor.value }),
       button('Re-read', () => this.reread(), { title: 'Interpret the text as it stands now' }),
+      button('Search to line', () => this.app.openSearch(this.editor && main ? this.editor.caretLine : null), {
+        title: 'Go straight to a line without cutting or checking anything on the way — like a block search on the control',
+        disabled: !app.state.program,
+      }),
       select('Examples', [{ value: '', label: 'Load an example…' }, ...EXAMPLES.map((e, i) => ({ value: String(i), label: e.name }))], '',
         (v, e) => { if (v === '') return; e.target.value = ''; this.loadExampleAt(Number(v)); }),
     ]);
@@ -143,13 +147,21 @@ export class ProgramPanel extends Panel {
             this.commitEdit(text);
           }, 400);
         },
-        onSeekLine: (line) => { if (this.showing.kind === 'main') this.app.seekToLine(line); },
+        onSeekLine: (line, { search = false } = {}) => {
+          if (this.showing.kind !== 'main') return;
+          if (search) this.app.searchToLine(line);
+          else this.app.seekToLine(line);
+        },
       });
     } else if (this.editor.wrap.parentNode !== this.editorHost) {
       this.editorHost.appendChild(this.editor.wrap);
     }
     this.editor.setReadOnly(showing.kind === 'macro');
     this.syncEditor();
+    // The run may have gone on while another step was showing: the line
+    // lit is the one it is on now, brought into view once the page is up.
+    const at = app.currentBlock();
+    this.editor.setActiveLine(at && (at.source || null) === (main ? null : showing.name) ? at.line : 0);
     if (app.state.program) {
       // Only the notes that belong to this text: a warning raised inside a
       // subprogram carries that file's line numbers, not these.
