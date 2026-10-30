@@ -604,6 +604,15 @@ Playback is the one thing that is neither: the bar under the viewport is
 always visible and owns ⏮ ▶ ⏭ ⏭⏭, the scrubber and the speed, so it is
 never repeated in a panel.
 
+**The program editor** colours what each word is, the same way for every
+control: block numbers dim, G words blue, M words purple, T/S/F/D/H amber,
+axis letters green, keywords and cycles (`IF`, `GOTOF`, `CYCLE800`,
+`TRAORI`, `ACP`) rose, variables (`R81`, `#100`, `$P_TOOLNO`, names of the
+program's own) violet, remarks grey. A bracket straight after a name —
+`CYCLE800(…)`, `C=ACN(300)` — is a call, not a remark. Only the lines in
+view are coloured, so a long program scrolls as a short one does; editing
+is still a plain text box underneath, with its own undo and paste.
+
 **⏭ is single block**: each press runs the next block of the program and
 stops. A move goes to its end point; a canned cycle runs all of its moves,
 because it is one block; `S6000 M3` or `#100 = 5` moves nothing and still

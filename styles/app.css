@@ -1206,8 +1206,52 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   z-index: 1;
 }
 .editor-area:focus { box-shadow: none; }
+/* The textarea's own letters are clear: the coloured copy under it is what
+   shows. The caret and the selection stay the textarea's. */
+.editor-area { color: transparent; caret-color: var(--text); z-index: 2; }
+.editor-area::placeholder { color: var(--text-4); }
+.editor-area::selection { background: rgba(47, 111, 237, 0.28); color: transparent; }
+.editor-code {
+  position: absolute;
+  left: 0; top: 0;
+  margin: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre;
+  color: var(--text);
+  pointer-events: none;
+  z-index: 1;
+  will-change: transform;
+  /* Laid out on its own: redrawing it must not lay out the editor again. */
+  contain: layout style paint;
+}
 /* Showing a file that is not the job's to change — a machine macro. */
-.editor-locked .editor-area { color: var(--text-dim, #8b93a3); font-style: italic; }
+.editor-locked .editor-code { opacity: 0.6; font-style: italic; }
+
+/* What each word is. */
+:root {
+  --syn-n: #9aa1ad; --syn-g: #2f6fed; --syn-m: #a03fbf; --syn-t: #b25d00; --syn-a: #0f7b6c;
+  --syn-num: #1d1f24; --syn-k: #c2185b; --syn-v: #6d4fc2; --syn-s: #2e7d32; --syn-c: #8a9099; --syn-o: #b25d00; --syn-p: #6b7280;
+}
+:root[data-theme="dark"] {
+  --syn-n: #6b7280; --syn-g: #7aa7ff; --syn-m: #d29bf0; --syn-t: #f0b45a; --syn-a: #4fd1b8;
+  --syn-num: #e7e9ee; --syn-k: #ff7aa8; --syn-v: #b9a3ff; --syn-s: #8fd694; --syn-c: #7d8594; --syn-o: #f0b45a; --syn-p: #9aa1ad;
+}
+.t-n { color: var(--syn-n); }
+.t-g { color: var(--syn-g); }
+.t-m { color: var(--syn-m); }
+.t-t { color: var(--syn-t); }
+.t-a { color: var(--syn-a); }
+.t-num { color: var(--syn-num); }
+.t-k { color: var(--syn-k); }
+.t-v { color: var(--syn-v); }
+.t-s { color: var(--syn-s); }
+.t-c { color: var(--syn-c); font-style: italic; }
+.t-o { color: var(--syn-o); }
+.t-p { color: var(--syn-p); }
 
 /* Which file the editor is showing, and why. */
 .editor-showing {
