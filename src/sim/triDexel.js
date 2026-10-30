@@ -385,6 +385,7 @@ export class TriDexelStock extends Stock {
       }
       F.used = 2 * F.rays;
       F.version++;
+      F.fills = (F.fills || 0) + 1;
       const o = this.o3;
       this.markDirty3(o[0], o[1], o[2], o[0] + this.size[0], o[1] + this.size[1], o[2] + this.size[2]);
       return;
@@ -408,6 +409,7 @@ export class TriDexelStock extends Stock {
     }
     F.used = at;
     F.version++;
+    F.fills = (F.fills || 0) + 1;
     const o = this.o3;
     this.markDirty3(o[0], o[1], o[2], o[0] + this.size[0], o[1] + this.size[1], o[2] + this.size[2]);
   }
@@ -436,8 +438,71 @@ export class TriDexelStock extends Stock {
     return d;
   }
 
+  /**
+   * Keep a list of every line that changes, for a copy of the stock kept
+   * somewhere else — the display's mesh worker. Off until asked for: a run
+   * nobody mirrors should not pay for the bookkeeping.
+   */
+  trackLines() {
+    if (this.lineLog) return;
+    this.lineLog = true;
+    for (const F of this.fam) {
+      F.changed = new Uint8Array(F.rays);
+      F.changedList = [];
+    }
+  }
+
+  /**
+   * What has changed since the last call, per family: the whole family
+   * when it was refilled (a reset, a new shape), otherwise the lines that
+   * changed, packed as [r, count, start, end, …] with the cutting tools of
+   * each end alongside. Copies, safe to hand to another thread.
+   */
+  takeLineChanges() {
+    if (!this.lineLog) return null;
+    return this.fam.map((F) => {
+      // Refilled since — a reset, a new shape: the whole family.
+      if (F.sentFills !== F.fills) {
+        F.sentFills = F.fills;
+        for (const r of F.changedList) F.changed[r] = 0;
+        F.changedList.length = 0;
+        return {
+          full: true,
+          off: F.off.slice(), cnt: F.cnt.slice(), cap: F.cap.slice(),
+          pool: F.pool.slice(0, F.used), who: F.who.slice(0, F.used), used: F.used,
+        };
+      }
+      const list = F.changedList;
+      if (!list.length) return null;
+      let size = 0;
+      for (const r of list) size += 2 + 2 * F.cnt[r];
+      const vals = new Float64Array(size);
+      const whos = new Uint8Array(size);
+      let at = 0;
+      for (const r of list) {
+        F.changed[r] = 0;
+        const n = F.cnt[r];
+        const o = F.off[r];
+        vals[at] = r;
+        vals[at + 1] = n;
+        at += 2;
+        for (let q = 0; q < 2 * n; q++) {
+          vals[at + q] = F.pool[o + q];
+          whos[at + q] = F.who[o + q];
+        }
+        at += 2 * n;
+      }
+      list.length = 0;
+      return { full: false, vals, whos };
+    });
+  }
+
   /** Mark the coarse cells a removal from line r of family F, [lo, hi] along it, passed through. */
   markLine(F, r, lo, hi) {
+    if (this.lineLog && !F.changed[r]) {
+      F.changed[r] = 1;
+      F.changedList.push(r);
+    }
     const { a, b, c, nb } = F;
     const i = r % nb;
     const j = (r - i) / nb;

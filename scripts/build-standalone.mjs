@@ -123,6 +123,21 @@ ${js}
 
 const examplesSource = await inlineExamples();
 
+// The stock's mesh worker, bundled on its own and carried in the page as
+// text: a single file has no second file to start a worker from.
+const worker = await esbuild.build({
+  entryPoints: [join(ROOT, 'src/scene/meshWorker.js')],
+  bundle: true,
+  write: false,
+  format: 'iife',
+  target: ['es2020'],
+  minify: true,
+  legalComments: 'none',
+  logLevel: 'warning',
+});
+// Inside a <script>, a string holding "</script" would end it.
+const workerSource = JSON.stringify(worker.outputFiles[0].text).replace(/<\/(script)/gi, '<\\/$1');
+
 const result = await esbuild.build({
   entryPoints: [join(ROOT, 'src/app.js')],
   bundle: true,
@@ -134,6 +149,7 @@ const result = await esbuild.build({
   legalComments: 'none',
   logLevel: 'warning',
   plugins: [inlineExamplesPlugin(examplesSource)],
+  define: { __MESH_WORKER_SOURCE__: workerSource, 'import.meta.url': '""' },
   alias: {
     three: join(ROOT, 'vendor/three/three.module.min.js'),
     'three/addons/controls/OrbitControls.js': join(ROOT, 'vendor/three/addons/controls/OrbitControls.js'),

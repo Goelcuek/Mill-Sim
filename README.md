@@ -1155,6 +1155,7 @@ src/
     viewer.js         renderer, camera, lighting
     stockView.js      the stock as the app sees it: colours, deviation, section
     dexelView.js      the stock's surface, block by block, with section caps
+    meshWorker.js     the same blocks made on a second thread, from a copy of the lines
     toolView.js       lathed assemblies with helical flutes
     toolpathView.js   backplot
     machineView.js    the chain-driven rig: one group per axis
@@ -1199,6 +1200,22 @@ stock's surface is built in blocks of 32 cells and a cut remakes only the
 blocks it reached. While the program plays, a few blocks are remade each
 frame — enough to follow the cutter — and the rest follow when the run
 stops.
+
+The blocks are made on a second thread. A worker keeps its own copy of
+the stock's lines — the whole stock when it is reset, and afterwards only
+the lines a cut changed — meshes the blocks it is sent, and hands the
+buffers back; the main thread is left the cutting, the checks and the
+drawing. Where a worker cannot start (a page that forbids one), or one
+fails, the blocks are made on the main thread as before, and `?worker=0`
+in the page address asks for that, to compare. The mesh is the same
+triangle for triangle either way.
+
+A move that only turns a rotary — the table swinging the part under a
+tool that stands still — is cut and checked as it goes, a slice at a
+time, along the arc the tool makes on the part. When the run falls behind
+the speed asked for, it takes most of two screen refreshes a frame rather
+than part of one, since a frame that overruns one waits for the next
+anyway.
 
 ---
 

@@ -2882,7 +2882,12 @@ export class App {
       if (ahead && sim.time + step >= ahead.stop.time) step = Math.max(0, ahead.stop.time - sim.time);
       sim.haltOnCollision = this.state.checks.stopOnCollision !== false;
       sim.quietKinds = this.state.findingsHidden;
-      const r = sim.run(step, 14);
+      // Keeping up, the run takes part of a frame and the picture stays
+      // smooth. Falling behind the speed asked for, it takes most of two:
+      // a frame that runs past one screen refresh waits for the next one
+      // anyway, and that wait was a third of the time, spent on nothing.
+      const r = sim.run(step, this.simBehind ? 26 : 14);
+      this.simBehind = !r.done && !(r.advanced >= step - 1e-9);
       sim.haltOnCollision = false;
       worked = true;
       if (sim.halted) {

@@ -14,6 +14,9 @@ import { checkReference, referenceSkyline, skylineOver, insideColumns } from './
 import { placeSolid, boxesMeet, solidContact, solidIntoStock, solidIntoReference } from './machineContact.js';
 import { outlineAt, hull2 } from '../tools/turningDefs.js';
 
+/** How far a straight piece of a turned cut may stand inside the arc it follows, mm. */
+const ARC_SAG = 0.002;
+
 export const COLLISION_TYPES = {
   holder: { label: 'Holder / shank crash', severity: 'error' },
   rapid: { label: 'Rapid into material', severity: 'error' },
@@ -448,22 +451,36 @@ export class Simulator {
       const lens = segmentsOf(mv);
       if (mv._segTotal <= 1e-9) {
         // No linear travel, but the rotaries may still be swinging the tool
-        // through the part, so the swing is carved before the move retires.
-        const take = Math.min(remaining, Math.max(mv.time - (this._dwelt || 0), 0));
-        // It stands at its own point: the last move may have written the
-        // same place another way, with TCP on where this one has it off.
-        if (mv.from) this.pos = mv.from.slice();
+        // through the part. The swing is carved and checked as it goes, a
+        // slice at a time like any other move: done all at once when it
+        // ended, a long C turn near the part was one stall of seconds, the
+        // cut appeared only at its end, and a crash half way round was
+        // found only there.
+        const SLICE = 0.05;
+        const left = Math.max(mv.time - (this._dwelt || 0), 0);
+        const uPrev = mv.time > 0 ? Math.min(1, (this._dwelt || 0) / mv.time) : 0;
+        const swinging = this.swings(mv);
+        // Swinging, no more than a slice of the turn at once, so the time a
+        // frame may take is kept to and the picture follows the cut.
+        const take = Math.min(remaining, left, swinging && mv.time > 0 ? Math.max(SLICE * mv.time, 1e-6) : Infinity);
         this._dwelt = (this._dwelt || 0) + take;
         // How far through the swing, so the machine is drawn part way
         // round it — a G93 swing takes as long as it says, not no time.
         this.u = mv.time > 0 ? Math.min(1, this._dwelt / mv.time) : 1;
+        // It stands at its own point: the last move may have written the
+        // same place another way, with TCP on where this one has it off.
+        const at = (u) => (mv.from && mv.to ? mv.from.map((v, k) => v + (mv.to[k] - v) * u) : this.pos.slice());
+        if (mv.from) this.pos = at(this.u);
         this.time += take;
         remaining -= take;
         advanced += take;
-        if (this._dwelt >= mv.time - 1e-9) {
+        const done = this._dwelt >= mv.time - 1e-9;
+        if (swinging && (this.u > uPrev || (done && mv.time <= 0))) {
+          if (this.sweep(mv, at(uPrev), at(done ? 1 : this.u), done && mv.time <= 0 ? 0 : uPrev, done ? 1 : this.u)) didCut = true;
+        }
+        if (done) {
           this._dwelt = 0;
           this.pos = mv.to.slice();
-          if (this.swings(mv) && this.sweep(mv, mv.from, mv.to, 0, 1)) didCut = true;
           this.nextMove();
         }
         continue;
@@ -1750,7 +1767,37 @@ export class Simulator {
       // to the part's surface: see TriDexelStock.gougeAlong.
       let gouged3 = null;
       const take3 = (r) => { if (r.gouge3 && (!gouged3 || r.gouge3.depth > gouged3.depth)) gouged3 = r.gouge3; };
-      if (!tilted) {
+      // The table turning the part with the tool standing still: on the
+      // part the tool goes round an arc, not along the chord between its
+      // ends — a straight sweep from one end to the other cut through the
+      // part. So the arc is followed in short straight pieces, each a sweep
+      // of its own; the pieces are the stamps' spacing, a fraction of a
+      // millimetre, so the chord sags by nothing measurable.
+      const roundArc = this.swingsWithoutTcp(mv, u0, u1) && sameAxis(poseA.dir, poseB.dir)
+        && (!tilted || stock.carveLinear);
+      if (roundArc) {
+        // As many pieces as keep each chord within ARC_SAG of the arc: a
+        // chord's sag falls with the square of the pieces, and the whole
+        // chunk's is measured at its middle.
+        const mid = this.poseAt(mv, [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2], (u0 + u1) / 2).tip;
+        const sag = Math.hypot(
+          mid[0] - (poseA.tip[0] + poseB.tip[0]) / 2,
+          mid[1] - (poseA.tip[1] + poseB.tip[1]) / 2,
+          mid[2] - (poseA.tip[2] + poseB.tip[2]) / 2,
+        );
+        const pieces = Math.max(1, Math.min(2048, Math.ceil(Math.sqrt(sag / ARC_SAG))));
+        let prev = poseA.tip;
+        for (const [tip] of this.posesAlong(mv, from, to, u0, u1, pieces)) {
+          if (!tilted && this.analyzer) this.analyzer.sample(stock, slot, mv, prev, tip);
+          const result = tilted
+            ? stock.carveLinear(slot.built.cutEnvelope, prev, tip, poseA.dir, slot.index, opts)
+            : stock.carveSweep(slot.built.cutEnvelope, prev, tip, slot.index, opts);
+          removed += result.volume;
+          if (result.gouge && (!gouged || result.gouge.depth > gouged.depth)) gouged = result.gouge;
+          take3(result);
+          prev = tip;
+        }
+      } else if (!tilted) {
         // Before the carve: the stock still holds what this chunk will cut.
         if (this.analyzer) this.analyzer.sample(stock, slot, mv, poseA.tip, poseB.tip);
         const result = stock.carveSweep(slot.built.cutEnvelope, poseA.tip, poseB.tip, slot.index, opts);

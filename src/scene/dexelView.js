@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { DexelMesher } from '../sim/dexelMesh.js';
 import { pointDeviation, DEV_JUDGED } from '../sim/target.js';
+import { startMeshWorker } from './meshWorkerClient.js';
 
 const MAX_TOOL_COLORS = 8;
 /**
@@ -99,7 +100,126 @@ export class DexelSurface {
     this.pending = true;
     stock.takeDirty3();
     if (stock.takeDirtyCells) stock.takeDirtyCells();
+    this.attachWorker();
     this.sync(false, FORCE_BUDGET);
+  }
+
+  /**
+   * Mesh on another thread when one can be had: the worker keeps a copy of
+   * the stock's lines, is sent the ones that change, and makes the blocks.
+   * Without one — or the moment one fails — the blocks are made here.
+   */
+  attachWorker() {
+    const stock = this.stock;
+    if (!stock.fam || typeof stock.trackLines !== 'function') return;
+    const w = startMeshWorker();
+    if (!w) return;
+    this.worker = w;
+    this.inFlight = null;
+    this.ready = null;
+    this.requestId = 0;
+    stock.trackLines();
+    w.onmessage = (e) => this.onWorker(e.data);
+    w.onerror = (e) => { if (e && e.preventDefault) e.preventDefault(); this.dropWorker(); };
+    w.postMessage({
+      type: 'stock',
+      step: this.step,
+      geometry: {
+        n3: stock.n3.slice(),
+        d3: stock.d3.slice(),
+        o3: stock.o3.slice(),
+        fam: stock.fam.map((F) => ({ a: F.a, b: F.b, c: F.c, nb: F.nb, nc: F.nc, db: F.db, dc: F.dc, rays: F.rays, len: F.len })),
+      },
+    });
+  }
+
+  onWorker(m) {
+    if (m.type === 'built' && this.inFlight && m.id === this.inFlight.id) {
+      this.ready = m.results;
+      this.inFlight = null;
+    } else if (m.type === 'failed') {
+      if (typeof console !== 'undefined') console.warn('Stock mesh worker failed; meshing on the main thread.', m.message);
+      this.dropWorker();
+    }
+  }
+
+  /** Back to meshing here: whatever the worker was making is made again. */
+  dropWorker() {
+    if (!this.worker) return;
+    try { this.worker.terminate(); } catch { /* gone already */ }
+    this.worker = null;
+    if (this.inFlight) for (const k of this.inFlight.blocks) this.next[k] = 1;
+    this.inFlight = null;
+    this.ready = null;
+    this.pending = true;
+  }
+
+  /** The blocks the cuts since have changed, marked in `next`. */
+  collectDirty(force) {
+    const m = this.mesher;
+    if (force) {
+      this.next.fill(1);
+      this.stock.takeDirty3();
+      if (this.stock.takeDirtyCells) this.stock.takeDirtyCells();
+      return;
+    }
+    // The whole stock when it was reset; otherwise the cells the cuts
+    // since really changed — a turned cut goes all the way round, and a
+    // box round it would be the whole part to remake for a thin shell.
+    const boxes = this.stock.takeDirtyCells ? this.stock.takeDirtyCells() : [];
+    const box = this.stock.takeDirty3();
+    if (box) boxes.push(box);
+    for (const bx3 of boxes) {
+      const [bx0, by0, bz0, bx1, by1, bz1] = m.blocksFor(bx3);
+      for (let bz = bz0; bz <= bz1; bz++) {
+        for (let by = by0; by <= by1; by++) {
+          for (let bx = bx0; bx <= bx1; bx++) this.next[m.blockIndex(bx, by, bz)] = 1;
+        }
+      }
+    }
+  }
+
+  /**
+   * The worker's half of sync: put up a batch that has come back, and send
+   * the next — the lines changed since and the blocks to make — once the
+   * last is home. One batch at a time, put up whole, as on the main thread.
+   */
+  syncWorker(force) {
+    this.collectDirty(force);
+    let changed = false;
+    if (this.ready) {
+      for (const r of this.ready) this.applyBlock(r.k, r);
+      this.ready = null;
+      changed = true;
+    }
+    if (!this.inFlight) {
+      const blocks = [];
+      for (let k = 0; k < this.next.length; k++) if (this.next[k]) { blocks.push(k); this.next[k] = 0; }
+      if (blocks.length) {
+        const changes = this.stock.takeLineChanges();
+        const transfer = [];
+        if (changes) {
+          for (const c of changes) {
+            if (!c) continue;
+            if (c.full) transfer.push(c.off.buffer, c.cnt.buffer, c.cap.buffer, c.pool.buffer, c.who.buffer);
+            else transfer.push(c.vals.buffer, c.whos.buffer);
+          }
+        }
+        const id = ++this.requestId;
+        this.inFlight = { id, blocks };
+        try {
+          this.worker.postMessage({ type: 'lines', changes }, transfer);
+          this.worker.postMessage({ type: 'build', id, blocks });
+        } catch {
+          this.dropWorker();
+          return this.sync(force);
+        }
+      }
+    }
+    let more = !!this.inFlight || !!this.ready;
+    if (!more) for (let k = 0; k < this.next.length; k++) if (this.next[k]) { more = true; break; }
+    this.pending = more;
+    return changed;
   }
 
   buildMaterial() {
@@ -219,28 +339,16 @@ export class DexelSurface {
    * the next batch.
    */
   sync(force = false, budget) {
+    // A batch the main thread had started is finished here; after that,
+    // with a worker, the worker makes them.
+    // Asked to finish now, with no limit: done here, at once. Whatever the
+    // worker has made is put up, and what it is still making is made here.
+    if (this.worker && budget === Infinity) {
+      if (this.ready) { for (const r of this.ready) this.applyBlock(r.k, r); this.ready = null; }
+      if (this.inFlight) { for (const k of this.inFlight.blocks) this.next[k] = 1; this.inFlight = null; }
+    } else if (this.worker && this.batchLeft === 0 && !this.staged.length) return this.syncWorker(force);
     if (!(budget >= 0)) budget = force ? FORCE_BUDGET : FRAME_BUDGET;
-    const m = this.mesher;
-    if (force) {
-      this.next.fill(1);
-      this.stock.takeDirty3();
-      if (this.stock.takeDirtyCells) this.stock.takeDirtyCells();
-    } else {
-      // The whole stock when it was reset; otherwise the cells the cuts
-      // since really changed — a turned cut goes all the way round, and a
-      // box round it would be the whole part to remake for a thin shell.
-      const boxes = this.stock.takeDirtyCells ? this.stock.takeDirtyCells() : [];
-      const box = this.stock.takeDirty3();
-      if (box) boxes.push(box);
-      for (const bx3 of boxes) {
-        const [bx0, by0, bz0, bx1, by1, bz1] = m.blocksFor(bx3);
-        for (let bz = bz0; bz <= bz1; bz++) {
-          for (let by = by0; by <= by1; by++) {
-            for (let bx = bx0; bx <= bx1; bx++) this.next[m.blockIndex(bx, by, bz)] = 1;
-          }
-        }
-      }
-    }
+    this.collectDirty(force);
     // A batch done: the next one starts with everything changed since.
     if (this.batchLeft === 0) {
       let n = 0;
@@ -441,6 +549,10 @@ export class DexelSurface {
   setVisible(v) { this.group.visible = v; }
 
   dispose() {
+    if (this.worker) {
+      try { this.worker.terminate(); } catch { /* gone already */ }
+      this.worker = null;
+    }
     for (const mesh of this.blocks) {
       if (!mesh) continue;
       this.group.remove(mesh);

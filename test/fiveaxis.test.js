@@ -989,3 +989,43 @@ test('an axis that lies along no machine axis: a 45° nutating B head, and a sli
   assert.ok(Math.abs(Math.hypot(...moved) - 10) < 1e-9, `W10 moves 10 mm: ${moved}`);
   assert.ok(Math.abs(moved[0] - moved[2]) < 1e-9 && Math.abs(moved[1]) < 1e-9, `along 1 0 1: ${moved}`);
 });
+
+// ------------------------------------------- the table turning under the tool
+import { TriDexelStock } from '../src/sim/triDexel.js';
+
+test('the table turning under an upright tool cuts the arc, not the chord', () => {
+  // A trunnion at A0: C turns the part about Z under a cutter standing
+  // still. One full turn with a Ø10 flat end mill whose edge is 4 mm into a
+  // Ø120 block's side takes off a ring 4 mm deep — whatever the steps the
+  // run is taken in. A straight sweep from one end of a chunk to the other
+  // instead cut the chord, deep through the part.
+  const kin = buildPreset('tableTable');
+  const slot = slotFor({ type: 'flat', diameter: 10, fluteLength: 30 });
+  const cut = (lines) => {
+    const stock = new TriDexelStock({ origin: [-60, -60, -20], size: [120, 120, 20], resolution: 0.5 });
+    const before = stock.remainingVolume();
+    const program = interpret(lines.join('\n'), { kinematics: kin, gaugeLength: slot.built.gaugeLength });
+    const sim = new Simulator();
+    sim.load({ program, stock, slots: new Map([[1, slot]]), fallbackSlot: slot, kinematics: kin });
+    sim.runAll();
+    return before - stock.remainingVolume();
+  };
+  // The tool covers r = 56 to 66 as the part turns: what of the 120 square
+  // block lies in that ring goes, 10 deep. The corners, past r = 66, stay.
+  const lines = ['G90 G21 G54', 'T1 M6', 'G0 X61 Y0 Z5', 'G1 Z-10 F500', 'G1 C90 F3000', 'G1 C180', 'G1 C270', 'G1 C360', 'G0 Z50', 'M30'];
+  const removed = cut(lines);
+  // The square's share of the ring, counted on a fine grid, 10 deep.
+  let area = 0;
+  const h = 0.05;
+  for (let x = -60 + h / 2; x < 60; x += h) {
+    for (let y = -60 + h / 2; y < 60; y += h) {
+      const r = Math.hypot(x, y);
+      if (r >= 56 && r <= 66) area += h * h;
+    }
+  }
+  const expected = area * 10;
+  assert.ok(Math.abs(removed - expected) / expected < 0.01, `removed ${removed.toFixed(0)} mm³, the ring in the block is ${expected.toFixed(0)}`);
+  // In one move or in four, the same metal.
+  const once = cut(['G90 G21 G54', 'T1 M6', 'G0 X61 Y0 Z5', 'G1 Z-10 F500', 'G1 C360 F3000', 'G0 Z50', 'M30']);
+  assert.ok(Math.abs(once - removed) / removed < 0.005, `one turn ${once.toFixed(0)} vs four quarters ${removed.toFixed(0)}`);
+});
