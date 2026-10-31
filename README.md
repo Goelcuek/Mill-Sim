@@ -622,6 +622,14 @@ next pass; at a call, the first line of the called file. Paused part way
 along a move, the next press finishes that line. `Shift+→` steps one move
 instead.
 
+**One line back** — the button after ⏮, or `←` — goes to where the line
+before stopped, as if single block had stopped there; `Shift+←` goes back
+one move. After steps with ⏭ it is instant and exact: each step keeps the
+stock lines it cut, and going back puts them back, with the findings and
+the cutting loads as they were. From anywhere else — after playing or
+scrubbing — the run is simulated again from the start to that line, as the
+scrubber does. **⏮** (or `R`, or `Home`) goes back to the beginning.
+
 **M00** and **M01** on the bar are the stop switches. With M00 on — the
 default, because the machine always stops there — playing halts at an
 `M00` block and waits for ▶; with M01 on, so does `M01`, as with the
@@ -647,8 +655,8 @@ The editor stays on the line that is running: going to another step and
 back, or stopping at an `M00`, leaves it where it was and brings the
 running line into view.
 
-Keyboard: `Space` play/pause, `R` reset, `→` next line (single block),
-`Shift+→` one move, `G` go to a line, `F` fit view, `Alt+1`…`Alt+5` steps, `Ctrl+S` save
+Keyboard: `Space` play/pause, `R` or `Home` back to the start, `→` next
+line (single block), `←` one line back, `Shift+→` / `Shift+←` one move, `G` go to a line, `F` fit view, `Alt+1`…`Alt+5` steps, `Ctrl+S` save
 and `Ctrl+O` open the project, `Esc` shuts the viewport panel.
 During a placement: `X` / `Y` / `Z` lock the move to an axis, `Esc` cancels.
 

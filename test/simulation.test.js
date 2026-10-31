@@ -542,3 +542,58 @@ test('block search goes to a move without cutting or checking on the way', () =>
   assert.ok(sim.finished);
   assert.ok(Math.abs(sim.time - sim.totalTime) < 1e-9);
 });
+
+test('a checkpoint takes a step back exactly: stock, findings and position', async () => {
+  const { TriDexelStock } = await import('../src/sim/triDexel.js');
+  const slots = new Map([[1, slot(0, null, 40)]]);
+  const lines = ['G90 G0 X-30 Y0 Z5', 'T1 M6', 'S3000 M3', 'G1 Z-2 F600', 'G1 X30', 'G0 Y8 Z-3', 'G0 X-30', 'G1 Y10 Z-4', 'G2 X30 Y10 R40', 'M30'];
+  const program = interpret(lines.join('\n'));
+  const fresh = () => {
+    const stock = new TriDexelStock({ origin: [-40, -20, -10], size: [80, 40, 10], resolution: 0.5 });
+    const sim = new Simulator();
+    sim.load({ program, stock, slots, fallbackSlot: slots.get(1) });
+    return sim;
+  };
+  const starts = [0];
+  for (const mv of program.moves) starts.push(starts[starts.length - 1] + mv.time);
+  const lineDump = (st) => st.fam.map((F) => {
+    const out = [];
+    for (let r = 0; r < F.rays; r++) {
+      const o = F.off[r];
+      out.push(F.cnt[r], ...F.pool.subarray(o, o + 2 * F.cnt[r]), ...F.who.subarray(o, o + 2 * F.cnt[r]));
+    }
+    return out.join(',');
+  });
+  const state = (sim) => ({
+    t: sim.time, k: sim.moveIndex, pos: sim.pos.join(','), vol: sim.removedVolume.toFixed(6),
+    stockVol: sim.stock.removedVolume.toFixed(6), found: sim.collisions.map((c) => `${c.type}:${c.line}:${c.count}`).join(' '),
+    stats: Array.from(sim.moveStats).join(','), lines: lineDump(sim.stock), tops: Array.from(sim.stock.height).join(','),
+  });
+
+  const sim = fresh();
+  const cps = [];
+  const marks = [];
+  for (let k = 1; k <= program.moves.length; k++) {
+    marks.push(state(sim));
+    const cp = sim.checkpoint();
+    while (!sim.finished && sim.time < starts[k] - 1e-9) sim.run(starts[k] - sim.time, 1e9);
+    assert.ok(sim.closeCheckpoint(cp));
+    cps.push(cp);
+  }
+  assert.ok(sim.collisions.some((c) => c.type === 'rapid'), 'the rapid at Z-3 is a crash to take back');
+  for (let k = cps.length - 1; k >= 0; k--) {
+    assert.ok(sim.restoreCheckpoint(cps[k], cps[k - 1] || null), `step ${k} restores`);
+    assert.deepEqual(state(sim), marks[k], `back to before step ${k}`);
+  }
+  // Played on from the start again, it cuts what it cut the first time.
+  while (!sim.finished) sim.run(Infinity, 1e9);
+  const again = fresh();
+  while (!again.finished) again.run(Infinity, 1e9);
+  assert.equal(sim.removedVolume.toFixed(6), again.removedVolume.toFixed(6));
+  assert.deepEqual(lineDump(sim.stock), lineDump(again.stock));
+  // A checkpoint is good only from where its step ended.
+  const cp = sim.checkpoint();
+  sim.closeCheckpoint(cp);
+  sim.searchTo(2);
+  assert.equal(sim.restoreCheckpoint(cp), false);
+});

@@ -13,6 +13,7 @@ import { gougeDepth } from './target.js';
 import { checkReference, referenceSkyline, skylineOver, insideColumns } from './referenceContact.js';
 import { placeSolid, boxesMeet, solidContact, solidIntoStock, solidIntoReference } from './machineContact.js';
 import { outlineAt, hull2 } from '../tools/turningDefs.js';
+import { FIELDS as ANALYZER_FIELDS } from '../cutting/analyzer.js';
 
 /** How far a straight piece of a turned cut may stand inside the arc it follows, mm. */
 const ARC_SAG = 0.002;
@@ -2202,6 +2203,109 @@ export class Simulator {
    */
   referenceOn() {
     return !!(this.target && this.target.surface) && !(this.checks && this.checks.reference === false);
+  }
+
+  /**
+   * Remember where the run is, so that what it does next can be taken back:
+   * call before a step, then closeCheckpoint after it. The stock keeps
+   * only the lines the step cuts, so a step costs what it changes.
+   */
+  checkpoint() {
+    const st = this.stock;
+    if (st && st.beginUndo) st.beginUndo();
+    const copy = (c) => ({ ...c, position: c.position && c.position.slice(), at: c.at && c.at.slice() });
+    const an = this.analyzer;
+    const i = this.moveIndex;
+    return {
+      program: this.program,
+      stock: st,
+      moveIndex: i,
+      segIndex: this.segIndex,
+      segPos: this.segPos,
+      dwelt: this._dwelt,
+      time: this.time,
+      distance: this.distance,
+      finished: this.finished,
+      collisions: this.collisions.map(copy),
+      kinds: new Map(this.collisionKinds),
+      dropped: this.collisionsDropped,
+      removedVolume: this.removedVolume,
+      peakMrr: this.peakMrr,
+      currentTool: this.currentTool,
+      activeSlot: this.activeSlot,
+      pos: this.pos.slice(),
+      u: this.u,
+      notified: new Set(this.notified),
+      // Everything past the move the run is on has not been reached yet,
+      // and reads zero: only this move's numbers can be different.
+      stat: this.moveStats[i] || 0,
+      loads: an && an.count > i ? { fields: ANALYZER_FIELDS.filter((k) => an[k]).map((k) => [k, an[k][i]]), plunge: an.plunge[i] } : null,
+    };
+  }
+
+  /** The step is done: what the stock kept is held with the checkpoint. False when it kept too much. */
+  closeCheckpoint(cp) {
+    const st = this.stock;
+    cp.undo = st && st.endUndo ? st.endUndo() : null;
+    cp.after = { time: this.time, moveIndex: this.moveIndex, version: st ? st.version : 0 };
+    cp.reached = this.moveIndex;
+    return !st || !!cp.undo;
+  }
+
+  /** Is the run still exactly where the step left it? */
+  atCheckpointEnd(cp) {
+    const st = this.stock;
+    return !!(cp && cp.after && cp.program === this.program && cp.stock === st && cp.after.time === this.time
+      && cp.after.moveIndex === this.moveIndex && (st ? st.version === cp.after.version : true)
+      && (!st || cp.undo));
+  }
+
+  /**
+   * Take the run back to a checkpoint, stock and all. False if it cannot be
+   * done exactly. `before` is the checkpoint of the step before this one,
+   * if there is one: the run is now just where that step ended, and the
+   * stock's count of changes, which putting it back has moved on, is
+   * written down for it so that it can be taken back in its turn.
+   */
+  restoreCheckpoint(cp, before = null) {
+    if (!this.atCheckpointEnd(cp)) return false;
+    if (this.stock && !this.stock.applyUndo(cp.undo)) return false;
+    if (before && before.after && this.stock) before.after.version = this.stock.version;
+    const an = this.analyzer;
+    const top = Math.min(cp.reached, this.moveStats.length - 1);
+    for (let k = cp.moveIndex + 1; k <= top; k++) {
+      this.moveStats[k] = 0;
+      if (an && an.count > k) {
+        for (const f of ANALYZER_FIELDS) if (an[f]) an[f][k] = 0;
+        an.plunge[k] = 0;
+      }
+    }
+    if (cp.moveIndex < this.moveStats.length) this.moveStats[cp.moveIndex] = cp.stat;
+    if (cp.loads && an && an.count > cp.moveIndex) {
+      for (const [f, v] of cp.loads.fields) an[f][cp.moveIndex] = v;
+      an.plunge[cp.moveIndex] = cp.loads.plunge;
+    }
+    this.moveIndex = cp.moveIndex;
+    this.segIndex = cp.segIndex;
+    this.segPos = cp.segPos;
+    this._dwelt = cp.dwelt;
+    this.time = cp.time;
+    this.distance = cp.distance;
+    this.finished = cp.finished;
+    this.halted = null;
+    this.machineEnd = null;
+    this.collisions = cp.collisions;
+    this.collisionKeys = new Map(cp.collisions.map((c) => [`${c.type}:${c.line}`, c]));
+    this.collisionKinds = cp.kinds;
+    this.collisionsDropped = cp.dropped;
+    this.removedVolume = cp.removedVolume;
+    this.peakMrr = cp.peakMrr;
+    this.currentTool = cp.currentTool;
+    this.activeSlot = cp.activeSlot;
+    this.pos = cp.pos;
+    this.u = cp.u;
+    this.notified = cp.notified;
+    return true;
   }
 
   /**

@@ -991,7 +991,13 @@ export class App {
 
     clear(this.transport);
     this.transport.append(
-      button('⏮', () => this.reset(), { title: 'Back to the start (R)' }),
+      button('⏮', () => this.reset(), { title: 'Back to the start (R or Home)' }),
+      // One line back: a single step, where ⏮ is all the way.
+      el('button.btn.step-back', {
+        type: 'button',
+        title: 'Back one line (←) · Shift+← one move. Instant after steps with ⏭; otherwise simulated again from the start',
+        onclick: () => this.stepBack(),
+      }, icon('rewind', 14)),
       this.playBtn,
       button('⏭', () => this.stepLine(), { title: 'Next line: run the next block of the program and stop (→)' }),
       this.stopButtons.m0,
@@ -1122,6 +1128,8 @@ export class App {
       if (e.code === 'Space') { e.preventDefault(); this.togglePlay(); }
       else if (e.key === 'r' || e.key === 'R') this.reset();
       else if (e.key === 'ArrowRight' && e.shiftKey) this.stepMove();
+      else if (e.key === 'ArrowLeft') this.stepBack(e.shiftKey);
+      else if (e.key === 'Home') this.reset();
       else if (e.key === 'ArrowRight' || e.key === 'n' || e.key === 'N') this.stepLine();
       else if (e.key === 'f' || e.key === 'F') this.fitToScene();
       else if ((e.key === 'g' || e.key === 'G') && !e.ctrlKey && !e.metaKey) { e.preventDefault(); this.openSearch(); }
@@ -2757,11 +2765,91 @@ export class App {
       ended();
       return;
     } else {
-      this.runTo(this.moveStarts()[moveAfter(log, next, program.moves.length)]);
+      this.steppedRun(this.moveStarts()[moveAfter(log, next, program.moves.length)]);
       this.setStepCursor(next);
     }
     this.forgetStop();
     this.afterStep();
+  }
+
+  /**
+   * Run a step, and keep what it takes to undo it: the run's own state and
+   * the stock lines the step cut, so ← puts both back at once instead of
+   * simulating again from the start.
+   */
+  steppedRun(target) {
+    const sim = this.simulator;
+    const saved = { cursor: this.stepCursor };
+    const cp = sim.checkpoint();
+    let ok = false;
+    try {
+      this.runTo(target);
+    } finally {
+      ok = sim.closeCheckpoint(cp);
+    }
+    const steps = this.undoSteps || (this.undoSteps = []);
+    // A step that cut too much to keep breaks the chain: the ones before
+    // it no longer lead back from here.
+    if (!ok) { steps.length = 0; return; }
+    steps.push({ cp, ...saved });
+    // A few hundred steps, and no more than a quarter of a gigabyte of them.
+    let bytes = 0;
+    for (const s of steps) bytes += (s.cp.undo && s.cp.undo.bytes) || 0;
+    while (steps.length > 500 || (bytes > 256 * 1024 * 1024 && steps.length > 1)) {
+      const old = steps.shift();
+      bytes -= (old.cp.undo && old.cp.undo.bytes) || 0;
+    }
+  }
+
+  /**
+   * Back one line: the line before the one just run, as if single block
+   * had stopped there. After steps it is instant — each step kept what it
+   * cut; from anywhere else the run is simulated again from the start to
+   * that line, as the scrubber does.
+   *
+   * @param {boolean} [byMove] one move back rather than one line
+   */
+  stepBack(byMove = false) {
+    this.releaseMachine();
+    const program = this.state.program;
+    if (!program) return;
+    this.pause();
+    const sim = this.simulator;
+    const steps = this.undoSteps || [];
+    const last = steps[steps.length - 1];
+    if (last && sim.restoreCheckpoint(last.cp, steps.length > 1 ? steps[steps.length - 2].cp : null)) {
+      steps.pop();
+      this.stepCursor = last.cursor;
+      this.forgetStop();
+      this.pendingCursor = null;
+      this.afterStep();
+      return;
+    }
+    steps.length = 0;
+    if (!(sim.time > 0) && this.steppedBlock() === null) {
+      this.notify('Already at the start of the program.', 'info');
+      return;
+    }
+    const starts = this.moveStarts();
+    const k = sim.moveIndex;
+    const partWay = !sim.finished && sim.time > starts[k] + 1e-6;
+    const log = program.blockLog;
+    if (byMove || !log || !log.count || log.truncated) {
+      // Part way along a move, back to its start; at a start, to the one before.
+      const to = sim.finished ? starts[Math.max(0, program.moves.length - 1)] : partWay ? starts[k] : starts[Math.max(0, k - 1)];
+      if (!(to > 0)) { this.reset(); return; }
+      this.seekTo(to);
+      return;
+    }
+    const done = this.steppedBlock();
+    let target;
+    if (done !== null) target = done - 1;
+    else if (sim.finished) target = log.count - 2;
+    // Part way through a line: back to where it started.
+    else if (partWay) target = blockOfMove(log, k) - 1;
+    else target = blockBeforeMove(log, k) - 1;
+    if (target < 0) { this.reset(); return; }
+    this.seekToBlock(target);
   }
 
   /** One move, whatever line it is on. Shift+→. */
@@ -2776,7 +2864,7 @@ export class App {
     const starts = this.moveStarts();
     const k = sim.moveIndex;
     // At the very start of move k, run all of it; part way, run the rest.
-    this.runTo(starts[Math.min(k + 1, program.moves.length)]);
+    this.steppedRun(starts[Math.min(k + 1, program.moves.length)]);
     // The last move of its line: the line is done, and is the one shown.
     const log = program.blockLog;
     if (log && log.count) {

@@ -23,7 +23,7 @@ const MAX_SLICES = 24;
 const STEPS = 36;
 
 /** Per-move results, one value per move. */
-const FIELDS = ['force', 'torque', 'power', 'deflection', 'chip', 'ap', 'arc', 'fz'];
+export const FIELDS = ['force', 'torque', 'power', 'deflection', 'chip', 'ap', 'arc', 'fz'];
 
 /** The cutter types whose definitions carry a helix angle. */
 const HELICAL = new Set(['flat', 'ball', 'bull', 'taper']);

@@ -497,6 +497,117 @@ export class TriDexelStock extends Stock {
     });
   }
 
+  // ---- undo, for stepping back -------------------------------------------
+
+  /**
+   * Start keeping what every line held before it is first cut, so the
+   * cutting from here on can be taken back exactly. `limit` is the most
+   * it may keep, in bytes; past that it gives up, and there is nothing to
+   * take back with.
+   */
+  beginUndo(limit = 48 * 1024 * 1024) {
+    this.undoLog = {
+      limit,
+      bytes: 0,
+      over: false,
+      seen: [new Map(), new Map(), new Map()],
+      rows: [[], [], []],
+      vals: [[], [], []],
+      whos: [[], [], []],
+      removedVolume: this.removedVolume,
+      fills: this.fam.map((F) => F.fills),
+    };
+  }
+
+  /** Line r of family F as it is now, kept once, before the first cut changes it. */
+  keepLine(F, r) {
+    const u = this.undoLog;
+    if (u.over) return;
+    const seen = u.seen[F.a];
+    if (seen.has(r)) return;
+    seen.set(r, true);
+    const n = F.cnt[r];
+    const o = F.off[r];
+    const rows = u.rows[F.a];
+    const vals = u.vals[F.a];
+    const whos = u.whos[F.a];
+    rows.push(r, n);
+    for (let q = 0; q < 2 * n; q++) {
+      vals.push(F.pool[o + q]);
+      whos.push(F.who[o + q]);
+    }
+    u.bytes += 48 + 18 * n;
+    if (u.bytes > u.limit) {
+      u.over = true;
+      u.seen = u.rows = u.vals = u.whos = null;
+    }
+  }
+
+  /**
+   * Stop keeping. What comes back takes the stock to where beginUndo
+   * found it, or is null when it kept too much to be worth holding.
+   */
+  endUndo() {
+    const u = this.undoLog;
+    this.undoLog = null;
+    if (!u || u.over) return null;
+    return {
+      bytes: u.bytes,
+      removedVolume: u.removedVolume,
+      fills: u.fills,
+      rows: u.rows.map((a) => Int32Array.from(a)),
+      vals: u.vals.map((a) => Float32Array.from(a)),
+      whos: u.whos.map((a) => Uint8Array.from(a)),
+    };
+  }
+
+  /**
+   * Put back what endUndo kept. False, and nothing changed, when the stock
+   * has been filled again since and the lines are not those lines.
+   */
+  applyUndo(u) {
+    if (!u || this.fam.some((F, a) => F.fills !== u.fills[a])) return false;
+    for (const F of this.fam) {
+      const rows = u.rows[F.a];
+      const vals = u.vals[F.a];
+      const whos = u.whos[F.a];
+      let at = 0;
+      for (let k = 0; k < rows.length; k += 2) {
+        const r = rows[k];
+        const n = rows[k + 1];
+        let o = F.off[r];
+        if (n > F.cap[r]) {
+          const cap = Math.min(MAX_INTERVALS, Math.max(n, 2 * F.cap[r], 2));
+          o = this.allocBlock(F, cap);
+          F.off[r] = o;
+          F.cap[r] = cap;
+        }
+        for (let q = 0; q < 2 * n; q++) {
+          F.pool[o + q] = vals[at + q];
+          F.who[o + q] = whos[at + q];
+        }
+        F.cnt[r] = n;
+        at += 2 * n;
+        // Cutting only takes away, so what changed lies inside what was kept.
+        if (n) this.markLine(F, r, F.pool[o], F.pool[o + 2 * n - 1]);
+        if (F.a === 2) {
+          const i = r % F.nb;
+          const j = (r - i) / F.nb;
+          this.height[r] = n ? this.base + F.pool[o + 2 * n - 1] : this.base;
+          this.cutBy[r] = n ? F.who[o + 2 * n - 1] : 0;
+          this.tileDirty[((j / TILE) | 0) * this.tilesX + ((i / TILE) | 0)] = 1;
+        }
+      }
+      F.version++;
+    }
+    this.removedVolume = u.removedVolume;
+    this.version++;
+    // The tiles that let a move through air skip the stock: they still
+    // say the metal is gone until they are worked out again.
+    this.refreshTiles();
+    return true;
+  }
+
   /** Mark the coarse cells a removal from line r of family F, [lo, hi] along it, passed through. */
   markLine(F, r, lo, hi) {
     if (this.lineLog && !F.changed[r]) {
@@ -669,6 +780,7 @@ export class TriDexelStock extends Stock {
         if (removed <= MIN_CUT) return 0;
         REMOVED.length = 0;
         REMOVED.push(a, e0);
+        if (this.undoLog) this.keepLine(F, r);
         pool[o + k + 1] = a;
         who[o + k + 1] = flag;
         this.markLine(F, r, a, e0);
@@ -698,6 +810,7 @@ export class TriDexelStock extends Stock {
       }
     }
     if (removed <= MIN_CUT) return 0;
+    if (this.undoLog) this.keepLine(F, r);
     this.markLine(F, r, REMOVED[0], REMOVED[REMOVED.length - 1]);
     let count = m >> 1;
     if (count > MAX_INTERVALS) {
