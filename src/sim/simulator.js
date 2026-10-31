@@ -500,7 +500,9 @@ export class Simulator {
 
       // Does this segment interact with anything? Rejecting whole segments
       // is what makes long air moves free.
+      const skipAt = this.prof ? performance.now() : 0;
       const info = this.segmentInfo(mv, ax, ay, az, bx, by, bz, uPrev, cum[s + 1] / mv._segTotal);
+      if (this.prof) this.prof.skip = (this.prof.skip || 0) + performance.now() - skipAt;
       const step = info.stepSize;
 
       const allowedByTime = remaining * speed;
@@ -1661,12 +1663,22 @@ export class Simulator {
     if (!slot) return false;
     const stock = this.stock;
     let removed = 0;
+    // Where the time goes, while the performance recorder is listening:
+    // each lap adds the time since the last one to its own heading.
+    const prof = this.prof;
+    let lapAt = prof ? performance.now() : 0;
+    const lap = prof ? (key) => {
+      const now = performance.now();
+      prof[key] = (prof[key] || 0) + now - lapAt;
+      lapAt = now;
+    } : null;
 
     const poseA = this.poseAt(mv, from, u0);
     const poseB = this.poseAt(mv, to, u1);
     const tilted = !this.isUpright(poseA.dir) || !this.isUpright(poseB.dir);
     const [x, y, z] = poseB.tip;
     const poses = this.probePoses(poseA, poseB, mv, from, to, u0, u1);
+    if (lap) { lap('poses'); prof.chunks = (prof.chunks || 0) + 1; prof.probes = (prof.probes || 0) + poses.length; }
 
     // Turning: the table spins the part and the tool stands still. The
     // cut is the insert turned round the axis, and nothing about a
@@ -1759,6 +1771,7 @@ export class Simulator {
       }
     }
 
+    if (lap) lap('cut');
     if (stock && !turningHere) {
       // The carve compares on the stock's grid; a part the stock does not
       // reach has no grid of its own and is measured by its surface only.
@@ -1858,6 +1871,7 @@ export class Simulator {
         }
       }
 
+      if (lap) lap('cut');
       // Chunks can be tens of millimetres long, so the body is probed at a
       // fixed spacing along the chunk rather than only where it ends.
       for (const [p, dir] of poses) {
@@ -1891,6 +1905,7 @@ export class Simulator {
       }
     }
 
+    if (lap) lap('holder');
     // How close is too close. Zero means only report metal in metal, which
     // is what a check was before anybody could ask for room.
     const clearance = Math.max((this.checks && this.checks.nearMiss) || 0, 0);
@@ -1898,10 +1913,13 @@ export class Simulator {
     // Which of the machine's castings this chunk could reach at all, and
     // which parts of the machine could meet each other or the stock.
     const nearCastings = this.castingsNear(slot, poses, mv, clearance);
+    if (lap) lap('castings');
     const nearMachine = this.machineNear(poses, mv, clearance);
+    if (lap) lap('machine');
 
     for (const [tip, dir, point, u] of poses) {
       if (this.halted) break;
+      if (lap) lap('other');
       if (this.fixtures && this.fixtures.length && !turningHere) {
         const f = checkFixtures(slot.spheres, tip, this.fixtures, 0, clearance, dir);
         if (f && f.gap < 0) {
@@ -1922,6 +1940,7 @@ export class Simulator {
         }
       }
 
+      if (lap) lap('fixtures');
       // The cutter where it cut nothing: no stock there to say whether it
       // went past the part — air, or a blank that does not cover it — so
       // the cutter itself is measured against the part, and inside it by
@@ -1970,6 +1989,7 @@ export class Simulator {
         }
       }
 
+      if (lap) lap('reference');
       if (this.machine) {
         const tbl = checkTable(slot.spheres, tip, this.tableShape(), clearance, dir);
         if (tbl && tbl.gap < 0) {
@@ -1988,6 +2008,7 @@ export class Simulator {
             gap: tbl.gap,
           });
         }
+        if (lap) lap('table');
         const hit = nearCastings.length ? this.checkCastings(slot, tip, dir, mv, u, clearance, nearCastings) : null;
         if (hit) {
           const what = hit.axis ? `the ${hit.name} (${hit.axis} axis)` : `the ${hit.name}`;
@@ -2008,6 +2029,7 @@ export class Simulator {
             });
           }
         }
+        if (lap) lap('castings');
         const clash = nearMachine ? this.checkMachine(tip, mv, u, clearance, nearMachine) : null;
         if (clash) {
           const say = (b) => (b.body.letter ? `the ${b.s.name} (${b.body.letter} axis)` : `the ${b.s.name}`);
@@ -2030,6 +2052,7 @@ export class Simulator {
             });
           }
         }
+        if (lap) lap('machine');
         // The envelope belongs to the machine and is measured from its home
         // switches, so what is reported is the machine coordinate — which is
         // the number on the control when the axis stops. The point compared
@@ -2050,6 +2073,7 @@ export class Simulator {
       }
     }
 
+    if (lap) lap('limits');
     // The rotaries have travels of their own, and a program that asks for
     // C400 or a trunnion past its stop is just as stopped as one that runs
     // the table off its ways. Reading them straight off the move costs
@@ -2071,6 +2095,7 @@ export class Simulator {
       }
     }
 
+    if (lap) lap('limits');
     return removed > 0;
   }
 

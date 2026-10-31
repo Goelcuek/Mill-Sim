@@ -151,7 +151,20 @@ export class SetupPanel extends Panel {
           min: 0.2, step: 1, unit: 'mm', onChange: (v) => setSize(i, v),
         })))];
 
+    // Collision checking only: no material at all.
+    const off = s.enabled === false;
+    const material = checkbox('Simulate the material', !off, (v) => app.setStockEnabled(v), {
+      title: 'Off: no stock — nothing is cut, and the run only checks for collisions and gouges against the reference part',
+    });
+    if (off) {
+      return section('Stock', [
+        material,
+        el('div.hint', {}, 'No stock: nothing is cut. The run checks the tool, holder and machine against the reference part, the fixtures, the table and the machine itself, and a cutter inside the reference part is still a gouge. Rapids into material, cuts with the spindle off and a holder buried in the stock are not checked — there is no stock for them to be in. Tick the box to bring the block back as it was.'),
+      ]);
+    }
+
     return section('Stock', [
+      material,
       addBar('Add stock…', () => openStockDialog(app, this), { hint: 'A block, a bar, or a model' }),
       ...shapeFields,
       row(AXES.map((a, i) => field(`Min ${a}`, s.origin[i], {

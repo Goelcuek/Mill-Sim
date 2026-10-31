@@ -361,13 +361,21 @@ export class Viewer {
       if (!this.running) return;
       this.frameHandle = requestAnimationFrame(loop);
       const dt = this.clock.getDelta();
+      // The performance recorder, when it is listening: see ui/perfRecorder.js.
+      const perf = this.perf;
+      let at = perf ? perf.begin() : 0;
       for (const fn of this.callbacks) fn(dt, this.needsRender);
+      if (perf) at = perf.lap('app', at);
       if (this.controls.enableDamping && this.controls.update()) this.needsRender = true;
-      if (!this.needsRender) return;
+      if (!this.needsRender) { if (perf) perf.end(at, false); return; }
       this.needsRender = false;
       if (this.boundsDirty) this.measureScene();
+      if (perf) at = perf.lap('bounds', at);
       this.outliner.sync(this.outlineRoots);
+      if (perf) at = perf.lap('outlines', at);
+      if (perf) perf.gpuBegin();
       this.renderer.render(this.scene, this.camera);
+      if (perf) { perf.gpuEnd(); at = perf.lap('draw', at); perf.end(at, true); }
       this.frames = (this.frames || 0) + 1;
     };
     loop();

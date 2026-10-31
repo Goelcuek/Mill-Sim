@@ -51,6 +51,7 @@ import { icon } from './ui/icons.js';
 import { settings, saveSettings, resetSettings, applyTheme, pick, DISPLAY_KEYS, CHECK_KEYS } from './ui/settings.js';
 import { openSettings } from './ui/settingsDialog.js';
 import { Dialog } from './ui/dialog.js';
+import { PerfRecorder } from './ui/perfRecorder.js';
 import { groupForRole } from './ui/setupPanel.js';
 import { describeShape } from './sim/stockShape.js';
 import { resolveBackground, DEFAULT_BACKGROUND } from './scene/backgrounds.js';
@@ -1221,7 +1222,7 @@ export class App {
     this.stockView.setStock(this.stock);
     this.viewer.setGridExtent(Math.max(s.size[0], s.size[1]));
     this.applyDisplay();
-    this.simulator.load({ stock: this.stock });
+    this.simulator.load({ stock: this.simStock });
     this.refreshTarget();
     this.refreshOrigins();
     this.refreshResults();
@@ -1231,6 +1232,31 @@ export class App {
     // left of it — so it is redrawn with it rather than left saying what
     // the last one was.
     if (this.panels && this.panels.setup) this.panels.setup.refresh();
+    this.viewer.invalidate();
+  }
+
+  /**
+   * The stock the run cuts, or null with the material switched off: then
+   * nothing is cut and the run only checks — the tool, holder and machine
+   * against the reference part, the fixtures, the table and the machine.
+   */
+  get simStock() {
+    return this.state.stock.enabled === false ? null : this.stock;
+  }
+
+  /** Material on or off. Off, the run is a collision check alone. */
+  setStockEnabled(on) {
+    this.state.stock.enabled = !!on;
+    this.simulator.load({ stock: this.simStock });
+    this.refreshTarget();
+    this.applyDisplay();
+    this.stockView.sync(true);
+    this.updateTransport();
+    this.refreshResults();
+    if (this.panels && this.panels.setup) this.panels.setup.refresh();
+    this.notify(on
+      ? 'Material on: the run cuts the stock again, from the start.'
+      : 'No stock: nothing is cut. The run checks the tool, holder and machine against the reference part, fixtures, table and machine — a cutter inside the reference part is still a gouge.', 'info');
     this.viewer.invalidate();
   }
 
@@ -1882,6 +1908,12 @@ export class App {
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
+  /** The performance recorder's panel; see ui/perfRecorder.js. */
+  openPerfRecorder() {
+    if (!this.perfRecorder) this.perfRecorder = new PerfRecorder(this);
+    this.perfRecorder.open();
+  }
+
   /** Another of the extra work offsets, G54.1 P1 to P300. */
   addExtraWcs(n) {
     const k = Math.round(Number(n));
@@ -2063,7 +2095,7 @@ export class App {
     this.viewer.setBackground(resolveBackground(d.background, d.backgroundCustom));
     this.viewer.setGridVisible(d.grid);
     this.viewer.setAxesVisible(d.axes);
-    this.stockView.setVisible(d.stock);
+    this.stockView.setVisible(d.stock && this.state.stock.enabled !== false);
     this.stockView.setStockColor(d.stockColor);
     this.stockView.setShowToolColors(d.toolColors);
     this.toolView.setVisible(d.tool && !this.travelView);
@@ -2239,7 +2271,7 @@ export class App {
       fallbackSlot: this.fallbackSlot,
       machine: this.state.machine,
       fixtures: this.models.collisionBoxes(this.partFrame()),
-      stock: this.stock,
+      stock: this.simStock,
       program: this.state.program,
       checks: this.state.checks,
     });
@@ -2271,7 +2303,7 @@ export class App {
       .map((m) => ({ positions: this.models.worldPositions(m, this.partFrame()) }));
 
     const started = performance.now();
-    this.target = parts.length && this.stock ? buildTargetMap(this.stock, parts) : null;
+    this.target = parts.length && this.simStock ? buildTargetMap(this.stock, parts) : null;
     // A part the stock does not reach at all has no map on the stock's
     // grid; the run still measures the tool against its surface, so the
     // holder and a cutter going into it are reported wherever it stands.
@@ -2543,7 +2575,7 @@ export class App {
     this.offerControl(program);
     this.simulator.load({
       program,
-      stock: this.stock,
+      stock: this.simStock,
       slots: this.slots || new Map(),
       fallbackSlot: this.fallbackSlot,
       machine: this.state.machine,
@@ -3110,7 +3142,9 @@ export class App {
       // stopping there would leave no way past it.
       sim.haltOnCollision = false;
       sim.halted = null;
+      const seekAt = this.perf ? performance.now() : 0;
       sim.seek(target, 26);
+      if (this.perf) this.perf.add('simulation', performance.now() - seekAt);
       worked = true;
       if (sim.finished || sim.time >= target - 1e-6) {
         this.state.seekTarget = null;
@@ -3136,7 +3170,9 @@ export class App {
       // smooth. Falling behind the speed asked for, it takes most of two:
       // a frame that runs past one screen refresh waits for the next one
       // anyway, and that wait was a third of the time, spent on nothing.
+      const runAt = this.perf ? performance.now() : 0;
       const r = sim.run(step, this.simBehind ? 26 : 14);
+      if (this.perf) this.perf.add('simulation', performance.now() - runAt);
       this.simBehind = !r.done && !(r.advanced >= step - 1e-9);
       sim.haltOnCollision = false;
       worked = true;

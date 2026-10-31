@@ -117,6 +117,11 @@ export function openSettings(app, start = 'general') {
         el('h3', {}, 'Playback'),
         settingRow('Speed', select('', SPEEDS, s.speed, (v) => change({ speed: v }))),
         toggle('Stop at a collision', s.checks.stopOnCollision, (v) => change({ checks: { stopOnCollision: v } }), 'Playing halts at the first crash, gouge or travel limit'),
+        el('h3', {}, 'Performance'),
+        settingRow('Performance recorder', el('button.btn', {
+          type: 'button',
+          onclick: () => { dlg.close(); app.openPerfRecorder(); },
+        }, 'Open…'), 'Times ten seconds of playing — the simulation check by check, the stock picture and the drawing — and writes a report to send'),
       ];
     },
 

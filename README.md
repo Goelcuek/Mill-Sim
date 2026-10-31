@@ -1142,6 +1142,30 @@ reported rather than silently ignored.
 
 ---
 
+## Collision checking without stock
+
+**Setup › Stock › Simulate the material** switched off takes the stock
+away altogether. Nothing is cut; the run checks the tool, the holder and
+the machine against the reference part, the fixtures, the table and the
+machine itself, and a cutter inside the reference part is still a gouge.
+What needs material to be there — a rapid into it, a cut with the spindle
+off, a holder buried in the stock — is not checked. Tick it again and the
+block comes back as it was, and the run starts over.
+
+## Finding out where the time goes
+
+**Settings › Simulation › Performance recorder** opens a small panel over
+the side bar. Play the slow part of the program and press **Record**: it
+times ten seconds of playing and writes a report — the frame rate and how
+long a frame takes, the simulation check by check, the stock's picture,
+posing the machine, the drawing on the processor and (where the browser
+will say) on the graphics card, how many triangles are drawn, and the
+computer it ran on. **Copy report** puts it on the clipboard to send.
+The hooks it uses are off whenever it is not recording.
+
+The Settings window also says when the page was built, so a copy kept on
+disk can be told from the latest.
+
 ## Honest limitations
 
 - **The gouge check during the run needs a closed reference for 3D.**
