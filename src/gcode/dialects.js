@@ -86,6 +86,8 @@ const FANUC = {
   strictRegisters: true,
   labels: 'line',
   call: { code: 'G65', program: 'P', ret: 'M99' },
+  /** Cutter compensation goes on and off with a straight move, never on an arc. */
+  compStraight: true,
   /** What a program written for this control looks like from the outside. */
   marks: ['#\\d+\\s*=', '\\bM98\\s*P\\d', '\\bG65\\s*P\\d', '\\bWHILE\\s*\\[', '\\bG68\\.2\\b', '\\bG43\\.4\\b'],
 };
@@ -131,6 +133,8 @@ const SIEMENS = {
    */
   siemensWords: true,
   call: { code: null, program: 'CALL', ret: 'M17' },
+  /** Radius compensation is chosen and cancelled on a straight move: an arc there is an alarm. */
+  compStraight: true,
   marks: ['\\bGOTOF\\b', '\\bGOTOB\\b', '\\bENDWHILE\\b', '\\bDEF\\s+(REAL|INT|BOOL|STRING|CHAR)\\b', '\\bR\\d+\\s*=', '\\bMSG\\s*\\(', '\\bCYCLE\\d+', '\\bTRANS\\b'],
 };
 

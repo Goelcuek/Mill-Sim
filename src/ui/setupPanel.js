@@ -260,7 +260,7 @@ export class SetupPanel extends Panel {
           type: 'button',
           title: `Make ${key} the offset the placement tools act on`,
           onclick: () => app.setWcsEdit(key),
-        }, key),
+        }, /^G54\.1 P\d+$/.test(key) ? [el('span.wcs-sub', {}, 'G54.1'), key.slice(6)] : key),
         // A work offset is a length like any other. It reads in whatever
         // the panels are set to, and is held in millimetres like
         // everything else — the rounding is the field's to do, so the raw
@@ -281,13 +281,24 @@ export class SetupPanel extends Panel {
           title: `${key} ${a}: added to every ${a} the program gives in ${key}`,
           onChange: (v) => app.setWcsRotary(key, a, v || 0),
         })),
+        /^G54\.1 P\d+$/.test(key)
+          ? el('button.btn.btn-icon.wcs-remove', { type: 'button', title: `Take ${key} off the list`, onclick: () => app.removeWcs(key) }, '✕')
+          : null,
       ]);
     });
+    // The extra offsets a Fanuc or a Mazak has: G54.1 P1 to P300.
+    const extraNumber = el('input', { type: 'number', min: 1, max: 300, step: 1, value: 1, style: { width: '64px' }, title: 'P number, 1 to 300' });
+    const addExtra = el('div.row.wcs-add', {}, [
+      el('span.field-label', {}, 'G54.1 P'),
+      extraNumber,
+      button('Add offset', () => app.addExtraWcs(extraNumber.value), { title: 'An extra work offset, as G54.1 P1 to P300 select on a Fanuc or a Mazak' }),
+    ]);
 
     return section('Work offsets', [
       el('div.hint', { html: `Scene position of each work origin. <b>${editing}</b> is the one the placement tools act on — click another name to switch.${turns.length ? ` ${turns.join(' and ')} are the offset\u2019s turn of the rotaries: added to every ${turns.join(' or ')} the program gives in that offset, as the control does — not to a move by an amount, or one in machine coordinates.` : ''}` }),
       header,
       ...rows,
+      addExtra,
       actionRow([
         { label: `Set ${editing} by clicking…`, variant: 'primary', hint: 'Click the point that should read X0 Y0 Z0', onClick: () => app.setOriginByPoint() },
         { label: 'Move by two points…', onClick: () => app.moveOriginByPoints() },

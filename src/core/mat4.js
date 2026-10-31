@@ -116,6 +116,32 @@ export function invertRigid(out, m) {
   return out;
 }
 
+/**
+ * Inverse of an affine transform: one that may mirror or scale as well as
+ * turn and shift. Null when it squashes space flat and has none.
+ */
+export function invertAffine(out, m) {
+  const a = m[0], b = m[4], c = m[8];
+  const d = m[1], e = m[5], f = m[9];
+  const g = m[2], h = m[6], i = m[10];
+  const A = e * i - f * h, B = -(d * i - f * g), C = d * h - e * g;
+  const det = a * A + b * B + c * C;
+  if (Math.abs(det) < 1e-15) return null;
+  const inv = 1 / det;
+  const r00 = A * inv, r01 = -(b * i - c * h) * inv, r02 = (b * f - c * e) * inv;
+  const r10 = B * inv, r11 = (a * i - c * g) * inv, r12 = -(a * f - c * d) * inv;
+  const r20 = C * inv, r21 = -(a * h - b * g) * inv, r22 = (a * e - b * d) * inv;
+  const tx = m[12], ty = m[13], tz = m[14];
+  out[0] = r00; out[4] = r01; out[8] = r02;
+  out[1] = r10; out[5] = r11; out[9] = r12;
+  out[2] = r20; out[6] = r21; out[10] = r22;
+  out[3] = 0; out[7] = 0; out[11] = 0; out[15] = 1;
+  out[12] = -(r00 * tx + r01 * ty + r02 * tz);
+  out[13] = -(r10 * tx + r11 * ty + r12 * tz);
+  out[14] = -(r20 * tx + r21 * ty + r22 * tz);
+  return out;
+}
+
 /** Solve a 3x3 system by Cramer's rule. Returns null when singular. */
 export function solve3(m, b) {
   const [a, d, g, bb, e, h, c, f, i] = m;

@@ -950,11 +950,36 @@ interpolation.
 **Planes** `G17` `G18` `G19` · **Units** `G20` `G21` · **Distance** `G90`
 `G91`
 
-**Offsets** `G54`–`G59`, `G10 L2 P`, `G92`/`G92.1`, `G43`/`G44`/`G49` with
+**Offsets** `G54`–`G59`, `G54.1 P1`–`P300` (a row for each one the
+program uses appears on **Setup › Work offsets**, and **Add offset** makes
+more), `G10 L2 P` and `G10 L20 P`, `G92`/`G92.1`, `G43`/`G44`/`G49` with
 `H`, `G53` machine coordinates
 
 **Cycles** `G73` `G81` `G82` `G83` `G84` `G85` `G89` `G80`, with `G98`/`G99`
-return planes, `Q` pecks, `P` dwells and `L` repeats
+return planes, `Q` pecks, `P` dwells and `L` repeats; `G84.2`/`G84.3`
+synchronous tapping. In a `G68.2` plane, or under `G52`, `G68` or a mirror,
+the holes are drilled down the program's own Z, not the machine's. `G80`
+ends the cycle and leaves `G00`/`G01` as they were, so the block after a
+`G80` safety line still moves.
+
+**Fanuc family** (Fanuc, Haas, Mazak EIA/ISO, generic) — the program's own
+frame inside the work offset: `G52` local origin, `G68 X Y R` rotation in
+the plane (with `I J K`, about that direction), `G51 X Y Z P` / `I J K`
+scaling (a factor without a decimal point is in thousandths) and `G50`,
+`G51.1`/`G50.1` mirror — arcs reverse with it, as on the control. `G16`/`G15`
+polar coordinates from the program's origin, the angle steppable in `G91`
+for a bolt circle. `G12`/`G13` cut a whole circle of radius `I` round where
+the tool stands, less the tool's radius when there is a `D`. `G65` and
+`G66`/`G67` macro calls (`G66` after every move until `G67`), `M98 P L`,
+and `M98 H` to an `N` block of the same program. `G31` skip and `G37` tool
+length measurement are made as plain feed moves, with nothing to stop
+them. `G05`, `G05.1`, `G08` and `G61.1` (high-speed, AI contour,
+look-ahead) are read and need nothing simulated.
+
+**Mazak** (EIA/ISO on a Smooth, Matrix or 640M): all of the above, and
+`T01 T02 M06` — the first T goes in the spindle, the second is got ready for
+the change after. MAZATROL conversational programs are not G-code and are
+not read.
 
 **Five axis** `G68.2` tilted work plane (`P1` Euler ZXZ, `P2` roll-pitch-yaw),
 `G69` cancel, `G53.1` orient the tool normal to the plane, `G43.4`/`G43.5`
@@ -976,6 +1001,14 @@ says, no rotary turns faster than its rotary rapid.
 
 **Other** `G04` dwell, `G28`/`G30` reference return, `G40`–`G42`,
 `G61`/`G64`, `G93`/`G94`/`G95`
+
+**Cutter compensation** is not applied — the path is the programmed
+centreline — but how it is switched is checked: on a Siemens and on the
+Fanuc family `G41`/`G42` have to go on, and `G40` off, with a straight move
+(`G0`/`G1`) in the plane. An arc there is an error, as the control's alarm
+would be. A move along the tool axis in between does not count: it is the
+first move in the plane that does. (A MillPlus takes the arc; the
+Heidenhain, Okuma and Fidia readers do not check it.)
 
 **M codes** `M00` `M01` `M02` `M03` `M04` `M05` `M06` `M07` `M08` `M09`
 `M30`, and `M98`/`M99` subprogram calls with `L` repeats

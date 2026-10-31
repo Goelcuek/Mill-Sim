@@ -1874,6 +1874,26 @@ export class App {
     if (this.state.source) this.loadProgram(this.state.source, this.state.programName);
   }
 
+  /** Another of the extra work offsets, G54.1 P1 to P300. */
+  addExtraWcs(n) {
+    const k = Math.round(Number(n));
+    if (!(k >= 1 && k <= 300)) { this.notify('G54.1 takes P1 to P300.', 'error'); return; }
+    const key = `G54.1 P${k}`;
+    if (this.state.wcs[key]) { this.setWcsEdit(key); return; }
+    this.setWcs({ ...this.state.wcs, [key]: [0, 0, 0] });
+    this.setWcsEdit(key);
+  }
+
+  /** Take an extra work offset off the list. G54 to G59 always stay. */
+  removeWcs(key) {
+    if (!/^G54\.1 P\d+$/.test(key)) return;
+    const next = { ...this.state.wcs };
+    delete next[key];
+    if (this.state.wcsEdit === key) this.state.wcsEdit = 'G54';
+    this.setWcs(next);
+    this.panels.setup.refresh();
+  }
+
   /** One rotary axis of one work offset, in degrees. */
   setWcsRotary(key, letter, degrees) {
     const now = { ...(this.state.wcsRotary[key] || {}) };
@@ -2507,6 +2527,10 @@ export class App {
       tools: this.toolTable(),
     });
     this.state.program = program;
+    // A program that works in G54.1 P3 gets a row for it on Work offsets,
+    // ready to be set: until it is, it reads as zero, as it did here.
+    const extra = [...new Set(program.moves.map((mv) => mv.wcs))].filter((k) => k && /^G54\.1 P\d+$/.test(k) && !this.state.wcs[k]);
+    if (extra.length) this.state.wcs = { ...this.state.wcs, ...Object.fromEntries(extra.map((k) => [k, [0, 0, 0]])) };
     this.toolpathView.setProgram(program);
     this.offerControl(program);
     this.simulator.load({

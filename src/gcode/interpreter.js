@@ -207,6 +207,26 @@ class State {
     /** Where the tool stood when the cycle began: G98 comes back up to it. */
     this.cycleInit = 0;
     this.g92 = [0, 0, 0];
+    /**
+     * The Fanuc family's own frame inside the work offset: G52's local
+     * origin, G68's turn in the plane, G51's scaling and G51.1's mirror.
+     * Built into `frame` the way TRANS and ROT are on a Siemens.
+     */
+    this.local52 = [0, 0, 0];
+    this.rot68 = null;           // {centre:[x,y,z], angle, plane}
+    this.scale51 = null;         // {centre:[x,y,z], f:[fx,fy,fz]}
+    this.mirror51 = [false, false, false];
+    this.mirrorAt = [0, 0, 0];
+    /** G16: X and Y are a radius and an angle. */
+    this.polar = false;
+    this.polarR = 0;
+    this.polarA = 0;
+    /** G66: the macro called after every move until G67. */
+    this.g66 = null;
+    /** The group 01 motion that G80 leaves in force on a Fanuc. */
+    this.motion01 = 0;
+    /** G41/G42 just switched on, or G40 off: the next move in the plane has to be straight. */
+    this.compPending = null;
     /** Tool-vector mode: the block says where the tool points, not the angles. */
     this.vector = false;
     /**
@@ -511,6 +531,9 @@ export function interpret(text, config = {}) {
   appendSource(null, text);
 
   const st = new State(cfg);
+  /** Fanuc, Haas, Mazak's EIA/ISO and the generic reader: one family of G codes. */
+  const fanucFamily = dialect.id === 'fanuc';
+  const mazak = !!(cfg.controller && cfg.controller.flavour === 'mazak');
   // Where rapid is not modal, what a bare block of coordinates means is a
   // feed move — including the first one, before any G word has been read.
   if (dialect.modalMotion === false) st.motion = 1;
@@ -924,6 +947,8 @@ export function interpret(text, config = {}) {
   /** The tilted plane and the programmable frame inside it, as one matrix. */
   const updateXf = () => {
     st.xf = st.tilt && st.frame ? m4.multiply(m4.create(), st.tilt, st.frame) : st.tilt || st.frame;
+    // A mirror or a scale is not a turn and a shift, and is undone the long way.
+    st.xfAffine = !!(st.frame && st.frameAffine);
     // The current point, carried into the new frame, so the next block
     // may leave any axis word out.
     if (st.xf) {
@@ -979,6 +1004,9 @@ export function interpret(text, config = {}) {
     st.pos = target.slice();
     return move;
   };
+
+  /** The same, by another name, for code that has a local emitLinear of its own. */
+  const emitLinearWork = emitLinear;
 
   /**
    * @param {null|{from:number[], to:number[], center:number[]}} local
@@ -1137,7 +1165,8 @@ export function interpret(text, config = {}) {
   const workToPlane = (pos) => {
     const off = st.offset();
     const rel = [pos[0] - off[0], pos[1] - off[1], pos[2] - off[2]];
-    return m4.transformPoint([0, 0, 0], m4.invertRigid(m4.create(), st.xf), rel);
+    const inv = st.xfAffine ? m4.invertAffine(m4.create(), st.xf) : m4.invertRigid(m4.create(), st.xf);
+    return m4.transformPoint([0, 0, 0], inv || m4.invertRigid(m4.create(), st.xf), rel);
   };
 
   /** A point as the program states it — through any plane or frame — in work coordinates. */
@@ -1957,6 +1986,7 @@ export function interpret(text, config = {}) {
     const m = [];
     const axis = {};
     let f, s, t, h, d, p, q, r, l, iArc, jArc, kArc, cr, ar, turns;
+    const tWords = [];
     // SUPA: this block in machine coordinates, every frame suppressed.
     let machineCoords = !!(b.modes && b.modes.includes('SUPA'));
     let fixedPoint = 1;
@@ -1974,7 +2004,7 @@ export function interpret(text, config = {}) {
         case 'K': kArc = w.value; break;
         case 'F': f = w.value; break;
         case 'S': s = w.value; break;
-        case 'T': t = w.value; break;
+        case 'T': t = w.value; tWords.push(w.value); break;
         case 'H': h = w.value; break;
         case 'D': d = w.value; st.dNumber = w.value; break;
         case 'P': p = w.value; break;
@@ -1998,6 +2028,13 @@ export function interpret(text, config = {}) {
     // the value times a hundred made one of them pot 70.
     // T="FACE MILL" chose the tool by its name.
     if (b.toolName) t = b.toolName;
+    // A Mazak changes and prepares in one block: T01 T02 M06 puts T01 in
+    // the spindle and gets T02 ready for the change after.
+    let nextTool;
+    if (mazak && tWords.length >= 2 && m.includes(6)) {
+      t = tWords[0];
+      nextTool = tWords[1];
+    }
     if (t !== undefined && dialect.toolDecimal && !b.toolName) {
       const word = b.words.find((w) => w.letter === 'T');
       const parts = word && /^[Tt]\s*(\d*)\.(\d*)$/.exec(word.text.replace(/\s+/g, ''));
@@ -2014,8 +2051,180 @@ export function interpret(text, config = {}) {
 
     // ---- Non-modal and modal G codes -------------------------------------
     const motionBefore = st.motion;
+
+    /**
+     * The Fanuc family's G codes this reader keeps apart from everyone
+     * else's — G15 is a work offset on an Okuma, G68 nothing on a Siemens.
+     * True when the code was one of them.
+     */
+    /**
+     * G66: after a block that moved, the macro, with the arguments G66
+     * gave it. Not inside the macro itself, whose own moves are its own.
+     */
+    const fireModal = (moved) => {
+      if (!st.g66 || g66Here || !moved) return;
+      if (callStack.some((c) => c.modalCall)) return;
+      if (callStack.length > 16) { warn(b.line, 'Macro calls nested too deep.', 'error'); return; }
+      vars.push(st.g66.args, st.g66.name);
+      callStack.push({ ret: pc, remaining: 0, target: st.g66.target, macroVars: true, modalCall: true });
+      pc = st.g66.target;
+    };
+
+    const fanucCode = (code) => {
+      const here = () => workToProg(st.pos);
+      const len = (v) => toMM(v, st.metric);
+      const planeAxes = st.plane === 18 ? [2, 0] : st.plane === 19 ? [1, 2] : [0, 1];
+      const say = (text) => events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text });
+      switch (code) {
+        case 52: {
+          // A local origin inside the work offset; the axes named move it,
+          // the rest keep theirs. G52 X0 Y0 Z0 takes it away.
+          for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) st.local52[i] = len(axis[L]);
+          axesConsumed = true;
+          say(st.local52.some((v) => Math.abs(v) > 1e-12)
+            ? `G52 local origin at ${st.local52.map((v) => +v.toFixed(3)).join(', ')}`
+            : 'G52 local origin cancelled');
+          fanucFrame();
+          return true;
+        }
+        case 68: {
+          // A turn of the program about a centre: in the plane, R degrees
+          // anticlockwise; with I J K, about that direction instead.
+          const c = here();
+          for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) c[i] = len(axis[L]);
+          const dir = iArc !== undefined || jArc !== undefined || kArc !== undefined
+            ? m4.normalize([iArc || 0, jArc || 0, kArc || 0])
+            : st.plane === 18 ? [0, 1, 0] : st.plane === 19 ? [1, 0, 0] : [0, 0, 1];
+          if (r === undefined) warn(b.line, 'G68 without R: the turn is read as 0°.');
+          const angle = r !== undefined && !st.absolute && st.rot68 ? st.rot68.angle + r : (r || 0);
+          st.rot68 = { centre: c, axis: dir, angle };
+          axesConsumed = true;
+          say(`G68 rotation ${+angle.toFixed(4)}° about ${c.map((v) => +v.toFixed(3)).join(', ')}`);
+          fanucFrame();
+          return true;
+        }
+        case 51: {
+          // Scaling about a point: P for every axis, or I J K one each — a
+          // negative one mirrors. Written without a decimal point the
+          // factor is in thousandths, as the control counts it.
+          const word = (L) => b.words.find((w) => w.letter === L);
+          const factor = (L) => {
+            const w = word(L);
+            if (!w) return undefined;
+            return /\./.test(w.text || '') || Math.abs(w.value) < 10 ? w.value : w.value / 1000;
+          };
+          const c = here();
+          for (const [i, L] of ['X', 'Y', 'Z'].entries()) if (axis[L] !== undefined) c[i] = len(axis[L]);
+          const P = factor('P');
+          const f = ['I', 'J', 'K'].map((L) => {
+            const v = factor(L);
+            return v !== undefined ? v : P !== undefined ? P : 1;
+          });
+          st.scale51 = { centre: c, f };
+          axesConsumed = true;
+          say(`G51 scaling ×${f.map((v) => +v.toFixed(4)).join(' / ')} about ${c.map((v) => +v.toFixed(3)).join(', ')}`);
+          fanucFrame();
+          return true;
+        }
+        case 50:
+          if (st.scale51) say('G50 scaling cancelled');
+          st.scale51 = null;
+          fanucFrame();
+          return true;
+        case 51.1: case 50.1: {
+          // A mirror on each axis named, about the value given.
+          const on = code === 51.1;
+          const named = ['X', 'Y', 'Z'].filter((L) => axis[L] !== undefined);
+          for (const [i, L] of ['X', 'Y', 'Z'].entries()) {
+            if (code === 50.1 && !named.length) { st.mirror51[i] = false; continue; }
+            if (axis[L] === undefined) continue;
+            st.mirror51[i] = on;
+            if (on) st.mirrorAt[i] = len(axis[L]);
+          }
+          axesConsumed = true;
+          say(on ? `G51.1 mirror in ${named.join(' and ')}` : 'G50.1 mirror cancelled');
+          fanucFrame();
+          return true;
+        }
+        case 15:
+          st.polar = false;
+          return true;
+        case 16: {
+          // Polar: in G17 X is a radius and Y an angle, measured from the
+          // program's origin. Until the block says, they are where the tool is.
+          if (!st.polar) {
+            const at = here();
+            st.polarR = Math.hypot(at[planeAxes[0]], at[planeAxes[1]]);
+            st.polarA = (Math.atan2(at[planeAxes[1]], at[planeAxes[0]]) * 180) / Math.PI;
+          }
+          st.polar = true;
+          return true;
+        }
+        case 54.1: {
+          // The extra work offsets: G54.1 P1 to P300 (P1 when there is no P).
+          const n = p !== undefined ? Math.round(p) : 1;
+          st.wcs = `G54.1 P${n}`;
+          if (!cfg.wcs[st.wcs] && !spokenFor.has(st.wcs)) {
+            spokenFor.add(st.wcs);
+            warn(b.line, `${st.wcs} has no values here, so it reads as zero. Set it on Setup › Work offsets.`);
+          }
+          return true;
+        }
+        // High-speed and look-ahead modes — AI contour, high-precision,
+        // smoothing: how the path is followed, not where it goes.
+        case 5: case 5.1: case 8: case 61.1:
+          return true;
+        // Synchronous tapping, right and left hand: tapping as G84 and G74 are.
+        case 84.2:
+          motionThisBlock = 84;
+          st.motion = 84;
+          return true;
+        case 84.3:
+          motionThisBlock = 74;
+          st.motion = 74;
+          return true;
+        // Skip and automatic tool length measurement stop on a signal; with
+        // nothing to touch here the move is made in full.
+        case 31: case 37:
+          skipMove = code;
+          return true;
+        case 12: case 13:
+          circle = code;
+          return true;
+        case 66: {
+          // A macro called again after every move, with these arguments,
+          // until G67.
+          const name = askedName(b, { comment: p === undefined });
+          const target = p !== undefined ? labels.get(p) : name !== null ? namedTarget(name) : undefined;
+          if (target === undefined) {
+            warn(b.line, p !== undefined || name !== null ? `Macro ${p !== undefined ? `O${p}` : name} not found.` : 'G66 without a macro to call.', 'error');
+            axesConsumed = true;
+            return true;
+          }
+          const args = [];
+          for (const w of b.words) {
+            const n = ARGUMENTS[w.letter];
+            if (n) args.push([n, w.value]);
+          }
+          st.g66 = { target, args, name: p !== undefined ? `O${p}` : name };
+          g66Here = true;
+          axesConsumed = true;
+          events.push({ line: b.line, type: 'cycle', moveIndex: moves.length, text: `G66 ${st.g66.name}: called after every move until G67` });
+          return true;
+        }
+        case 67:
+          st.g66 = null;
+          return true;
+        default:
+          return false;
+      }
+    };
     let motionThisBlock = null;
     let g28 = false, g30 = false, g10 = false, g92set = false, g92clear = false, g75 = false;
+    /** G12/G13 circle cutting, and G31/G37 moves that would stop on a signal. */
+    let circle = 0;
+    let skipMove = 0;
+    let g66Here = false;
     /** Set by codes whose X/Y/Z words are data, not a destination. */
     let axesConsumed = false;
 
@@ -2025,6 +2234,7 @@ export function interpret(text, config = {}) {
         st.wcs = `G${code}`;
         continue;
       }
+      if (fanucFamily && fanucCode(code)) continue;
       switch (code) {
         case 0: case 1: case 2: case 3:
           motionThisBlock = code;
@@ -2032,6 +2242,7 @@ export function interpret(text, config = {}) {
           // is the feed move — so the next bare block of coordinates is a
           // G1 rather than another rapid across the part.
           st.motion = dialect.modalMotion === false && code !== 1 ? 1 : code;
+          st.motion01 = st.motion;
           break;
         case 4: {
           const secs = axis.X !== undefined
@@ -2072,8 +2283,12 @@ export function interpret(text, config = {}) {
         case 9: case 60: case 601: case 602: case 603: case 641: case 642: case 643: case 644: case 645:
         case 290: case 291: case 450: case 451: case 931: case 961: case 971: break;
         case 30: g30 = true; break;
-        case 40: st.cutterComp = 40; break;
+        case 40:
+          if (st.cutterComp === 41 || st.cutterComp === 42) st.compPending = { code: 40, line: b.line };
+          st.cutterComp = 40;
+          break;
         case 41: case 42:
+          if (st.cutterComp !== 41 && st.cutterComp !== 42) st.compPending = { code, line: b.line };
           if (st.cutterComp !== code) warn(b.line, `Cutter compensation G${code} is acknowledged but not applied; the simulated path is the programmed centreline.`);
           st.cutterComp = code;
           break;
@@ -2138,7 +2353,12 @@ export function interpret(text, config = {}) {
           if (st.tilt) events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G69 tilted plane cancelled' });
           st.tilt = null;
           st.swivel = false;
-          updateXf();
+          // And G68's turn in the plane, on the controls that have one.
+          if (fanucFamily && st.rot68) {
+            st.rot68 = null;
+            events.push({ line: b.line, type: 'plane', moveIndex: moves.length, text: 'G69 coordinate rotation cancelled' });
+            fanucFrame();
+          } else updateXf();
           break;
         case 43:
           st.lengthComp = true;
@@ -2186,7 +2406,11 @@ export function interpret(text, config = {}) {
           // leave the machine in "no motion" — the next block of
           // coordinates is a feed move. Every Fidia program opens with a
           // safety line that says G80 and then starts moving.
-          st.motion = dialect.modalMotion === false ? 1 : 80;
+          //
+          // On a Fanuc, G80 belongs to the cycles' own group: it ends the
+          // cycle and leaves G00 or G01 as they were, so the line after a
+          // G80 safety line still moves — G43 H1 Z50. is an approach.
+          st.motion = dialect.modalMotion === false ? 1 : fanucFamily ? st.motion01 : 80;
           break;
         case 90: st.absolute = true; break;
         case 90.1: st.arcAbsolute = true; break;
@@ -2311,6 +2535,16 @@ export function interpret(text, config = {}) {
         case 98: {
           // P1000 on a Fanuc, a name on everything else — and on a Fanuc
           // too, when the file has one: M98 <ROUGH> and M98 (ROUGH).
+          // M98 H500 on a Mazak or a Fanuc: the N500 block of this same
+          // program, run to its M99 and back.
+          if (p === undefined && h !== undefined && fanucFamily) {
+            const at = findLabel(b, h);
+            if (at < 0) { warn(b.line, `M98 H${h}: there is no N${h} in this program.`, 'error'); break; }
+            if (callStack.length > 16) { warn(b.line, 'Subprogram nesting too deep.', 'error'); break; }
+            callStack.push({ ret: pc, remaining: Math.max(1, Math.floor(l ?? 1)) - 1, target: at });
+            pc = at;
+            break;
+          }
           const name = askedName(b, { comment: p === undefined });
           const target = p !== undefined ? labels.get(p) : namedTarget(name);
           if (p === undefined && name === null) { warn(b.line, 'M98 without a program to call.', 'error'); break; }
@@ -2334,6 +2568,9 @@ export function interpret(text, config = {}) {
       }
     }
 
+    // T01 T02 M06: T02 is the one the changer gets ready next.
+    if (nextTool !== undefined) st.pendingTool = nextTool;
+
     // Round the loop rather than out of it: M30 ends the program, but a
     // macro queued by that same block still has to park the machine.
     if (ended) continue;
@@ -2341,6 +2578,18 @@ export function interpret(text, config = {}) {
     // ---- G10 work offset programming ------------------------------------
     if (g10) {
       const lVal = l ?? 2;
+      // G10 L20 P1: the extra offsets, G54.1 P1 onwards.
+      if (lVal === 20 && p !== undefined && fanucFamily) {
+        const key = `G54.1 P${Math.round(p)}`;
+        const cur = cfg.wcs[key] || [0, 0, 0];
+        cfg.wcs[key] = [
+          axis.X !== undefined ? toMM(axis.X, st.metric) : cur[0],
+          axis.Y !== undefined ? toMM(axis.Y, st.metric) : cur[1],
+          axis.Z !== undefined ? toMM(axis.Z, st.metric) : cur[2],
+        ];
+        for (const L of turning) if (axis[L] !== undefined) setOffsetAxis(key, L, axis[L]);
+        events.push({ line: b.line, type: 'offset', moveIndex: moves.length, text: `G10 set ${key}` });
+      }
       if (lVal === 2 && p !== undefined) {
         const key = `G${53 + p}`;
         if (cfg.wcs[key]) {
@@ -2429,20 +2678,100 @@ export function interpret(text, config = {}) {
 
     // ---- Motion ----------------------------------------------------------
     if (axesConsumed) continue;
+    // How each axis word is read on this block: the block's own AC/IC,
+    // and polar coordinates turned into a point, which is then absolute.
+    let axisModes = b.axisModes;
+    if (st.polar && fanucFamily && !circle) {
+      const [RL, AL] = st.plane === 18 ? ['Z', 'X'] : st.plane === 19 ? ['Y', 'Z'] : ['X', 'Y'];
+      if (axis[RL] !== undefined || axis[AL] !== undefined) {
+        const inc = (L) => {
+          const mode = axisModes && axisModes[L];
+          return mode === 'IC' || (!mode && !st.absolute);
+        };
+        if (axis[RL] !== undefined) st.polarR = (inc(RL) ? st.polarR : 0) + toMM(axis[RL], st.metric);
+        if (axis[AL] !== undefined) st.polarA = (inc(AL) ? st.polarA : 0) + axis[AL];
+        const a = deg2rad(st.polarA);
+        const unit = st.metric ? 1 : 1 / MM_PER_INCH;
+        axis[RL] = st.polarR * Math.cos(a) * unit;
+        axis[AL] = st.polarR * Math.sin(a) * unit;
+        axisModes = { ...(axisModes || {}), [RL]: 'AC', [AL]: 'AC' };
+      }
+    }
+    // G41 or G42 just switched on, G40 just off: the move that does it, the
+    // first in the plane, has to be straight.
+    if (st.compPending && dialect.compStraight) {
+      const [P0, P1] = st.plane === 18 ? ['Z', 'X'] : st.plane === 19 ? ['Y', 'Z'] : ['X', 'Y'];
+      const m0 = motionThisBlock !== null ? motionThisBlock : st.motion;
+      if (axis[P0] !== undefined || axis[P1] !== undefined || circle) {
+        if (m0 === 2 || m0 === 3 || circle) {
+          const c = st.compPending.code;
+          warn(b.line, c === 40
+            ? `G40 ends cutter compensation on an arc. A ${dialect.name} stops here with an alarm: compensation has to be switched off with a straight move (G0 or G1).`
+            : `G${c} starts cutter compensation on an arc. A ${dialect.name} stops here with an alarm: compensation has to be switched on with a straight move (G0 or G1)${st.compPending.line !== b.line ? ` after line ${st.compPending.line}` : ''}.`, 'error');
+        }
+        st.compPending = null;
+      }
+    }
+    // G12 / G13: a whole circle cut from where the tool stands.
+    if (circle) {
+      circleCut(b.line, circle, iArc, d);
+      continue;
+    }
     // DIAMON: X is a diameter, and the tool goes half of it from the axis.
     if (st.diameter && axis.X !== undefined) {
-      const mode = b.axisModes && b.axisModes.X;
+      const mode = axisModes && axisModes.X;
       const incremental = mode === 'IC' || (!mode && !st.absolute);
       if (!(st.diameter === 'abs' && incremental)) axis.X /= 2;
     }
     const hasAxisWord = axis.X !== undefined || axis.Y !== undefined || axis.Z !== undefined;
-    const motion = motionThisBlock !== null ? motionThisBlock : st.motion;
+    const motion = skipMove ? 1 : motionThisBlock !== null ? motionThisBlock : st.motion;
+    if (skipMove && !spokenFor.has(`G${skipMove}`)) {
+      spokenFor.add(`G${skipMove}`);
+      warn(b.line, skipMove === 31
+        ? 'G31 skip: there is no probe or signal here to stop it, so the move is made in full.'
+        : 'G37 tool length measurement: there is no setter here to stop it, so the move is made in full and no offset is changed.');
+    }
+
+    // In a tilted plane, or under G52, G68 or a mirror, the holes are in
+    // the program's own frame: drilled down its Z, not the machine's.
+    if (MOTION_CYCLES.has(motion) && st.xf && !machineCoords) {
+      const here = workToProg(st.pos);
+      if (!MOTION_CYCLES.has(motionBefore) || !st.cycleLocal) st.cycleInit = here[2];
+      st.cycleLocal = true;
+      if (r !== undefined) st.cycleR = st.absolute ? toMM(r, st.metric) : st.cycleInit + toMM(r, st.metric);
+      if (axis.Z !== undefined) st.cycleZ = st.absolute ? toMM(axis.Z, st.metric) : st.cycleR + toMM(axis.Z, st.metric);
+      if (q !== undefined) st.cycleQ = toMM(q, st.metric);
+      if (p !== undefined) st.cycleP = p;
+      st.cycleF = st.feed;
+      if (axis.X !== undefined || axis.Y !== undefined || axis.Z !== undefined) {
+        if (![73, 81, 82, 83, 85, 89].includes(motion)) {
+          warn(b.line, `G${motion} is simulated as a plain drilling cycle; spindle reversal and boring shifts are not modelled.`);
+        }
+        const absAt = (L) => {
+          const mode = axisModes && axisModes[L];
+          return mode === 'AC' ? true : mode === 'IC' ? false : st.absolute;
+        };
+        const reps = Math.max(1, Math.floor(l ?? 1));
+        for (let rep = 0; rep < reps; rep++) {
+          const at = workToProg(st.pos);
+          const hole = ['X', 'Y'].map((L, i) => {
+            if (axis[L] === undefined) return at[i];
+            const v = toMM(axis[L], st.metric);
+            return absAt(L) ? v : at[i] + v;
+          });
+          runCycle(motion, b.line, hole[0], hole[1], true);
+        }
+      }
+      fireModal(hasAxisWord);
+      continue;
+    }
 
     if (MOTION_CYCLES.has(motion)) {
       // The initial level is where the tool stood when the cycle started,
       // and it stays put for every hole after: a G99 hole leaves the tool
       // at R, and the G98 hole after it still goes all the way back up.
-      if (!MOTION_CYCLES.has(motionBefore)) st.cycleInit = st.pos[2];
+      if (!MOTION_CYCLES.has(motionBefore) || st.cycleLocal) st.cycleInit = st.pos[2];
+      st.cycleLocal = false;
       // In G91 R is measured from the initial level and Z from R, not
       // both from wherever the tool is — which drilled 8 mm short.
       if (r !== undefined) st.cycleR = st.absolute ? st.offset()[2] + toMM(r, st.metric) : st.cycleInit + toMM(r, st.metric);
@@ -2456,20 +2785,24 @@ export function interpret(text, config = {}) {
         if (!MOTION_CYCLES.has(motion) || ![73, 81, 82, 83, 85, 89].includes(motion)) {
           warn(b.line, `G${motion} is simulated as a plain drilling cycle; spindle reversal and boring shifts are not modelled.`);
         }
-        if (!st.absolute) warn(b.line, 'Incremental (G91) canned cycles use the R and Z planes captured at the first hole.');
+        // Polar, the hole is placed by its radius and angle whatever G91 says.
+        if (!st.absolute && !(st.polar && fanucFamily && r === undefined && axis.Z === undefined)) warn(b.line, 'Incremental (G91) canned cycles use the R and Z planes captured at the first hole.');
         const reps = Math.max(1, Math.floor(l ?? 1));
         const dx = axis.X !== undefined ? toMM(axis.X, st.metric) : 0;
         const dy = axis.Y !== undefined ? toMM(axis.Y, st.metric) : 0;
+        const absX = axisModes && axisModes.X ? axisModes.X === 'AC' : st.absolute;
+        const absY = axisModes && axisModes.Y ? axisModes.Y === 'AC' : st.absolute;
         for (let rep = 0; rep < reps; rep++) {
-          const hx = st.absolute
+          const hx = absX
             ? (axis.X !== undefined ? st.offset()[0] + dx : st.pos[0])
             : st.pos[0] + dx;
-          const hy = st.absolute
+          const hy = absY
             ? (axis.Y !== undefined ? st.offset()[1] + dy : st.pos[1])
             : st.pos[1] + dy;
           runCycle(motion, b.line, hx, hy);
         }
       }
+      fireModal(hasAxisWord);
       continue;
     }
 
@@ -2518,7 +2851,7 @@ export function interpret(text, config = {}) {
       }
     }
 
-    if (hasRotaryWord) applyExtraAxes(axis, b.axisModes, machineCoords);
+    if (hasRotaryWord) applyExtraAxes(axis, axisModes, machineCoords);
 
     // A3= B3= C3=: the Siemens way to say it, under TRAORI.
     let sweep = st.ori === 'vector' && (hasRotaryWord || turnedByVector);
@@ -2540,10 +2873,11 @@ export function interpret(text, config = {}) {
       // A rotary-only block still moves the machine, and on a table machine
       // it moves the tool relative to the part.
       straight(b.line, motion === 0 ? 'rapid' : 'feed', st.pos.slice(), st.feed > 0 ? st.feed : 100);
+      fireModal(true);
       continue;
     }
 
-    const target = resolveLinear(axis, st.metric, machineCoords, b.axisModes);
+    const target = resolveLinear(axis, st.metric, machineCoords, axisModes);
 
     if (motion === 0) {
       straight(b.line, 'rapid', target, cfg.rapidRate);
@@ -2553,7 +2887,7 @@ export function interpret(text, config = {}) {
     } else if (motion === 2 || motion === 3) {
       const ccw = motion === 3;
       const feed = st.feed > 0 ? st.feed : 100;
-      const am = b.axisModes || {};
+      const am = axisModes || {};
       const words = { i: iArc, j: jArc, k: kArc, r, cr, ar, absolute: { I: am.I === 'AC', J: am.J === 'AC', K: am.K === 'AC' } };
       const tilted = st.xf && !machineCoords;
       const from = tilted ? st.tiltLocalPrev : st.pos;
@@ -2570,6 +2904,7 @@ export function interpret(text, config = {}) {
 
     // MCALL CYCLE81(...): the cycle again, at the position just reached.
     if (st.mcall && hasAxisWord) runSiemensCycle(st.mcall.name, st.mcall.args, b.line);
+    fireModal(hasAxisWord);
   }
 
   /**
@@ -2914,6 +3249,43 @@ export function interpret(text, config = {}) {
       warn(b.line, `${name} is not simulated: no toolpath comes from it.`, /^CYCLE|^POCKET|^SLOT|^HOLES|^LONGHOLE/.test(name) ? 'warning' : 'error');
     }
     return true;
+  }
+
+  /**
+   * The Fanuc family's frame, from the programmed point outwards: G51.1's
+   * mirror, G51's scale, G68's turn, G52's local origin. One matrix, set
+   * where a Siemens keeps TRANS and ROT, so a tilted plane, an arc and a
+   * drilling cycle all go through it the same way.
+   */
+  function fanucFrame() {
+    let mat = null;
+    const then = (m) => { mat = mat ? m4.multiply(m4.create(), mat, m) : m; };
+    const about = (c, m) => {
+      then(m4.fromTranslation(m4.create(), c));
+      then(m);
+      then(m4.fromTranslation(m4.create(), [-c[0], -c[1], -c[2]]));
+    };
+    const diag = (f) => {
+      const m = m4.create();
+      m[0] = f[0]; m[5] = f[1]; m[10] = f[2];
+      return m;
+    };
+    if (st.local52.some((v) => Math.abs(v) > 1e-12)) then(m4.fromTranslation(m4.create(), st.local52));
+    if (st.rot68 && Math.abs(st.rot68.angle) > 1e-12) {
+      about(st.rot68.centre, m4.fromRotation(m4.create(), st.rot68.axis, deg2rad(st.rot68.angle)));
+    }
+    let affine = false;
+    if (st.scale51) {
+      about(st.scale51.centre, diag(st.scale51.f));
+      affine = true;
+    }
+    if (st.mirror51.some(Boolean)) {
+      about(st.mirrorAt, diag(st.mirror51.map((on) => (on ? -1 : 1))));
+      affine = true;
+    }
+    st.frame = mat;
+    st.frameAffine = affine;
+    updateXf();
   }
 
   /**
@@ -3279,11 +3651,15 @@ export function interpret(text, config = {}) {
   }
 
   /** Expand a drilling canned cycle into discrete moves. */
-  function runCycle(code, line, hx, hy) {
+  function runCycle(code, line, hx, hy, local = false) {
     const rPlane = st.cycleR;
     const zBottom = st.cycleZ;
     const feed = st.cycleF > 0 ? st.cycleF : 100;
-    const startZ = Math.max(st.pos[2], rPlane);
+    // In the program's own frame, every point goes out through it.
+    const emitLinear = local
+      ? (ln, kind, [x, y, z], f) => emitLinearWork(ln, kind, planeToWork([x, y, z]), f)
+      : emitLinearWork;
+    const startZ = Math.max(local ? workToProg(st.pos)[2] : st.pos[2], rPlane);
 
     // Position over the hole at the current (safe) height, then to the R
     // plane — the second of which is no move at all after a G99 hole.
@@ -3318,6 +3694,50 @@ export function interpret(text, config = {}) {
     const retractTo = st.retractMode === 98 ? Math.max(st.cycleInit, rPlane) : rPlane;
     const retractKind = code === 85 || code === 89 ? 'feed' : 'rapid';
     emitLinear(line, retractKind, [hx, hy, retractTo], retractKind === 'feed' ? feed : cfg.rapidRate);
+  }
+
+  /**
+   * G12 (clockwise) and G13: a whole circle of radius I round where the
+   * tool stands — in on a half circle, once round, and out on another to
+   * the centre. D is a radius offset, taken off the circle as the tool's
+   * radius from the tool table.
+   */
+  function circleCut(line, code, radiusWord, dWord) {
+    const big = radiusWord !== undefined ? toMM(Math.abs(radiusWord), st.metric) : 0;
+    const tool = cfg.tools && cfg.tools[st.tool];
+    const rt = dWord ? (tool && tool.diameter > 0 ? tool.diameter / 2 : 0) : 0;
+    if (dWord && !rt && !spokenFor.has('G12 D')) {
+      spokenFor.add('G12 D');
+      warn(line, `G${code} D${dWord}: no diameter for ${toolLabel(st.tool)} in the tool table, so the tool's centre runs on the circle itself.`);
+    }
+    const R = big - rt;
+    if (!(R > 1e-6)) {
+      warn(line, `G${code}: a circle of radius ${big.toFixed(3)} is no bigger than the tool; nothing is cut.`, 'error');
+      return;
+    }
+    const ccw = code === 13;
+    const feed = st.feed > 0 ? st.feed : 100;
+    const ax = st.plane === 18 ? [2, 0] : st.plane === 19 ? [1, 2] : [0, 1];
+    const c = workToProg(st.pos);
+    const at = (u, v) => {
+      const q = c.slice();
+      q[ax[0]] += u;
+      q[ax[1]] += v;
+      return q;
+    };
+    const arc = (from, to, centre) => {
+      if (st.xf) {
+        st.tiltLocalPrev = from;
+        st.tiltLocal = to;
+        emitArc(line, planeToWork(to), centre, ccw, feed, { from, to, center: centre });
+      } else {
+        emitArc(line, progToWork(to), progToWork(centre), ccw, feed, null);
+      }
+    };
+    arc(c, at(R, 0), at(R / 2, 0));
+    arc(at(R, 0), at(-R, 0), c);
+    arc(at(-R, 0), at(R, 0), c);
+    arc(at(R, 0), c, at(R / 2, 0));
   }
 
   // ---- Summary -----------------------------------------------------------
