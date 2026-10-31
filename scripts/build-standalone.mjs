@@ -149,7 +149,13 @@ const result = await esbuild.build({
   legalComments: 'none',
   logLevel: 'warning',
   plugins: [inlineExamplesPlugin(examplesSource)],
-  define: { __MESH_WORKER_SOURCE__: workerSource, 'import.meta.url': '""' },
+  define: {
+    __MESH_WORKER_SOURCE__: workerSource,
+    'import.meta.url': '""',
+    // When this file was made, so a copy on someone's disk can be told
+    // from the latest: shown in the Settings window.
+    __BUILD_STAMP__: JSON.stringify(`${new Date().toISOString().slice(0, 16).replace('T', ' ')} UTC`),
+  },
   alias: {
     three: join(ROOT, 'vendor/three/three.module.min.js'),
     'three/addons/controls/OrbitControls.js': join(ROOT, 'vendor/three/addons/controls/OrbitControls.js'),

@@ -13,6 +13,8 @@ import { settings, DEFAULTS } from './settings.js';
 import { RESOLUTIONS, SPEEDS } from '../app.js';
 import * as units from '../core/units.js';
 
+/* global __BUILD_STAMP__ */
+
 const CATEGORIES = [
   { id: 'general', label: 'General', icon: 'settings' },
   { id: 'viewport', label: 'Viewport', icon: 'eye' },
@@ -169,7 +171,7 @@ export function openSettings(app, start = 'general') {
 
   const dlg = new Dialog({
     title: 'Settings',
-    subtitle: 'Kept on this computer between starts',
+    subtitle: `Kept on this computer between starts · ${typeof __BUILD_STAMP__ === 'string' ? `built ${__BUILD_STAMP__}` : 'development copy'}`,
     width: 720,
     body: el('div.settings', {}, [nav, pane]),
     cancel: 'Done',
